@@ -4,6 +4,10 @@ from app.database import SessionLocal
 from app.models import Permission, Role, RolePermission
 
 
+# =========================================================
+# ROLES
+# =========================================================
+
 ROLES = [
     {
         "name": "Doctor",
@@ -11,28 +15,60 @@ ROLES = [
     },
     {
         "name": "Nurse",
-        "description": "Can view medication tasks and record medication administration.",
+        "description": (
+            "Can view medication tasks and record "
+            "medication administration."
+        ),
+    },
+    {
+        "name": "Receptionist",
+        "description": (
+            "Can view patient information and register "
+            "patients for CareMatch."
+        ),
     },
     {
         "name": "Pharmacist",
-        "description": "Can perform relevant medicine and pharmacy activities.",
+        "description": (
+            "Can perform relevant medicine and pharmacy activities."
+        ),
     },
     {
         "name": "Administrator",
-        "description": "Can manage users, permissions, reports, and system settings.",
+        "description": (
+            "Can manage users, permissions, reports, "
+            "and system settings."
+        ),
     },
 ]
 
 
+# =========================================================
+# PERMISSIONS
+# =========================================================
+
 PERMISSIONS = [
     ("VIEW_PATIENT", "View patient information"),
+    (
+        "REGISTER_PATIENT",
+        "Register new patients and initiate encounters",
+    ),
     ("CREATE_PRESCRIPTION", "Create a medication prescription"),
     ("EDIT_PRESCRIPTION", "Modify an existing prescription"),
     ("STOP_PRESCRIPTION", "Stop an active prescription"),
-    ("VIEW_MEDICATION_HISTORY", "View medication administration history"),
-    ("VIEW_MEDICATION_SCHEDULE", "View medication schedules"),
+    (
+        "VIEW_MEDICATION_HISTORY",
+        "View medication administration history",
+    ),
+    (
+        "VIEW_MEDICATION_SCHEDULE",
+        "View medication schedules",
+    ),
     ("VERIFY_QR", "Verify a patient using QR"),
-    ("ADMINISTER_MEDICATION", "Record medication administration"),
+    (
+        "ADMINISTER_MEDICATION",
+        "Record medication administration",
+    ),
     ("VIEW_PRESCRIPTION", "View prescriptions"),
     ("MANAGE_MEDICINE", "Manage medicine information"),
     ("MANAGE_INVENTORY", "Manage medicine inventory"),
@@ -45,6 +81,10 @@ PERMISSIONS = [
 ]
 
 
+# =========================================================
+# ROLE-PERMISSION MAPPING
+# =========================================================
+
 ROLE_PERMISSIONS = {
     "Doctor": [
         "VIEW_PATIENT",
@@ -53,6 +93,7 @@ ROLE_PERMISSIONS = {
         "STOP_PRESCRIPTION",
         "VIEW_MEDICATION_HISTORY",
     ],
+
     "Nurse": [
         "VIEW_PATIENT",
         "VIEW_MEDICATION_SCHEDULE",
@@ -60,14 +101,22 @@ ROLE_PERMISSIONS = {
         "ADMINISTER_MEDICATION",
         "VIEW_MEDICATION_HISTORY",
     ],
+
+    "Receptionist": [
+        "VIEW_PATIENT",
+        "REGISTER_PATIENT",
+    ],
+
     "Pharmacist": [
         "VIEW_PATIENT",
         "VIEW_PRESCRIPTION",
         "MANAGE_MEDICINE",
         "MANAGE_INVENTORY",
     ],
+
     "Administrator": [
         "VIEW_PATIENT",
+        "REGISTER_PATIENT",
         "MANAGE_USERS",
         "MANAGE_ROLES",
         "MANAGE_PERMISSIONS",
@@ -78,16 +127,22 @@ ROLE_PERMISSIONS = {
 }
 
 
+# =========================================================
+# DATABASE SEEDING
+# =========================================================
+
 def seed_database() -> None:
     db = SessionLocal()
 
     try:
         permission_objects = {}
 
-        # Create permissions if they don't already exist.
+        # Create permissions if they do not exist.
         for name, description in PERMISSIONS:
             permission = db.scalar(
-                select(Permission).where(Permission.name == name)
+                select(Permission).where(
+                    Permission.name == name
+                )
             )
 
             if permission is None:
@@ -99,12 +154,15 @@ def seed_database() -> None:
 
             permission_objects[name] = permission
 
+        # Assign IDs to newly created permissions.
         db.flush()
 
-        # Create roles and connect permissions.
+        # Create roles and connect their permissions.
         for role_data in ROLES:
             role = db.scalar(
-                select(Role).where(Role.name == role_data["name"])
+                select(Role).where(
+                    Role.name == role_data["name"]
+                )
             )
 
             if role is None:
@@ -115,17 +173,18 @@ def seed_database() -> None:
                 db.add(role)
                 db.flush()
 
+            # Add any missing permissions to existing or new roles.
             for permission_name in ROLE_PERMISSIONS[role.name]:
                 permission = permission_objects[permission_name]
 
-                already_exists = db.scalar(
+                existing_assignment = db.scalar(
                     select(RolePermission).where(
                         RolePermission.role_id == role.id,
                         RolePermission.permission_id == permission.id,
                     )
                 )
 
-                if already_exists is None:
+                if existing_assignment is None:
                     db.add(
                         RolePermission(
                             role_id=role.id,

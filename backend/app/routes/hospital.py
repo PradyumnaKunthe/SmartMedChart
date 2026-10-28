@@ -2,13 +2,21 @@ from datetime import date, datetime
 from secrets import token_urlsafe
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Patient, User
-from app.security import require_permission
+from app.models import (
+    Bed,
+    Encounter,
+    Patient,
+    PatientBilling,
+    Role,
+    User,
+    Ward,
+)
+from app.security import get_current_user, require_permission
 
 
 router = APIRouter(
@@ -18,7 +26,7 @@ router = APIRouter(
 
 
 # =========================================================
-# Helpers
+# HELPERS
 # =========================================================
 
 def generate_patient_qr_token() -> str:
@@ -26,6 +34,34 @@ def generate_patient_qr_token() -> str:
     Generate a secure opaque QR token for a patient.
     """
     return token_urlsafe(32)
+
+
+def generate_patient_id(db: Session) -> str:
+    """
+    Automatically generate a unique SmartMedChart Patient ID.
+
+    Format:
+        SMH-PUN-YYMMDD-XXXX
+    """
+    today = date.today()
+    date_code = today.strftime("%y%m%d")
+    prefix = f"SMH-PUN-{date_code}-"
+
+    sequence = 1
+
+    while True:
+        patient_code = f"{prefix}{sequence:04d}"
+
+        existing_patient = db.scalar(
+            select(Patient).where(
+                Patient.patient_id == patient_code
+            )
+        )
+
+        if existing_patient is None:
+            return patient_code
+
+        sequence += 1
 
 
 def parse_date_of_birth(value) -> date | None:
@@ -44,6 +80,7 @@ def parse_date_of_birth(value) -> date | None:
             str(value).strip(),
             "%Y-%m-%d",
         ).date()
+
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -63,6 +100,7 @@ def parse_weight(value):
 
     try:
         weight = float(value)
+
     except (TypeError, ValueError):
         raise HTTPException(
             status_code=400,
@@ -104,13 +142,18 @@ def parse_boolean(value, default=True) -> bool:
 
 def patient_to_dict(patient: Patient) -> dict:
     """
-    Convert a Patient SQLAlchemy object into a JSON-safe dictionary.
+    Convert a Patient SQLAlchemy object into
+    a JSON-safe dictionary.
     """
     return {
         "id": patient.id,
         "patient_id": patient.patient_id,
         "first_name": patient.first_name,
         "last_name": patient.last_name,
+        "full_name": (
+            f"{patient.first_name} "
+            f"{patient.last_name}"
+        ).strip(),
         "date_of_birth": patient.date_of_birth,
         "gender": patient.gender,
         "weight_kg": (
@@ -127,7 +170,7 @@ def patient_to_dict(patient: Patient) -> dict:
 
 
 # =========================================================
-# Hospital dashboard
+# HOSPITAL DASHBOARD
 # =========================================================
 
 @router.get("/dashboard")
@@ -140,7 +183,6 @@ def get_hospital_dashboard(
     """
     Return patient statistics for the Hospital Portal.
     """
-
     total_patient_count = (
         db.scalar(
             select(func.count(Patient.id))
@@ -181,7 +223,7 @@ def get_hospital_dashboard(
 
 
 # =========================================================
-# List / search patients
+# LIST / SEARCH PATIENTS
 # =========================================================
 
 @router.get("/patients")
@@ -202,7 +244,6 @@ def get_hospital_patients(
     - First name
     - Last name
     """
-
     if limit < 1:
         limit = 1
 
@@ -230,9 +271,11 @@ def get_hospital_patients(
                 )
             )
 
-    query = query.order_by(
-        Patient.id.desc()
-    ).limit(limit)
+    query = (
+        query
+        .order_by(Patient.id.desc())
+        .limit(limit)
+    )
 
     patients = db.scalars(query).all()
 
@@ -246,7 +289,7 @@ def get_hospital_patients(
 
 
 # =========================================================
-# Get one patient
+# GET ONE PATIENT - COMPLETE PROFILE
 # =========================================================
 
 @router.get("/patients/{patient_id}")
@@ -258,7 +301,15 @@ def get_hospital_patient(
     ),
 ):
     """
-    Fetch one patient by the internal database ID.
+    Return the complete hospital patient profile.
+
+    Includes:
+    - Patient information
+    - Ward information
+    - Bed information
+    - Latest encounter
+    - Attending doctor
+    - Billing
     """
 
     patient = db.scalar(
@@ -273,67 +324,291 @@ def get_hospital_patient(
             detail="Patient not found.",
         )
 
+    # -----------------------------------------------------
+    # Latest encounter
+    # -----------------------------------------------------
+    encounter = db.scalar(
+        select(Encounter)
+        .where(
+            Encounter.patient_id == patient.id
+        )
+        .order_by(
+            desc(Encounter.created_at)
+        )
+    )
+
+    # -----------------------------------------------------
+    # Doctor
+    # -----------------------------------------------------
+    doctor = None
+
+    if (
+        encounter is not None
+        and encounter.doctor_id is not None
+    ):
+        doctor = db.scalar(
+            select(User).where(
+                User.id == encounter.doctor_id
+            )
+        )
+
+    # -----------------------------------------------------
+    # Ward
+    # -----------------------------------------------------
+    ward = None
+
+    if patient.ward_id is not None:
+        ward = db.scalar(
+            select(Ward).where(
+                Ward.id == patient.ward_id
+            )
+        )
+
+    # -----------------------------------------------------
+    # Bed
+    # -----------------------------------------------------
+    bed = None
+
+    if patient.bed_id is not None:
+        bed = db.scalar(
+            select(Bed).where(
+                Bed.id == patient.bed_id
+            )
+        )
+
+    # -----------------------------------------------------
+    # Billing
+    # -----------------------------------------------------
+    billing = db.scalar(
+        select(PatientBilling)
+        .where(
+            PatientBilling.patient_id == patient.id
+        )
+        .order_by(
+            desc(PatientBilling.created_at)
+        )
+    )
+
     return {
-        "patient": patient_to_dict(patient)
+        "patient": {
+            "id": patient.id,
+            "patient_id": patient.patient_id,
+
+            "first_name": patient.first_name,
+            "last_name": patient.last_name,
+
+            "full_name": (
+                f"{patient.first_name} "
+                f"{patient.last_name}"
+            ).strip(),
+
+            "date_of_birth": patient.date_of_birth,
+            "gender": patient.gender,
+
+            "weight_kg": (
+                float(patient.weight_kg)
+                if patient.weight_kg is not None
+                else None
+            ),
+
+            "ward_id": patient.ward_id,
+            "bed_id": patient.bed_id,
+
+            "is_active": patient.is_active,
+            "qr_is_active": patient.qr_is_active,
+            "qr_generated_at": patient.qr_generated_at,
+
+            "ward": (
+                {
+                    "id": ward.id,
+                    "name": ward.name,
+                    "code": ward.code,
+                    "description": ward.description,
+                    "is_active": ward.is_active,
+                }
+                if ward is not None
+                else None
+            ),
+
+            "bed": (
+                {
+                    "id": bed.id,
+                    "bed_number": bed.bed_number,
+                    "ward_id": bed.ward_id,
+                    "is_active": bed.is_active,
+                    "is_occupied": bed.is_occupied,
+                }
+                if bed is not None
+                else None
+            ),
+
+            "encounter": (
+                {
+                    "id": encounter.id,
+                    "doctor_id": encounter.doctor_id,
+                    "doctor_name": (
+                        doctor.full_name
+                        if doctor is not None
+                        else None
+                    ),
+                    "encounter_type": encounter.encounter_type,
+                    "status": encounter.status,
+                    "admitted_at": encounter.admitted_at,
+                    "discharged_at": encounter.discharged_at,
+                    "discharge_reason": encounter.discharge_reason,
+                }
+                if encounter is not None
+                else None
+            ),
+
+            "doctor": (
+                {
+                    "id": doctor.id,
+                    "full_name": doctor.full_name,
+                    "username": doctor.username,
+                    "email": doctor.email,
+                }
+                if doctor is not None
+                else None
+            ),
+
+            "billing": (
+                {
+                    "id": billing.id,
+                    "bill_status": billing.bill_status,
+                    "bill_amount": (
+                        float(billing.bill_amount)
+                        if billing.bill_amount is not None
+                        else None
+                    ),
+                    "paid_at": billing.paid_at,
+                    "paid_by": billing.paid_by,
+                    "created_at": billing.created_at,
+                    "updated_at": billing.updated_at,
+                }
+                if billing is not None
+                else None
+            ),
+        }
     }
 
 
 # =========================================================
-# Create patient
+# LIST ACTIVE DOCTORS
 # =========================================================
 
+@router.get("/doctors")
+def get_hospital_doctors(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_permission("VIEW_PATIENT")
+    ),
+):
+    """
+    Return all active registered doctors.
+
+    Doctors are automatically taken from the Staff
+    Management users table.
+    """
+    doctors = db.scalars(
+        select(User)
+        .join(Role, User.role_id == Role.id)
+        .where(
+            Role.name == "Doctor",
+            User.is_active.is_(True),
+        )
+        .order_by(User.full_name.asc())
+    ).all()
+
+    return {
+        "count": len(doctors),
+        "doctors": [
+            {
+                "id": doctor.id,
+                "full_name": doctor.full_name,
+                "username": doctor.username,
+                "email": doctor.email,
+            }
+            for doctor in doctors
+        ],
+    }
+
+
+# =========================================================
+# CREATE / REGISTER PATIENT
+# =========================================================
+def require_patient_registration_permission(
+    current_user: User = Depends(get_current_user),
+):
+    permission_names = {
+        permission.name
+        for permission in current_user.role.permissions
+    }
+
+    if not (
+        {"MANAGE_SYSTEM", "REGISTER_PATIENT"}
+        & permission_names
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Patient registration permission required.",
+        )
+
+    return current_user
 @router.post("/patients")
 def create_hospital_patient(
     request: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    require_patient_registration_permission
+),
 ):
     """
-    Create a new patient in the shared SmartMedChart database.
+    Register a new patient.
+
+    Automatically creates:
+    - Patient master record
+    - Initial Encounter
+    - Initial Billing record
+    - Active QR token
+
+    Patient ID is generated automatically.
 
     Required:
-    - patient_id
     - first_name
     - last_name
+    - doctor_id
 
-    Optional:
-    - date_of_birth
-    - gender
-    - weight_kg
+    Optional admission:
+    - is_admitted
     - ward_id
     - bed_id
-    - is_active
     """
 
     # -----------------------------------------------------
     # Required fields
     # -----------------------------------------------------
-
     required_fields = [
-        "patient_id",
         "first_name",
         "last_name",
+        "doctor_id",
     ]
 
     for field in required_fields:
         value = request.get(field)
 
-        if value is None or str(value).strip() == "":
+        if (
+            value is None
+            or str(value).strip() == ""
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"{field} is required.",
             )
 
     # -----------------------------------------------------
-    # Clean basic values
+    # Basic values
     # -----------------------------------------------------
-
-    patient_code = str(
-        request["patient_id"]
-    ).strip()
-
     first_name = str(
         request["first_name"]
     ).strip()
@@ -345,37 +620,66 @@ def create_hospital_patient(
     gender = request.get("gender")
 
     if gender is not None:
-        gender = str(gender).strip()
+        gender = str(gender).strip() or None
 
     # -----------------------------------------------------
-    # Validate date
+    # Date of birth
     # -----------------------------------------------------
-
     date_of_birth = parse_date_of_birth(
         request.get("date_of_birth")
     )
 
     # -----------------------------------------------------
-    # Validate weight
+    # Weight
     # -----------------------------------------------------
-
     weight_kg = parse_weight(
         request.get("weight_kg")
     )
 
     # -----------------------------------------------------
-    # Validate active status
+    # Doctor
     # -----------------------------------------------------
+    doctor_id = request.get("doctor_id")
 
-    is_active = parse_boolean(
-        request.get("is_active"),
-        default=True,
+    try:
+        doctor_id = int(doctor_id)
+
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="doctor_id must be a valid integer.",
+        )
+
+    doctor = db.scalar(
+        select(User)
+        .join(Role, User.role_id == Role.id)
+        .where(
+            User.id == doctor_id,
+            User.is_active.is_(True),
+            Role.name == "Doctor",
+        )
+    )
+
+    if doctor is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Selected doctor is not an active "
+                "registered doctor."
+            ),
+        )
+
+    # -----------------------------------------------------
+    # Admission state
+    # -----------------------------------------------------
+    is_admitted = parse_boolean(
+        request.get("is_admitted"),
+        default=False,
     )
 
     # -----------------------------------------------------
-    # Ward / bed IDs
+    # Ward / bed
     # -----------------------------------------------------
-
     ward_id = request.get("ward_id")
     bed_id = request.get("bed_id")
 
@@ -385,29 +689,93 @@ def create_hospital_patient(
     if bed_id in ("", None):
         bed_id = None
 
-    # -----------------------------------------------------
-    # Check duplicate Patient ID
-    # -----------------------------------------------------
-
-    existing_patient = db.scalar(
-        select(Patient).where(
-            Patient.patient_id == patient_code
-        )
-    )
-
-    if existing_patient is not None:
+    if is_admitted and ward_id is None:
         raise HTTPException(
-            status_code=409,
+            status_code=400,
             detail=(
-                "A patient with this Patient ID "
-                "already exists."
+                "Ward is required when admitting "
+                "a patient."
             ),
         )
+
+    if is_admitted and bed_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Bed is required when admitting "
+                "a patient."
+            ),
+        )
+
+    if not is_admitted:
+        ward_id = None
+        bed_id = None
+
+    # -----------------------------------------------------
+    # Validate ward / bed
+    # -----------------------------------------------------
+    selected_bed = None
+
+    if bed_id is not None:
+        try:
+            ward_id = (
+                int(ward_id)
+                if ward_id is not None
+                else None
+            )
+
+            bed_id = int(bed_id)
+
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ward_id and bed_id must be "
+                    "valid integers."
+                ),
+            )
+
+        selected_bed = db.scalar(
+            select(Bed).where(
+                Bed.id == bed_id,
+                Bed.is_active.is_(True),
+            )
+        )
+
+        if selected_bed is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Selected bed not found or inactive."
+                ),
+            )
+
+        if selected_bed.is_occupied:
+            raise HTTPException(
+                status_code=409,
+                detail="Selected bed is already occupied.",
+            )
+
+        if (
+            ward_id is not None
+            and selected_bed.ward_id != ward_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Selected bed does not belong "
+                    "to the selected ward."
+                ),
+            )
+
+    # -----------------------------------------------------
+    # Generate Patient ID
+    # -----------------------------------------------------
+    patient_code = generate_patient_id(db)
 
     # -----------------------------------------------------
     # Generate unique QR token
     # -----------------------------------------------------
-
     qr_token = generate_patient_qr_token()
 
     while (
@@ -420,10 +788,11 @@ def create_hospital_patient(
     ):
         qr_token = generate_patient_qr_token()
 
+    now = datetime.utcnow()
+
     # -----------------------------------------------------
     # Create patient
     # -----------------------------------------------------
-
     patient = Patient(
         patient_id=patient_code,
         first_name=first_name,
@@ -433,18 +802,68 @@ def create_hospital_patient(
         weight_kg=weight_kg,
         ward_id=ward_id,
         bed_id=bed_id,
-        is_active=is_active,
+        is_active=True,
         qr_token=qr_token,
-        qr_generated_at=datetime.utcnow(),
+        qr_generated_at=now,
         qr_is_active=True,
     )
 
     try:
         db.add(patient)
-        db.commit()
-        db.refresh(patient)
 
-    except IntegrityError:
+        # Flush so patient.id becomes available.
+        db.flush()
+
+        # -------------------------------------------------
+        # Create initial encounter
+        # -------------------------------------------------
+        encounter = Encounter(
+            patient_id=patient.id,
+            doctor_id=doctor_id,
+            encounter_type=(
+                "INPATIENT"
+                if is_admitted
+                else "OPD"
+            ),
+            status="ACTIVE",
+            admitted_at=(
+                now
+                if is_admitted
+                else None
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+
+        db.add(encounter)
+
+        # -------------------------------------------------
+        # Create initial billing record
+        # -------------------------------------------------
+        billing = PatientBilling(
+            patient_id=patient.id,
+            bill_status="PENDING",
+            bill_amount=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        db.add(billing)
+
+        # -------------------------------------------------
+        # Occupy bed
+        # -------------------------------------------------
+        if selected_bed is not None:
+            selected_bed.is_occupied = True
+            selected_bed.updated_at = now
+
+        db.commit()
+
+        db.refresh(patient)
+        db.refresh(encounter)
+        db.refresh(billing)
+
+    except IntegrityError as exc:
         db.rollback()
 
         raise HTTPException(
@@ -453,19 +872,20 @@ def create_hospital_patient(
                 "Patient could not be created because "
                 "a unique database value already exists."
             ),
-        )
-
-    # -----------------------------------------------------
-    # Response
-    # -----------------------------------------------------
+        ) from exc
 
     return {
-        "message": "Patient created successfully.",
+        "message": "Patient registered successfully.",
+
         "patient": {
             "id": patient.id,
             "patient_id": patient.patient_id,
             "first_name": patient.first_name,
             "last_name": patient.last_name,
+            "full_name": (
+                f"{patient.first_name} "
+                f"{patient.last_name}"
+            ).strip(),
             "date_of_birth": patient.date_of_birth,
             "gender": patient.gender,
             "weight_kg": (
@@ -479,11 +899,34 @@ def create_hospital_patient(
             "qr_is_active": patient.qr_is_active,
             "qr_generated_at": patient.qr_generated_at,
         },
+
+        "encounter": {
+            "id": encounter.id,
+            "doctor_id": encounter.doctor_id,
+            "doctor_name": (
+                encounter.doctor.full_name
+                if encounter.doctor is not None
+                else doctor.full_name
+            ),
+            "encounter_type": encounter.encounter_type,
+            "status": encounter.status,
+            "admitted_at": encounter.admitted_at,
+        },
+
+        "billing": {
+            "id": billing.id,
+            "bill_status": billing.bill_status,
+            "bill_amount": (
+                float(billing.bill_amount)
+                if billing.bill_amount is not None
+                else None
+            ),
+        },
     }
 
 
 # =========================================================
-# Regenerate patient QR
+# REGENERATE PATIENT QR
 # =========================================================
 
 @router.post(
@@ -497,7 +940,7 @@ def regenerate_patient_qr(
     ),
 ):
     """
-    Generate a new QR token for an existing patient.
+    Generate a new QR token for an active patient.
     """
 
     patient = db.scalar(
@@ -510,6 +953,17 @@ def regenerate_patient_qr(
         raise HTTPException(
             status_code=404,
             detail="Patient not found.",
+        )
+
+    # A discharged patient must never receive
+    # a newly activated QR code.
+    if not patient.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot regenerate QR for a "
+                "discharged patient."
+            ),
         )
 
     qr_token = generate_patient_qr_token()
@@ -527,6 +981,7 @@ def regenerate_patient_qr(
     patient.qr_token = qr_token
     patient.qr_generated_at = datetime.utcnow()
     patient.qr_is_active = True
+    patient.updated_at = datetime.utcnow()
 
     db.commit()
     db.refresh(patient)

@@ -9,7 +9,26 @@ from alembic import context
 from app.database import Base
 
 # Import all models so Alembic can detect them
-from app.models import Permission, Role, RolePermission, User
+from app.models import (
+    Permission,
+    Role,
+    RolePermission,
+    User,
+    Allergy,
+    Bed,
+    Medicine,
+    Patient,
+    Prescription,
+    PrescriptionItem,
+    Ward,
+    MedicationSchedule,
+    MedicationAdministration,
+    QRVerification,
+    AIPrediction,
+    NursePatientAssignment,
+    Encounter,
+    PatientBilling,
+)
 
 
 # This is the Alembic Config object, which provides

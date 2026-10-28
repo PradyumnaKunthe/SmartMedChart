@@ -111,4 +111,15 @@ class Patient(Base):
     qr_verifications = relationship(
     "QRVerification",
     back_populates="patient",
-)
+   )
+    encounters = relationship(
+        "Encounter",
+        back_populates="patient",
+        cascade="all, delete-orphan",
+    )
+    billing = relationship(
+        "PatientBilling",
+        back_populates="patient",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

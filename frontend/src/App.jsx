@@ -8,14 +8,22 @@ import {
   useAuth,
 } from "./context/AuthContext"
 
-
 // =====================================================
 // AUTH
 // =====================================================
 
 import Login from "./pages/Login"
-import StaffAssignments from "./pages/admin/StaffAssignments"
 
+// =====================================================
+// ADMIN
+// =====================================================
+
+import MonitoringDashboard from "./pages/admin/MonitoringDashboard"
+import StaffAssignments from "./pages/admin/StaffAssignments"
+import PatientQR from "./pages/admin/PatientQR"
+import PatientManagement from "./pages/admin/PatientManagement"
+import WardBedManagement from "./pages/admin/WardBedManagement"
+import DoctorProfiles from "./pages/admin/DoctorProfiles";
 // =====================================================
 // NURSE
 // =====================================================
@@ -26,7 +34,6 @@ import MedicationDetails from "./pages/nurse/MedicationDetails"
 import QRScanner from "./pages/nurse/QRScanner"
 import NurseAI from "./pages/nurse/NurseAI"
 import Administration from "./pages/nurse/Administration"
-import AddPatient from "./pages/hospital/AddPatient"
 
 // =====================================================
 // DOCTOR
@@ -40,21 +47,14 @@ import EditPrescription from "./pages/doctor/EditPrescription"
 import Prescriptions from "./pages/doctor/Prescriptions"
 import DoctorAI from "./pages/doctor/DoctorAI"
 
-
-// =====================================================
-// ADMIN
-// =====================================================
-
-import MonitoringDashboard from "./pages/admin/MonitoringDashboard"
-
-
 // =====================================================
 // HOSPITAL
 // =====================================================
 
+import AddPatient from "./pages/hospital/AddPatient"
 import HospitalDashboard from "./pages/hospital/HospitalDashboard"
-
-
+import HospitalPatientProfile from "./pages/hospital/PatientProfile"
+import CareMatch from "./pages/hospital/CareMatch"
 // =====================================================
 // PROTECTED ROUTE
 // =====================================================
@@ -67,7 +67,6 @@ function ProtectedRoute({
     loading,
   } = useAuth()
 
-
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white">
@@ -75,7 +74,6 @@ function ProtectedRoute({
       </div>
     )
   }
-
 
   if (!user) {
     return (
@@ -86,10 +84,8 @@ function ProtectedRoute({
     )
   }
 
-
   return children
 }
-
 
 // =====================================================
 // ROLE ROUTE
@@ -103,7 +99,6 @@ function RoleRoute({
     user,
   } = useAuth()
 
-
   const role =
     typeof user?.role === "string"
       ? user.role
@@ -111,12 +106,7 @@ function RoleRoute({
           .toLowerCase()
       : ""
 
-
-  if (
-    !allowedRoles.includes(
-      role,
-    )
-  ) {
+  if (!allowedRoles.includes(role)) {
     return (
       <Navigate
         to="/"
@@ -125,10 +115,8 @@ function RoleRoute({
     )
   }
 
-
   return children
 }
-
 
 // =====================================================
 // HOME REDIRECT
@@ -139,7 +127,6 @@ function HomeRedirect() {
     user,
   } = useAuth()
 
-
   if (!user) {
     return (
       <Navigate
@@ -149,26 +136,12 @@ function HomeRedirect() {
     )
   }
 
-
   const role =
     typeof user.role === "string"
       ? user.role
           .trim()
           .toLowerCase()
       : ""
-
-
-  console.log(
-    "SmartMedChart logged-in user:",
-    user,
-  )
-
-
-  console.log(
-    "SmartMedChart detected role:",
-    role,
-  )
-
 
   if (role === "nurse") {
     return (
@@ -179,7 +152,6 @@ function HomeRedirect() {
     )
   }
 
-
   if (role === "doctor") {
     return (
       <Navigate
@@ -188,7 +160,6 @@ function HomeRedirect() {
       />
     )
   }
-
 
   if (
     role === "admin" ||
@@ -202,11 +173,11 @@ function HomeRedirect() {
     )
   }
 
-
   if (
-    role === "hospital" ||
-    role === "hospital_staff"
-  ) {
+  role === "hospital" ||
+  role === "hospital_staff" ||
+  role === "receptionist"
+) {
     return (
       <Navigate
         to="/hospital/dashboard"
@@ -215,22 +186,17 @@ function HomeRedirect() {
     )
   }
 
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
-
       <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-
         <h1 className="text-2xl font-bold text-slate-900">
           SmartMedChart
         </h1>
-
 
         <p className="mt-3 text-slate-600">
           Logged in, but no dashboard is configured
           for this role.
         </p>
-
 
         <pre className="mt-4 rounded-lg bg-slate-100 p-4 text-sm">
           {JSON.stringify(
@@ -239,13 +205,10 @@ function HomeRedirect() {
             2,
           )}
         </pre>
-
       </div>
-
     </div>
   )
 }
-
 
 // =====================================================
 // APP
@@ -265,7 +228,6 @@ export default function App() {
           <Login />
         }
       />
-
 
       <Route
         path="/"
@@ -294,7 +256,6 @@ export default function App() {
         }
       />
 
-
       <Route
         path="/doctor/patients"
         element={
@@ -309,7 +270,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
 
       <Route
         path="/doctor/patients/:patientId"
@@ -326,7 +286,6 @@ export default function App() {
         }
       />
 
-
       <Route
         path="/doctor/prescriptions"
         element={
@@ -341,7 +300,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
 
       <Route
         path="/doctor/prescriptions/create"
@@ -358,7 +316,6 @@ export default function App() {
         }
       />
 
-
       <Route
         path="/doctor/prescriptions/:prescriptionId/edit"
         element={
@@ -373,7 +330,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
 
       <Route
         path="/doctor/ai"
@@ -410,7 +366,6 @@ export default function App() {
         }
       />
 
-
       <Route
         path="/nurse/medications"
         element={
@@ -425,7 +380,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
 
       <Route
         path="/nurse/medications/:scheduleId"
@@ -442,7 +396,6 @@ export default function App() {
         }
       />
 
-
       <Route
         path="/nurse/qr"
         element={
@@ -458,7 +411,6 @@ export default function App() {
         }
       />
 
-
       <Route
         path="/nurse/ai"
         element={
@@ -473,7 +425,6 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-
 
       <Route
         path="/nurse/medications/:scheduleId/administration"
@@ -511,13 +462,140 @@ export default function App() {
         }
       />
 
+      <Route
+        path="/admin/staff"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+              ]}
+            >
+              <StaffAssignments />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/qr"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+              ]}
+            >
+              <PatientQR />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/patients"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+              ]}
+            >
+              <PatientManagement />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/ward-bed-management"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+              ]}
+            >
+              <WardBedManagement />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+  path="/admin/doctor-profiles"
+  element={
+    <ProtectedRoute>
+      <RoleRoute
+        allowedRoles={[
+          "admin",
+          "administrator",
+        ]}
+      >
+        <DoctorProfiles />
+      </RoleRoute>
+    </ProtectedRoute>
+  }
+      />
+
 
       {/* =================================================
           HOSPITAL PORTAL
       ================================================= */}
-
+      <Route
+        path="/receptionist/counter"
+        element={
+          <ProtectedRoute>
+            <RoleRoute allowedRoles={["receptionist"]}>
+              <CareMatch />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
       <Route
         path="/hospital/dashboard"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+             allowedRoles={[
+              "admin",
+              "administrator",
+              "hospital",
+              "hospital_staff",
+              "receptionist",
+            ]}
+            >
+              <HospitalDashboard />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/hospital/patients/new"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+                "hospital",
+                "hospital_staff",
+                "receptionist",
+              ]}
+            >
+              <AddPatient />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Specific hospital patient page */}
+      <Route
+        path="/hospital/patients/:patientId"
         element={
           <ProtectedRoute>
             <RoleRoute
@@ -528,7 +606,7 @@ export default function App() {
                 "hospital_staff",
               ]}
             >
-              <HospitalDashboard />
+              <HospitalPatientProfile />
             </RoleRoute>
           </ProtectedRoute>
         }
@@ -548,89 +626,7 @@ export default function App() {
           />
         }
       />
-<Route
-  path="/hospital/dashboard"
-  element={
-    <ProtectedRoute>
-      <RoleRoute
-        allowedRoles={[
-          "admin",
-          "administrator",
-          "hospital",
-          "hospital_staff",
-        ]}
-      >
-        <HospitalDashboard />
-      </RoleRoute>
-    </ProtectedRoute>
-  }
-/>
-<Route
-  path="/hospital/patients/new"
-  element={
-    <ProtectedRoute>
-      <RoleRoute
-        allowedRoles={[
-          "admin",
-          "administrator",
-          "hospital",
-          "hospital_staff",
-        ]}
-      >
-        <AddPatient />
-      </RoleRoute>
-    </ProtectedRoute>
-  }
-/>
-<Route
-  path="/hospital/patients/new"
-  element={
-    <ProtectedRoute>
-      <RoleRoute
-        allowedRoles={[
-          "admin",
-          "administrator",
-          "hospital",
-          "hospital_staff",
-        ]}
-      >
-        <AddPatient />
-      </RoleRoute>
-    </ProtectedRoute>
-  }
-/>
-<Route
-  path="/hospital/patients/new"
-  element={
-    <ProtectedRoute>
-      <RoleRoute
-        allowedRoles={[
-          "admin",
-          "administrator",
-          "hospital",
-          "hospital_staff",
-        ]}
-      >
-        <AddPatient />
-      </RoleRoute>
-    </ProtectedRoute>
-  }
-/>
-<Route
-  path="/admin/staff"
-  element={
-    <ProtectedRoute>
-      <RoleRoute
-        allowedRoles={[
-          "admin",
-          "administrator",
-        ]}
-      >
-        <StaffAssignments />
-      </RoleRoute>
-    </ProtectedRoute>
-  }
-/>
+
     </Routes>
   )
 }

@@ -1,892 +1,518 @@
 import {
   Activity,
-  Bed,
-  ClipboardPlus,
-  Database,
-  HeartPulse,
+  ArrowLeft,
+  CalendarDays,
+  LoaderCircle,
+  Plus,
   RefreshCw,
   Search,
-  ShieldCheck,
-  UserPlus,
+  UserRound,
   Users,
 } from "lucide-react"
 
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import {
+  useEffect,
+  useState,
+} from "react"
+
+import {
+  useNavigate,
+} from "react-router-dom"
 
 import MainLayout from "../../components/layout/MainLayout"
 import api from "../../services/api"
 
 
+function formatDate(value) {
+  if (!value) {
+    return "Not available"
+  }
+
+  const parsed = new Date(value)
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "Not available"
+  }
+
+  return new Intl.DateTimeFormat(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    },
+  ).format(parsed)
+}
+
+
+function PatientRow({
+  patient,
+  onView,
+}) {
+  const initials =
+    `${patient.first_name?.charAt(0) || ""}${patient.last_name?.charAt(0) || ""}`
+      .toUpperCase()
+
+  return (
+    <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-cyan-200 hover:shadow-md sm:flex-row sm:items-center sm:justify-between">
+
+      <div className="flex min-w-0 items-center gap-4">
+
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-sm font-bold text-cyan-700">
+          {initials || "P"}
+        </div>
+
+        <div className="min-w-0">
+
+          <div className="flex flex-wrap items-center gap-2">
+
+            <p className="truncate font-semibold text-slate-900">
+              {patient.first_name}{" "}
+              {patient.last_name}
+            </p>
+
+            {patient.is_active && (
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">
+                ACTIVE
+              </span>
+            )}
+
+          </div>
+
+          <p className="mt-1 text-sm text-slate-500">
+            Patient ID:{" "}
+            <span className="font-semibold text-slate-700">
+              {patient.patient_id}
+            </span>
+          </p>
+
+          <p className="mt-1 text-xs text-slate-400">
+            DOB:{" "}
+            {formatDate(
+              patient.date_of_birth,
+            )}
+          </p>
+
+        </div>
+
+      </div>
+
+
+      <button
+        type="button"
+        onClick={() =>
+          onView(patient)
+        }
+        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700"
+      >
+        View Patient
+      </button>
+
+    </div>
+  )
+}
+
+
 export default function HospitalDashboard() {
-  const navigate = useNavigate()
 
-  const [dashboard, setDashboard] = useState(null)
-  const [patients, setPatients] = useState([])
-  const [search, setSearch] = useState("")
+  const navigate =
+    useNavigate()
 
-  const [loading, setLoading] = useState(true)
-  const [searching, setSearching] = useState(false)
-  const [error, setError] = useState("")
+  const [
+    patients,
+    setPatients,
+  ] = useState([])
+
+  const [
+    search,
+    setSearch,
+  ] = useState("")
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(true)
+
+  const [
+    error,
+    setError,
+  ] = useState("")
 
 
-  // =======================================================
-  // Load dashboard + patients
-  // =======================================================
+  async function loadPatients(
+    searchValue = "",
+  ) {
 
-  async function loadHospitalData(searchValue = "") {
+    setLoading(true)
+    setError("")
+
     try {
-      setError("")
 
-      if (searchValue) {
-        setSearching(true)
-      } else {
-        setLoading(true)
-      }
+      const response =
+        await api.get(
+          "/api/hospital/patients",
+          {
+            params: {
+              search:
+                searchValue.trim() ||
+                undefined,
 
-      const [
-        dashboardResponse,
-        patientsResponse,
-      ] = await Promise.all([
-        api.get("/api/hospital/dashboard"),
-        api.get("/api/hospital/patients", {
-          params: {
-            search: searchValue || undefined,
-            active_only: false,
-            limit: 100,
+              active_only: false,
+
+              limit: 500,
+            },
           },
-        }),
-      ])
+        )
 
-      setDashboard(
-        dashboardResponse.data
-      )
+      const loaded =
+        Array.isArray(
+          response.data?.patients,
+        )
+          ? response.data.patients
+          : []
 
       setPatients(
-        patientsResponse.data?.patients || []
+        loaded,
       )
+
     } catch (requestError) {
+
       console.error(
-        "Hospital dashboard error:",
-        requestError
+        "Load hospital patients error:",
+        requestError,
       )
 
       setError(
         requestError?.response?.data?.detail ||
-          "Unable to load hospital data."
+          "Unable to load hospital patients.",
       )
+
+      setPatients([])
+
     } finally {
+
       setLoading(false)
-      setSearching(false)
+
     }
   }
 
 
-  // =======================================================
-  // Initial load
-  // =======================================================
-
   useEffect(() => {
-    loadHospitalData("")
+    loadPatients("")
   }, [])
 
 
-  // =======================================================
-  // Search
-  // =======================================================
+  function handleSearch(
+    event,
+  ) {
 
-  async function handleSearch(event) {
     event.preventDefault()
 
-    await loadHospitalData(
-      search.trim()
+    loadPatients(search)
+
+  }
+
+
+  function handleViewPatient(
+    patient,
+  ) {
+
+    navigate(
+      `/hospital/patients/${patient.id}`,
     )
+
   }
 
 
-  // =======================================================
-  // Clear search
-  // =======================================================
+  const activeCount =
+    patients.filter(
+      (patient) =>
+        patient.is_active,
+    ).length
 
-  async function handleClearSearch() {
-    setSearch("")
-    await loadHospitalData("")
-  }
-
-
-  // =======================================================
-  // Refresh
-  // =======================================================
-
-  async function handleRefresh() {
-    await loadHospitalData(
-      search.trim()
-    )
-  }
+  const inactiveCount =
+    patients.filter(
+      (patient) =>
+        !patient.is_active,
+    ).length
 
 
   return (
-    <MainLayout title="Hospital Portal">
+    <MainLayout title="Hospital Dashboard">
 
       <div className="mx-auto max-w-7xl space-y-6">
 
+
         {/* =================================================
-            Header
+            HEADER
         ================================================= */}
 
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 p-6 text-white shadow-lg">
 
-          <div>
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
 
-            <p className="text-sm font-semibold text-cyan-600">
-              Hospital Data Portal
-            </p>
+            <div>
 
-            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-              Hospital Dashboard
-            </h1>
+              <div className="flex items-center gap-3">
 
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-              Manage hospital patient records and make
-              clinical data available to the Doctor,
-              Nurse, and Admin workspaces through the
-              shared SmartMedChart database.
-            </p>
+                <div className="rounded-2xl bg-cyan-500/10 p-3">
 
-          </div>
+                  <Activity className="h-6 w-6 text-cyan-400" />
 
+                </div>
 
-          <div className="flex flex-wrap gap-2">
+                <div>
 
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={loading || searching}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <RefreshCw
-                className={`h-4 w-4 ${
-                  loading || searching
-                    ? "animate-spin"
-                    : ""
-                }`}
-              />
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-400">
+                    Hospital Data Portal
+                  </p>
 
-              Refresh
-            </button>
+                  <h1 className="mt-1 text-2xl font-bold sm:text-3xl">
+                    Hospital Dashboard
+                  </h1>
+
+                </div>
+
+              </div>
+
+              <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400">
+                Register patients, search patient records,
+                and open the complete information for the
+                specific patient you select.
+              </p>
+
+            </div>
 
 
             <button
               type="button"
               onClick={() =>
                 navigate(
-                  "/hospital/patients/new"
+                  "/hospital/patients/new",
                 )
               }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-700"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-cyan-700"
             >
-              <UserPlus className="h-4 w-4" />
-              Add Patient
+
+              <Plus className="h-4 w-4" />
+
+              Register Patient
+
             </button>
 
           </div>
 
-        </div>
+        </section>
 
 
         {/* =================================================
-            Error
+            ERROR
         ================================================= */}
 
         {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
 
-            <div className="flex items-start gap-3">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
 
-              <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
-
-              <div>
-
-                <p className="font-semibold text-red-800">
-                  Hospital data error
-                </p>
-
-                <p className="mt-1 text-sm text-red-700">
-                  {error}
-                </p>
-
-              </div>
-
-            </div>
+            {error}
 
           </div>
+
         )}
 
 
         {/* =================================================
-            KPI Cards
+            STATS
         ================================================= */}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-3">
 
-          {/* Total */}
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-3">
 
-            <div className="flex items-start justify-between">
+              <div className="rounded-xl bg-cyan-50 p-3">
+
+                <Users className="h-5 w-5 text-cyan-600" />
+
+              </div>
 
               <div>
 
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
                   Total Patients
                 </p>
 
-                <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {dashboard?.patients?.total ?? 0}
+                <p className="mt-1 text-2xl font-bold text-slate-900">
+                  {patients.length}
                 </p>
 
               </div>
 
-              <div className="rounded-xl bg-cyan-50 p-3">
-                <Users className="h-5 w-5 text-cyan-600" />
-              </div>
-
             </div>
 
-            <p className="mt-3 text-xs text-slate-500">
-              All patient records in the database
+          </div>
+
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+              Active
+            </p>
+
+            <p className="mt-1 text-2xl font-bold text-emerald-600">
+              {activeCount}
             </p>
 
           </div>
 
 
-          {/* Active */}
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+              Inactive / Discharged
+            </p>
 
-            <div className="flex items-start justify-between">
-
-              <div>
-
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Active Patients
-                </p>
-
-                <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {dashboard?.patients?.active ?? 0}
-                </p>
-
-              </div>
-
-              <div className="rounded-xl bg-emerald-50 p-3">
-                <Activity className="h-5 w-5 text-emerald-600" />
-              </div>
-
-            </div>
-
-            <p className="mt-3 text-xs text-slate-500">
-              Currently active hospital records
+            <p className="mt-1 text-2xl font-bold text-slate-700">
+              {inactiveCount}
             </p>
 
           </div>
 
-
-          {/* Inactive */}
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-start justify-between">
-
-              <div>
-
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Inactive Patients
-                </p>
-
-                <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {dashboard?.patients?.inactive ?? 0}
-                </p>
-
-              </div>
-
-              <div className="rounded-xl bg-slate-100 p-3">
-                <Database className="h-5 w-5 text-slate-600" />
-              </div>
-
-            </div>
-
-            <p className="mt-3 text-xs text-slate-500">
-              Inactive or archived records
-            </p>
-
-          </div>
-
-
-          {/* Portal status */}
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-950 p-5 shadow-sm">
-
-            <div className="flex items-start justify-between">
-
-              <div>
-
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Portal Status
-                </p>
-
-                <p className="mt-2 text-2xl font-bold text-white">
-                  {dashboard?.hospital?.status || "ACTIVE"}
-                </p>
-
-              </div>
-
-              <div className="rounded-xl bg-emerald-400/10 p-3">
-                <HeartPulse className="h-5 w-5 text-emerald-400" />
-              </div>
-
-            </div>
-
-            <p className="mt-3 text-xs text-slate-400">
-              Shared clinical database connected
-            </p>
-
-          </div>
-
-        </div>
+        </section>
 
 
         {/* =================================================
-            Quick actions
+            SEARCH
         ================================================= */}
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
 
-          <button
-            type="button"
-            onClick={() =>
-              navigate(
-                "/hospital/patients/new"
-              )
+          <form
+            onSubmit={
+              handleSearch
             }
-            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md"
+            className="flex flex-col gap-3 md:flex-row"
           >
 
-            <div className="flex items-center gap-4">
+            <div className="relative flex-1">
 
-              <div className="rounded-xl bg-cyan-50 p-3">
-                <UserPlus className="h-5 w-5 text-cyan-600" />
-              </div>
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
 
-              <div>
-
-                <p className="font-semibold text-slate-900">
-                  Register Patient
-                </p>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Create a new patient record
-                </p>
-
-              </div>
+              <input
+                value={search}
+                onChange={(
+                  event,
+                ) =>
+                  setSearch(
+                    event.target.value,
+                  )
+                }
+                placeholder="Search by patient ID or name..."
+                className="w-full rounded-xl border border-slate-200 py-3 pl-12 pr-4 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
+              />
 
             </div>
 
-          </button>
+
+            <button
+              type="submit"
+              className="rounded-xl bg-slate-950 px-6 py-3 text-sm font-bold text-white transition hover:bg-slate-800"
+            >
+              Search
+            </button>
 
 
-          <button
-            type="button"
-            onClick={() =>
-              document
-                .getElementById(
-                  "hospital-patient-list"
-                )
-                ?.scrollIntoView({
-                  behavior: "smooth",
-                })
-            }
-            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md"
-          >
+            <button
+              type="button"
+              onClick={() =>
+                loadPatients(search)
+              }
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
 
-            <div className="flex items-center gap-4">
+              <RefreshCw className="h-4 w-4" />
 
-              <div className="rounded-xl bg-indigo-50 p-3">
-                <Search className="h-5 w-5 text-indigo-600" />
-              </div>
+              Refresh
 
-              <div>
+            </button>
 
-                <p className="font-semibold text-slate-900">
-                  Search Patients
-                </p>
+          </form>
 
-                <p className="mt-1 text-sm text-slate-500">
-                  Find an existing hospital record
-                </p>
-
-              </div>
-
-            </div>
-
-          </button>
-
-
-          <button
-            type="button"
-            onClick={() =>
-              document
-                .getElementById(
-                  "hospital-patient-list"
-                )
-                ?.scrollIntoView({
-                  behavior: "smooth",
-                })
-            }
-            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md"
-          >
-
-            <div className="flex items-center gap-4">
-
-              <div className="rounded-xl bg-amber-50 p-3">
-                <ClipboardPlus className="h-5 w-5 text-amber-600" />
-              </div>
-
-              <div>
-
-                <p className="font-semibold text-slate-900">
-                  Clinical Records
-                </p>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Manage shared patient information
-                </p>
-
-              </div>
-
-            </div>
-
-          </button>
-
-        </div>
+        </section>
 
 
         {/* =================================================
-            Patient List
+            PATIENT LIST
         ================================================= */}
 
-        <section
-          id="hospital-patient-list"
-          className="rounded-3xl border border-slate-200 bg-white shadow-sm"
-        >
+        <section>
 
-          <div className="border-b border-slate-200 p-5 md:p-6">
+          <div className="mb-4">
 
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <p className="text-sm font-semibold text-cyan-600">
+              Patient Records
+            </p>
 
-              <div>
+            <h2 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">
+              Registered Patients
+            </h2>
 
-                <p className="text-sm font-semibold text-cyan-600">
-                  Shared Patient Database
-                </p>
-
-                <h2 className="mt-1 text-xl font-bold text-slate-900">
-                  Hospital Patients
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  These records are shared with authorized
-                  SmartMedChart clinical interfaces.
-                </p>
-
-              </div>
-
-
-              {/* Search */}
-
-              <form
-                onSubmit={handleSearch}
-                className="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl"
-              >
-
-                <div className="relative flex-1">
-
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-
-                  <input
-                    value={search}
-                    onChange={(event) =>
-                      setSearch(
-                        event.target.value
-                      )
-                    }
-                    placeholder="Search Patient ID, first name, or last name"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-2 focus:ring-cyan-100"
-                  />
-
-                </div>
-
-
-                <button
-                  type="submit"
-                  disabled={searching}
-                  className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-                >
-                  {searching
-                    ? "Searching..."
-                    : "Search"}
-                </button>
-
-
-                {search && (
-                  <button
-                    type="button"
-                    onClick={handleClearSearch}
-                    className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                  >
-                    Clear
-                  </button>
-                )}
-
-              </form>
-
-            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              Click View Patient to open the exact record you selected.
+            </p>
 
           </div>
 
 
-          {/* =================================================
-              Loading
-          ================================================= */}
+          {loading ? (
 
-          {loading && (
-            <div className="p-10 text-center">
+            <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center shadow-sm">
 
-              <RefreshCw className="mx-auto h-7 w-7 animate-spin text-cyan-600" />
+              <LoaderCircle className="mx-auto h-9 w-9 animate-spin text-cyan-600" />
 
-              <p className="mt-3 text-sm font-medium text-slate-600">
-                Loading hospital patients...
+              <p className="mt-4 text-sm font-semibold text-slate-700">
+                Loading patients...
               </p>
 
             </div>
-          )}
 
+          ) : patients.length === 0 ? (
 
-          {/* =================================================
-              Empty
-          ================================================= */}
+            <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-sm">
 
-          {!loading && patients.length === 0 && (
+              <UserRound className="mx-auto h-10 w-10 text-slate-300" />
 
-            <div className="p-10 text-center">
-
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100">
-
-                <Users className="h-7 w-7 text-slate-400" />
-
-              </div>
-
-              <p className="mt-4 font-semibold text-slate-900">
+              <p className="mt-4 font-semibold text-slate-700">
                 No patients found
               </p>
 
-              <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
-                {search
-                  ? "No patient matched your search."
-                  : "There are currently no patient records in the hospital database."}
+              <p className="mt-1 text-sm text-slate-500">
+                Try another search or register a new patient.
               </p>
-
-              {!search && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(
-                      "/hospital/patients/new"
-                    )
-                  }
-                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-700"
-                >
-                  <UserPlus className="h-4 w-4" />
-                  Register First Patient
-                </button>
-              )}
 
             </div>
 
-          )}
-
-
-          {/* =================================================
-              Desktop / mobile patient list
-          ================================================= */}
-
-          {!loading && patients.length > 0 && (
-
-            <div className="p-4 md:p-6">
-
-              {/* Mobile cards */}
-
-              <div className="space-y-3 md:hidden">
-
-                {patients.map((patient) => (
-
-                  <div
-                    key={patient.id}
-                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                  >
-
-                    <div className="flex items-start justify-between gap-3">
-
-                      <div>
-
-                        <p className="font-semibold text-slate-900">
-                          {patient.first_name}{" "}
-                          {patient.last_name}
-                        </p>
-
-                        <p className="mt-1 text-xs font-medium text-cyan-700">
-                          {patient.patient_id}
-                        </p>
-
-                      </div>
-
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                          patient.is_active
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-slate-200 text-slate-600"
-                        }`}
-                      >
-                        {patient.is_active
-                          ? "Active"
-                          : "Inactive"}
-                      </span>
-
-                    </div>
-
-
-                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-
-                      <div>
-
-                        <p className="text-xs text-slate-400">
-                          Gender
-                        </p>
-
-                        <p className="mt-1 font-medium text-slate-700">
-                          {patient.gender || "—"}
-                        </p>
-
-                      </div>
-
-
-                      <div>
-
-                        <p className="text-xs text-slate-400">
-                          Weight
-                        </p>
-
-                        <p className="mt-1 font-medium text-slate-700">
-                          {patient.weight_kg
-                            ? `${patient.weight_kg} kg`
-                            : "—"}
-                        </p>
-
-                      </div>
-
-
-                      <div>
-
-                        <p className="text-xs text-slate-400">
-                          Ward
-                        </p>
-
-                        <p className="mt-1 font-medium text-slate-700">
-                          {patient.ward_id || "—"}
-                        </p>
-
-                      </div>
-
-
-                      <div>
-
-                        <p className="text-xs text-slate-400">
-                          Bed
-                        </p>
-
-                        <p className="mt-1 font-medium text-slate-700">
-                          {patient.bed_id || "—"}
-                        </p>
-
-                      </div>
-
-                    </div>
-
-
-                    <div className="mt-4 flex gap-2">
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          navigate(
-                            `/hospital/patients/${patient.id}`
-                          )
-                        }
-                        className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        View
-                      </button>
-
-                    </div>
-
-                  </div>
-
-                ))}
-
-              </div>
-
-
-              {/* Desktop table */}
-
-              <div className="hidden overflow-x-auto md:block">
-
-                <table className="w-full min-w-[850px] text-left">
-
-                  <thead>
-
-                    <tr className="border-b border-slate-200">
-
-                      <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Patient
-                      </th>
-
-                      <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Patient ID
-                      </th>
-
-                      <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Gender
-                      </th>
-
-                      <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Weight
-                      </th>
-
-                      <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Ward / Bed
-                      </th>
-
-                      <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Status
-                      </th>
-
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        Action
-                      </th>
-
-                    </tr>
-
-                  </thead>
-
-
-                  <tbody className="divide-y divide-slate-100">
-
-                    {patients.map((patient) => (
-
-                      <tr
-                        key={patient.id}
-                        className="transition hover:bg-slate-50"
-                      >
-
-                        <td className="px-4 py-4">
-
-                          <p className="font-semibold text-slate-900">
-                            {patient.first_name}{" "}
-                            {patient.last_name}
-                          </p>
-
-                        </td>
-
-
-                        <td className="px-4 py-4">
-
-                          <span className="rounded-lg bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">
-                            {patient.patient_id}
-                          </span>
-
-                        </td>
-
-
-                        <td className="px-4 py-4 text-sm text-slate-600">
-                          {patient.gender || "—"}
-                        </td>
-
-
-                        <td className="px-4 py-4 text-sm text-slate-600">
-                          {patient.weight_kg
-                            ? `${patient.weight_kg} kg`
-                            : "—"}
-                        </td>
-
-
-                        <td className="px-4 py-4">
-
-                          <div className="flex items-center gap-2 text-sm text-slate-600">
-
-                            <Bed className="h-4 w-4 text-slate-400" />
-
-                            <span>
-                              {patient.ward_id || "—"}
-                              {" / "}
-                              {patient.bed_id || "—"}
-                            </span>
-
-                          </div>
-
-                        </td>
-
-
-                        <td className="px-4 py-4">
-
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                              patient.is_active
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-slate-100 text-slate-600"
-                            }`}
-                          >
-                            {patient.is_active
-                              ? "Active"
-                              : "Inactive"}
-                          </span>
-
-                        </td>
-
-
-                        <td className="px-4 py-4 text-right">
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              navigate(
-                                `/hospital/patients/${patient.id}`
-                              )
-                            }
-                            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                          >
-                            View
-                          </button>
-
-                        </td>
-
-                      </tr>
-
-                    ))}
-
-                  </tbody>
-
-                </table>
-
-              </div>
+          ) : (
+
+            <div className="space-y-3">
+
+              {patients.map(
+                (patient) => (
+
+                  <PatientRow
+                    key={
+                      patient.id
+                    }
+                    patient={
+                      patient
+                    }
+                    onView={
+                      handleViewPatient
+                    }
+                  />
+
+                ),
+              )}
 
             </div>
 
@@ -896,33 +522,22 @@ export default function HospitalDashboard() {
 
 
         {/* =================================================
-            System Information
+            BACK
         ================================================= */}
 
-        <div className="rounded-2xl border border-cyan-100 bg-cyan-50 p-5">
+        <button
+          type="button"
+          onClick={() =>
+            navigate("/")
+          }
+          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-slate-900"
+        >
 
-          <div className="flex items-start gap-3">
+          <ArrowLeft className="h-4 w-4" />
 
-            <Database className="mt-0.5 h-5 w-5 text-cyan-700" />
+          Back to Home
 
-            <div>
-
-              <p className="font-semibold text-cyan-900">
-                Shared clinical data architecture
-              </p>
-
-              <p className="mt-1 text-sm leading-6 text-cyan-800">
-                Patient information entered through the
-                Hospital Portal is stored in the same
-                SmartMedChart database used by the authorized
-                Doctor, Nurse, and Admin interfaces.
-              </p>
-
-            </div>
-
-          </div>
-
-        </div>
+        </button>
 
       </div>
 

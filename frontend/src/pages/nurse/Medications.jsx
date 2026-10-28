@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
+
+import {
+  useNavigate,
+} from "react-router-dom"
 
 import {
   CalendarDays,
@@ -15,38 +22,70 @@ import {
 } from "lucide-react"
 
 import MainLayout from "../../components/layout/MainLayout"
-import { getNurseMedications } from "../../services/medications"
-import { hideTestPatients } from "../../utils/patientFilter"
+
+import {
+  getNurseMedications,
+} from "../../services/medications"
+
+import {
+  hideTestPatients,
+} from "../../utils/patientFilter"
+
 
 // =====================================================
 // HELPERS
 // =====================================================
 
-function formatDate(dateString) {
+function formatDate(
+  dateString,
+) {
   if (!dateString) {
     return "N/A"
   }
 
-  const date = new Date(`${dateString}T00:00:00`)
+  const date =
+    new Date(
+      `${dateString}T00:00:00`,
+    )
 
-  if (Number.isNaN(date.getTime())) {
+  if (
+    Number.isNaN(
+      date.getTime(),
+    )
+  ) {
     return dateString
   }
 
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  })
+  return date.toLocaleDateString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    },
+  )
 }
 
-function formatTime(timeString) {
+
+function formatTime(
+  timeString,
+) {
   if (!timeString) {
     return "N/A"
   }
 
-  const value = String(timeString).slice(0, 5)
-  const [hours, minutes] = value.split(":").map(Number)
+  const value =
+    String(timeString).slice(
+      0,
+      5,
+    )
+
+  const [
+    hours,
+    minutes,
+  ] = value
+    .split(":")
+    .map(Number)
 
   if (
     Number.isNaN(hours) ||
@@ -55,7 +94,8 @@ function formatTime(timeString) {
     return timeString
   }
 
-  const date = new Date()
+  const date =
+    new Date()
 
   date.setHours(
     hours,
@@ -64,50 +104,83 @@ function formatTime(timeString) {
     0,
   )
 
-  return date.toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  })
+  return date.toLocaleTimeString(
+    "en-IN",
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+    },
+  )
 }
 
-function normalizeStatus(status) {
-  return String(status || "")
+
+function normalizeStatus(
+  status,
+) {
+  return String(
+    status || "",
+  )
     .trim()
     .toUpperCase()
-    .replace(/_/g, " ")
+    .replace(
+      /_/g,
+      " ",
+    )
 }
 
-function statusClasses(status) {
-  const normalizedStatus =
-    normalizeStatus(status)
 
-  if (normalizedStatus === "GIVEN") {
+function statusClasses(
+  status,
+) {
+  const normalizedStatus =
+    normalizeStatus(
+      status,
+    )
+
+  if (
+    normalizedStatus ===
+    "GIVEN"
+  ) {
     return "bg-green-100 text-green-700 border-green-200"
   }
 
-  if (normalizedStatus === "DELAYED") {
+  if (
+    normalizedStatus ===
+    "DELAYED"
+  ) {
     return "bg-orange-100 text-orange-700 border-orange-200"
   }
 
-  if (normalizedStatus === "HELD") {
+  if (
+    normalizedStatus ===
+    "HELD"
+  ) {
     return "bg-yellow-100 text-yellow-700 border-yellow-200"
   }
 
   if (
-    normalizedStatus === "REFUSED" ||
-    normalizedStatus === "NOT GIVEN"
+    normalizedStatus ===
+      "REFUSED" ||
+    normalizedStatus ===
+      "NOT GIVEN"
   ) {
     return "bg-red-100 text-red-700 border-red-200"
   }
 
-  if (normalizedStatus === "UPCOMING") {
+  if (
+    normalizedStatus ===
+    "UPCOMING"
+  ) {
     return "bg-blue-100 text-blue-700 border-blue-200"
   }
 
   return "bg-slate-100 text-slate-700 border-slate-200"
 }
 
-function getMedicationName(medication) {
+
+function getMedicationName(
+  medication,
+) {
   return (
     medication.medicine_name ??
     medication.medication_name ??
@@ -121,7 +194,10 @@ function getMedicationName(medication) {
   )
 }
 
-function getFrequency(medication) {
+
+function getFrequency(
+  medication,
+) {
   return (
     medication.frequency ??
     medication.dosage_frequency ??
@@ -130,7 +206,10 @@ function getFrequency(medication) {
   )
 }
 
-function getDosage(medication) {
+
+function getDosage(
+  medication,
+) {
   return (
     medication.dosage ??
     medication.dose ??
@@ -139,13 +218,17 @@ function getDosage(medication) {
   )
 }
 
-function getRoute(medication) {
+
+function getRoute(
+  medication,
+) {
   return (
     medication.route ??
     medication.administration_route ??
     null
   )
 }
+
 
 // =====================================================
 // GROUP DATA
@@ -155,116 +238,144 @@ function getRoute(medication) {
 //       -> All timings
 // =====================================================
 
-function buildPatientGroups(medications) {
-  const patients = new Map()
+function buildPatientGroups(
+  medications,
+) {
+  const patients =
+    new Map()
 
-  medications.forEach((medication) => {
-    const patientId =
-      medication.patient_id ?? null
+  medications.forEach(
+    (medication) => {
+      const patientId =
+        medication.patient_id ??
+        null
 
-    const patientCode =
-      medication.patient_code ?? null
+      const patientCode =
+        medication.patient_code ??
+        null
 
-    const patientKey =
-      patientCode ||
-      patientId ||
-      medication.patient_name ||
-      "UNKNOWN-PATIENT"
+      const patientKey =
+        patientCode ||
+        patientId ||
+        medication.patient_name ||
+        "UNKNOWN-PATIENT"
 
-    // -------------------------------------------------
-    // Create patient only once
-    // -------------------------------------------------
 
-    if (!patients.has(patientKey)) {
-      patients.set(patientKey, {
-        patient_id: patientId,
+      // -------------------------------------------------
+      // Create patient only once
+      // -------------------------------------------------
 
-        patient_name:
-          medication.patient_name ||
-          "Unknown Patient",
+      if (
+        !patients.has(
+          patientKey,
+        )
+      ) {
+        patients.set(
+          patientKey,
+          {
+            patient_id:
+              patientId,
 
-        patient_code:
-          patientCode ||
-          "No patient ID",
+            patient_name:
+              medication.patient_name ||
+              "Unknown Patient",
 
-        medications: new Map(),
-      })
-    }
+            patient_code:
+              patientCode ||
+              "No patient ID",
 
-    const patient =
-      patients.get(patientKey)
+            medications:
+              new Map(),
+          },
+        )
+      }
 
-    // -------------------------------------------------
-    // One prescription item = one medicine/order
-    // -------------------------------------------------
 
-    const medicineKey =
-      medication.prescription_item_id ??
-      `${getMedicationName(medication)}-${medication.id}`
+      const patient =
+        patients.get(
+          patientKey,
+        )
 
-    if (
-      !patient.medications.has(
-        medicineKey,
+
+      // -------------------------------------------------
+      // One prescription item = one medicine/order
+      // -------------------------------------------------
+
+      const medicineKey =
+        medication.prescription_item_id ??
+        `${getMedicationName(
+          medication,
+        )}-${medication.id}`
+
+
+      if (
+        !patient.medications.has(
+          medicineKey,
+        )
+      ) {
+        patient.medications.set(
+          medicineKey,
+          {
+            medicine_name:
+              getMedicationName(
+                medication,
+              ),
+
+            frequency:
+              getFrequency(
+                medication,
+              ),
+
+            dosage:
+              getDosage(
+                medication,
+              ),
+
+            route:
+              getRoute(
+                medication,
+              ),
+
+            is_stat:
+              Boolean(
+                medication.is_stat,
+              ),
+
+            schedules: [],
+          },
+        )
+      }
+
+
+      const medicine =
+        patient.medications.get(
+          medicineKey,
+        )
+
+
+      // -------------------------------------------------
+      // Keep STAT at medicine level
+      // -------------------------------------------------
+
+      if (
+        Boolean(
+          medication.is_stat,
+        )
+      ) {
+        medicine.is_stat = true
+      }
+
+
+      // -------------------------------------------------
+      // Add timing
+      // -------------------------------------------------
+
+      medicine.schedules.push(
+        medication,
       )
-    ) {
-      patient.medications.set(
-        medicineKey,
-        {
-          medicine_name:
-            getMedicationName(
-              medication,
-            ),
+    },
+  )
 
-          frequency:
-            getFrequency(
-              medication,
-            ),
-
-          dosage:
-            getDosage(
-              medication,
-            ),
-
-          route:
-            getRoute(
-              medication,
-            ),
-
-          is_stat:
-            Boolean(
-              medication.is_stat,
-            ),
-
-          schedules: [],
-        },
-      )
-    }
-
-    const medicine =
-      patient.medications.get(
-        medicineKey,
-      )
-
-    // -------------------------------------------------
-    // Keep STAT at medicine level
-    // -------------------------------------------------
-
-    if (
-      Boolean(
-        medication.is_stat,
-      )
-    ) {
-      medicine.is_stat = true
-    }
-
-    // -------------------------------------------------
-    // Add timing
-    // -------------------------------------------------
-
-    medicine.schedules.push(
-      medication,
-    )
-  })
 
   // ---------------------------------------------------
   // Convert Maps to arrays
@@ -272,47 +383,59 @@ function buildPatientGroups(medications) {
 
   return Array.from(
     patients.values(),
-  ).map((patient) => ({
-    ...patient,
+  ).map(
+    (
+      patient,
+    ) => ({
+      ...patient,
 
-    medications:
-      Array.from(
-        patient.medications.values(),
-      ),
-  }))
+      medications:
+        Array.from(
+          patient.medications.values(),
+        ),
+    }),
+  )
 }
+
 
 // =====================================================
 // MAIN COMPONENT
 // =====================================================
 
 export default function Medications() {
-  const navigate = useNavigate()
+  const navigate =
+    useNavigate()
+
 
   const [
     medications,
     setMedications,
   ] = useState([])
 
+
   const [
     search,
     setSearch,
   ] = useState("")
+
 
   const [
     statusFilter,
     setStatusFilter,
   ] = useState("ALL")
 
+
   const [
     loading,
     setLoading,
   ] = useState(true)
 
+
   const [
     error,
     setError,
   ] = useState("")
+
 
   // ===================================================
   // COLLAPSED PATIENTS
@@ -324,6 +447,7 @@ export default function Medications() {
   ] = useState(
     new Set(),
   )
+
 
   // ===================================================
   // LOAD MEDICATIONS
@@ -337,6 +461,7 @@ export default function Medications() {
       const data =
         await getNurseMedications()
 
+
       const visible =
         hideTestPatients(
           Array.isArray(data)
@@ -344,7 +469,36 @@ export default function Medications() {
             : [],
         )
 
-      setMedications(visible)
+
+      setMedications(
+        visible,
+      )
+
+
+      // =================================================
+      // COLLAPSE ALL PATIENTS BY DEFAULT
+      // =================================================
+      //
+      // Every patient starts collapsed.
+      // The nurse can expand individual patients.
+      //
+
+      const patientKeys =
+        new Set(
+          visible.map(
+            (item) =>
+              item.patient_code ??
+              item.patient_id ??
+              item.patient_name ??
+              "UNKNOWN-PATIENT",
+          ),
+        )
+
+
+      setCollapsedPatients(
+        patientKeys,
+      )
+
     } catch (err) {
       console.error(
         "Failed to load medications:",
@@ -357,101 +511,136 @@ export default function Medications() {
           err?.message ||
           "Failed to load medication data.",
       )
+
     } finally {
       setLoading(false)
     }
   }
 
+
   // ===================================================
   // INITIAL LOAD
   // ===================================================
 
-  useEffect(() => {
-    loadMedications()
-  }, [])
+  useEffect(
+    () => {
+      loadMedications()
+    },
+    [],
+  )
+
 
   // ===================================================
   // TOGGLE PATIENT
   // ===================================================
 
-  function togglePatient(patientKey) {
+  function togglePatient(
+    patientKey,
+  ) {
     setCollapsedPatients(
-      (previous) => {
-        const next = new Set(
-          previous,
-        )
+      (
+        previous,
+      ) => {
+        const next =
+          new Set(
+            previous,
+          )
 
-        if (next.has(patientKey)) {
-          next.delete(patientKey)
+
+        if (
+          next.has(
+            patientKey,
+          )
+        ) {
+          next.delete(
+            patientKey,
+          )
         } else {
-          next.add(patientKey)
+          next.add(
+            patientKey,
+          )
         }
+
 
         return next
       },
     )
   }
 
+
   // ===================================================
   // FILTERED MEDICATIONS
   // ===================================================
 
   const filteredMedications =
-    useMemo(() => {
-      const query =
-        search
-          .trim()
-          .toLowerCase()
-
-      return medications.filter(
-        (medication) => {
-          const normalizedStatus =
-            normalizeStatus(
-              medication.status,
-            )
-
-          const matchesStatus =
-            statusFilter === "ALL" ||
-            normalizedStatus ===
-              statusFilter
-
-          const searchableText = [
-            medication.id,
-            medication.patient_id,
-            medication.patient_name,
-            medication.patient_code,
-            medication.prescription_item_id,
-            medication.status,
-            medication.scheduled_date,
-            medication.scheduled_time,
-            medication.medicine_name,
-            medication.medication_name,
-            medication.medicine,
-            medication.drug_name,
-            medication.frequency,
-            medication.dose,
-            medication.route,
-          ]
-            .join(" ")
+    useMemo(
+      () => {
+        const query =
+          search
+            .trim()
             .toLowerCase()
 
-          const matchesSearch =
-            !query ||
-            searchableText.includes(
-              query,
-            )
 
-          return (
-            matchesStatus &&
-            matchesSearch
-          )
-        },
-      )
-    }, [
-      medications,
-      search,
-      statusFilter,
-    ])
+        return medications.filter(
+          (
+            medication,
+          ) => {
+            const normalizedStatus =
+              normalizeStatus(
+                medication.status,
+              )
+
+
+            const matchesStatus =
+              statusFilter ===
+                "ALL" ||
+              normalizedStatus ===
+                statusFilter
+
+
+            const searchableText =
+              [
+                medication.id,
+                medication.patient_id,
+                medication.patient_name,
+                medication.patient_code,
+                medication.prescription_item_id,
+                medication.status,
+                medication.scheduled_date,
+                medication.scheduled_time,
+                medication.medicine_name,
+                medication.medication_name,
+                medication.medicine,
+                medication.drug_name,
+                medication.frequency,
+                medication.dose,
+                medication.route,
+              ]
+                .join(" ")
+                .toLowerCase()
+
+
+            const matchesSearch =
+              !query ||
+              searchableText.includes(
+                query,
+              )
+
+
+            return (
+              matchesStatus &&
+              matchesSearch
+            )
+          },
+        )
+      },
+      [
+        medications,
+        search,
+        statusFilter,
+      ],
+    )
+
 
   // ===================================================
   // GROUP PATIENTS
@@ -463,102 +652,122 @@ export default function Medications() {
         buildPatientGroups(
           filteredMedications,
         ),
-      [filteredMedications],
+      [
+        filteredMedications,
+      ],
     )
+
 
   // ===================================================
   // COUNTS
   // ===================================================
 
   const counts =
-    useMemo(() => {
-      const uniquePatients =
-        new Set(
-          medications.map(
-            (item) =>
-              item.patient_code ??
-              item.patient_id ??
-              item.patient_name,
-          ),
-        ).size
+    useMemo(
+      () => {
+        const uniquePatients =
+          new Set(
+            medications.map(
+              (item) =>
+                item.patient_code ??
+                item.patient_id ??
+                item.patient_name,
+            ),
+          ).size
 
-      const statPrescriptionItems =
-        new Set()
 
-      medications.forEach(
-        (medication) => {
-          if (
-            Boolean(
-              medication.is_stat,
-            ) &&
-            medication.prescription_item_id
-          ) {
-            statPrescriptionItems.add(
-              medication.prescription_item_id,
-            )
-          }
-        },
-      )
+        const statPrescriptionItems =
+          new Set()
 
-      return {
-        patients:
-          uniquePatients,
 
-        schedules:
-          medications.length,
+        medications.forEach(
+          (
+            medication,
+          ) => {
+            if (
+              Boolean(
+                medication.is_stat,
+              ) &&
+              medication.prescription_item_id
+            ) {
+              statPrescriptionItems.add(
+                medication.prescription_item_id,
+              )
+            }
+          },
+        )
 
-        statMedicines:
-          statPrescriptionItems.size,
 
-        upcoming:
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "UPCOMING",
-          ).length,
+        return {
+          patients:
+            uniquePatients,
 
-        given:
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "GIVEN",
-          ).length,
+          schedules:
+            medications.length,
 
-        delayed:
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "DELAYED",
-          ).length,
+          statMedicines:
+            statPrescriptionItems.size,
 
-        held:
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "HELD",
-          ).length,
+          upcoming:
+            medications.filter(
+              (item) =>
+                normalizeStatus(
+                  item.status,
+                ) ===
+                "UPCOMING",
+            ).length,
 
-        refused:
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "REFUSED",
-          ).length,
+          given:
+            medications.filter(
+              (item) =>
+                normalizeStatus(
+                  item.status,
+                ) ===
+                "GIVEN",
+            ).length,
 
-        notGiven:
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "NOT GIVEN",
-          ).length,
-      }
-    }, [medications])
+          delayed:
+            medications.filter(
+              (item) =>
+                normalizeStatus(
+                  item.status,
+                ) ===
+                "DELAYED",
+            ).length,
+
+          held:
+            medications.filter(
+              (item) =>
+                normalizeStatus(
+                  item.status,
+                ) ===
+                "HELD",
+            ).length,
+
+          refused:
+            medications.filter(
+              (item) =>
+                normalizeStatus(
+                  item.status,
+                ) ===
+                "REFUSED",
+            ).length,
+
+          notGiven:
+            medications.filter(
+              (item) =>
+                normalizeStatus(
+                  item.status,
+                ) ===
+                "NOT GIVEN",
+            ).length,
+        }
+      },
+      [
+        medications,
+      ],
+    )
+
 
   // ===================================================
   // UI
@@ -566,37 +775,48 @@ export default function Medications() {
 
   return (
     <MainLayout>
-      <div className="space-y-6 p-4 md:p-6">
+
+      <div className="w-full min-w-0 space-y-6 p-4 md:p-6">
+
 
         {/* =================================================
             HEADER
         ================================================= */}
 
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
 
-          <div>
+          <div className="min-w-0">
+
             <p className="text-sm font-semibold text-blue-600">
               Nurse Portal
             </p>
+
 
             <h1 className="mt-1 text-3xl font-bold text-slate-900">
               Medications
             </h1>
 
-            <p className="mt-2 max-w-3xl text-sm text-slate-500">
-              Each patient is displayed once.
-              Medicines are grouped under the
-              patient, and all timings for the
-              same medicine are shown together.
+
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+              Patients are grouped separately.
+              Expand only the patient you are currently
+              working with to view their medication schedules.
             </p>
+
           </div>
+
 
           <button
             type="button"
-            onClick={loadMedications}
-            disabled={loading}
+            onClick={
+              loadMedications
+            }
+            disabled={
+              loading
+            }
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
+
             {loading ? (
               <LoaderCircle
                 size={18}
@@ -609,18 +829,26 @@ export default function Medications() {
             )}
 
             Refresh
+
           </button>
+
         </div>
+
 
         {/* =================================================
             ERROR
         ================================================= */}
 
         {error && (
+
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+
             {error}
+
           </div>
+
         )}
+
 
         {/* =================================================
             SUMMARY
@@ -628,16 +856,22 @@ export default function Medications() {
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
 
+
           {/* PATIENTS */}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-                <UserRound size={22} />
+                <UserRound
+                  size={22}
+                />
               </div>
 
+
               <div>
+
                 <p className="text-sm text-slate-500">
                   Patients
                 </p>
@@ -645,21 +879,29 @@ export default function Medications() {
                 <p className="text-2xl font-bold text-slate-900">
                   {counts.patients}
                 </p>
+
               </div>
 
             </div>
+
           </div>
+
 
           {/* SCHEDULES */}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
-                <Pill size={22} />
+                <Pill
+                  size={22}
+                />
               </div>
 
+
               <div>
+
                 <p className="text-sm text-slate-500">
                   Schedules
                 </p>
@@ -667,21 +909,29 @@ export default function Medications() {
                 <p className="text-2xl font-bold text-slate-900">
                   {counts.schedules}
                 </p>
+
               </div>
 
             </div>
+
           </div>
+
 
           {/* UPCOMING */}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-                <Clock3 size={22} />
+                <Clock3
+                  size={22}
+                />
               </div>
 
+
               <div>
+
                 <p className="text-sm text-slate-500">
                   Upcoming
                 </p>
@@ -689,21 +939,29 @@ export default function Medications() {
                 <p className="text-2xl font-bold text-slate-900">
                   {counts.upcoming}
                 </p>
+
               </div>
 
             </div>
+
           </div>
+
 
           {/* GIVEN */}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-100 text-green-700">
-                <Pill size={22} />
+                <Pill
+                  size={22}
+                />
               </div>
 
+
               <div>
+
                 <p className="text-sm text-slate-500">
                   Given
                 </p>
@@ -711,21 +969,29 @@ export default function Medications() {
                 <p className="text-2xl font-bold text-slate-900">
                   {counts.given}
                 </p>
+
               </div>
 
             </div>
+
           </div>
+
 
           {/* STAT */}
 
           <div className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
+
             <div className="flex items-center gap-3">
 
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-100 text-red-700">
-                <Pill size={22} />
+                <Pill
+                  size={22}
+                />
               </div>
 
+
               <div>
+
                 <p className="text-sm text-red-600">
                   STAT Medicines
                 </p>
@@ -733,12 +999,15 @@ export default function Medications() {
                 <p className="text-2xl font-bold text-red-800">
                   {counts.statMedicines}
                 </p>
+
               </div>
 
             </div>
+
           </div>
 
         </div>
+
 
         {/* =================================================
             FILTERS
@@ -746,11 +1015,12 @@ export default function Medications() {
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
 
-          <div className="flex flex-col gap-3 lg:flex-row">
+          <div className="flex min-w-0 flex-col gap-3 lg:flex-row">
+
 
             {/* SEARCH */}
 
-            <div className="relative flex-1">
+            <div className="relative min-w-0 flex-1">
 
               <Search
                 size={18}
@@ -759,8 +1029,12 @@ export default function Medications() {
 
               <input
                 type="text"
-                value={search}
-                onChange={(event) =>
+                value={
+                  search
+                }
+                onChange={(
+                  event,
+                ) =>
                   setSearch(
                     event.target.value,
                   )
@@ -771,9 +1045,10 @@ export default function Medications() {
 
             </div>
 
+
             {/* STATUS */}
 
-            <div className="relative min-w-[190px]">
+            <div className="relative w-full lg:w-[220px]">
 
               <Filter
                 size={17}
@@ -781,14 +1056,19 @@ export default function Medications() {
               />
 
               <select
-                value={statusFilter}
-                onChange={(event) =>
+                value={
+                  statusFilter
+                }
+                onChange={(
+                  event,
+                ) =>
                   setStatusFilter(
                     event.target.value,
                   )
                 }
                 className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-10 text-sm font-medium text-slate-700 outline-none focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
               >
+
                 <option value="ALL">
                   All Status
                 </option>
@@ -816,7 +1096,9 @@ export default function Medications() {
                 <option value="NOT GIVEN">
                   Not Given
                 </option>
+
               </select>
+
 
               <ChevronDown
                 size={17}
@@ -828,6 +1110,7 @@ export default function Medications() {
           </div>
 
         </div>
+
 
         {/* =================================================
             PATIENT RESULTS
@@ -859,9 +1142,11 @@ export default function Medications() {
               className="mx-auto text-slate-300"
             />
 
+
             <h2 className="mt-4 text-lg font-semibold text-slate-800">
               No matching records
             </h2>
+
 
             <p className="mt-2 text-sm text-slate-500">
               Try changing the search text
@@ -872,19 +1157,26 @@ export default function Medications() {
 
         ) : (
 
-          <div className="space-y-6">
+          <div className="space-y-4">
+
 
             {patientGroups.map(
-              (patient) => {
+              (
+                patient,
+              ) => {
+
                 const patientKey =
                   patient.patient_code ||
                   patient.patient_id ||
-                  patient.patient_name
+                  patient.patient_name ||
+                  "UNKNOWN-PATIENT"
+
 
                 const isCollapsed =
                   collapsedPatients.has(
                     patientKey,
                   )
+
 
                 const totalSchedules =
                   patient.medications.reduce(
@@ -893,56 +1185,67 @@ export default function Medications() {
                       medicine,
                     ) =>
                       total +
-                      medicine.schedules
-                        .length,
+                      medicine.schedules.length,
                     0,
                   )
 
+
                 return (
+
                   <section
-                    key={patientKey}
-                    className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                    key={
+                      patientKey
+                    }
+                    className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
                   >
+
 
                     {/* =====================================
                         PATIENT HEADER
                     ===================================== */}
 
-                    <div className="border-b border-slate-200 bg-slate-50 p-5">
+                    <div className="border-b border-slate-200 bg-slate-50 p-4 sm:p-5">
 
-                      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+
 
                         {/* PATIENT INFO */}
 
-                        <div className="flex items-start gap-4">
+                        <div className="flex min-w-0 items-start gap-4">
 
                           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+
                             <UserRound
                               size={24}
                             />
+
                           </div>
 
-                          <div>
 
-                            <h2 className="text-xl font-bold text-slate-900">
+                          <div className="min-w-0">
+
+                            <h2 className="truncate text-lg font-bold text-slate-900 sm:text-xl">
                               {
                                 patient.patient_name
                               }
                             </h2>
+
 
                             <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-500">
 
                               <span>
                                 Patient ID:{" "}
 
-                                <strong className="text-slate-700">
+                                <strong className="break-all text-slate-700">
                                   {
                                     patient.patient_code
                                   }
                                 </strong>
                               </span>
 
+
                               {patient.patient_id && (
+
                                 <span>
                                   Database ID:{" "}
 
@@ -952,6 +1255,7 @@ export default function Medications() {
                                     }
                                   </strong>
                                 </span>
+
                               )}
 
                             </div>
@@ -960,17 +1264,20 @@ export default function Medications() {
 
                         </div>
 
+
                         {/* PATIENT ACTIONS */}
 
                         <div className="flex flex-wrap items-center gap-3">
 
+
                           {/* MEDICINES COUNT */}
 
-                          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-center">
+                          <div className="min-w-[110px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-center">
 
                             <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                               Medicines
                             </p>
+
 
                             <p className="mt-1 text-2xl font-bold text-slate-900">
                               {
@@ -980,13 +1287,15 @@ export default function Medications() {
 
                           </div>
 
+
                           {/* SCHEDULE COUNT */}
 
-                          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-center">
+                          <div className="min-w-[110px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-center">
 
                             <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                               Schedules
                             </p>
+
 
                             <p className="mt-1 text-2xl font-bold text-slate-900">
                               {
@@ -996,7 +1305,8 @@ export default function Medications() {
 
                           </div>
 
-                          {/* WRAP UP BUTTON */}
+
+                          {/* EXPAND / WRAP */}
 
                           <button
                             type="button"
@@ -1005,26 +1315,34 @@ export default function Medications() {
                                 patientKey,
                               )
                             }
-                            className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                            aria-expanded={
+                              !isCollapsed
+                            }
+                            className={[
+                              "inline-flex min-w-[120px] items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition",
                               isCollapsed
                                 ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                            }`}
+                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100",
+                            ].join(" ")}
                           >
 
                             {isCollapsed ? (
                               <>
                                 Expand
+
                                 <ChevronDown
                                   size={18}
                                 />
+
                               </>
                             ) : (
                               <>
                                 Wrap Up
+
                                 <ChevronRight
                                   size={18}
                                 />
+
                               </>
                             )}
 
@@ -1036,6 +1354,7 @@ export default function Medications() {
 
                     </div>
 
+
                     {/* =====================================
                         MEDICATION CONTENT
 
@@ -1044,7 +1363,8 @@ export default function Medications() {
 
                     {!isCollapsed && (
 
-                      <div className="space-y-5 p-5">
+                      <div className="space-y-5 p-4 sm:p-5">
+
 
                         {patient.medications.map(
                           (
@@ -1054,42 +1374,51 @@ export default function Medications() {
 
                             <div
                               key={`${patientKey}-${medicine.medicine_name}-${medicineIndex}`}
-                              className="rounded-2xl border border-slate-200 p-5"
+                              className="w-full rounded-2xl border border-slate-200 p-4 sm:p-5"
                             >
+
 
                               {/* =================================
                                   MEDICINE HEADER
                               ================================= */}
 
-                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                              <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
 
-                                <div className="flex items-start gap-3">
+
+                                <div className="flex min-w-0 items-start gap-3">
 
                                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
+
                                     <Pill
                                       size={20}
                                     />
+
                                   </div>
 
-                                  <div>
+
+                                  <div className="min-w-0">
 
                                     {/* MEDICINE NAME + STAT */}
 
                                     <div className="flex flex-wrap items-center gap-2">
 
-                                      <h3 className="text-lg font-bold text-slate-900">
+                                      <h3 className="break-words text-base font-bold text-slate-900 sm:text-lg">
                                         {
                                           medicine.medicine_name
                                         }
                                       </h3>
 
+
                                       {medicine.is_stat && (
+
                                         <span className="inline-flex rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-red-700">
                                           STAT
                                         </span>
+
                                       )}
 
                                     </div>
+
 
                                     {/* MEDICINE DETAILS */}
 
@@ -1105,7 +1434,9 @@ export default function Medications() {
                                         </strong>
                                       </span>
 
+
                                       {medicine.dosage && (
+
                                         <span>
                                           Dose:{" "}
 
@@ -1115,9 +1446,12 @@ export default function Medications() {
                                             }
                                           </strong>
                                         </span>
+
                                       )}
 
+
                                       {medicine.route && (
+
                                         <span>
                                           Route:{" "}
 
@@ -1127,6 +1461,7 @@ export default function Medications() {
                                             }
                                           </strong>
                                         </span>
+
                                       )}
 
                                     </div>
@@ -1135,25 +1470,28 @@ export default function Medications() {
 
                                 </div>
 
+
                                 {/* TIMING COUNT */}
 
                                 <span className="self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
+
                                   {
-                                    medicine.schedules
-                                      .length
+                                    medicine.schedules.length
                                   }{" "}
+
                                   timing
+
                                   {
-                                    medicine
-                                      .schedules
-                                      .length !==
-                                    1
+                                    medicine.schedules.length !==
+                                      1
                                       ? "s"
                                       : ""
                                   }
+
                                 </span>
 
                               </div>
+
 
                               {/* =================================
                                   TIMINGS
@@ -1162,6 +1500,7 @@ export default function Medications() {
                               <div className="mt-5 overflow-x-auto">
 
                                 <div className="min-w-[700px] overflow-hidden rounded-xl border border-slate-200">
+
 
                                   {/* TABLE HEADER */}
 
@@ -1189,6 +1528,7 @@ export default function Medications() {
 
                                   </div>
 
+
                                   {/* TIMING ROWS */}
 
                                   <div className="divide-y divide-slate-200">
@@ -1205,15 +1545,14 @@ export default function Medications() {
                                           className="grid grid-cols-[110px_160px_130px_1fr_120px] items-center px-4 py-4"
                                         >
 
+
                                           {/* TIME */}
 
                                           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
 
                                             <Clock3
-                                              size={
-                                                16
-                                              }
-                                              className="text-slate-400"
+                                              size={16}
+                                              className="shrink-0 text-slate-400"
                                             />
 
                                             {
@@ -1224,15 +1563,14 @@ export default function Medications() {
 
                                           </div>
 
+
                                           {/* DATE */}
 
                                           <div className="flex items-center gap-2 text-sm text-slate-600">
 
                                             <CalendarDays
-                                              size={
-                                                16
-                                              }
-                                              className="text-slate-400"
+                                              size={16}
+                                              className="shrink-0 text-slate-400"
                                             />
 
                                             {
@@ -1243,6 +1581,7 @@ export default function Medications() {
 
                                           </div>
 
+
                                           {/* STATUS */}
 
                                           <div>
@@ -1252,45 +1591,56 @@ export default function Medications() {
                                                 schedule.status,
                                               )}`}
                                             >
+
                                               {
                                                 normalizeStatus(
                                                   schedule.status,
                                                 ) ||
                                                 "UNKNOWN"
                                               }
+
                                             </span>
 
                                           </div>
 
+
                                           {/* DETAILS */}
 
-                                          <div className="text-sm text-slate-500">
+                                          <div className="min-w-0 text-sm text-slate-500">
 
                                             <span>
                                               Schedule #
+
                                               {
                                                 schedule.id
                                               }
                                             </span>
 
+
                                             <span className="mx-2">
                                               •
                                             </span>
 
+
                                             <span>
                                               Prescription Item #
+
                                               {
                                                 schedule.prescription_item_id
                                               }
                                             </span>
 
+
                                             {schedule.actual_administration_time && (
+
                                               <span className="ml-2">
                                                 • Administered
                                               </span>
+
                                             )}
 
                                           </div>
+
 
                                           {/* ACTION */}
 
@@ -1305,13 +1655,13 @@ export default function Medications() {
                                               }
                                               className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
                                             >
+
                                               View
 
                                               <ChevronRight
-                                                size={
-                                                  15
-                                                }
+                                                size={15}
                                               />
+
                                             </button>
 
                                           </div>
@@ -1337,6 +1687,7 @@ export default function Medications() {
                     )}
 
                   </section>
+
                 )
               },
             )}
@@ -1344,6 +1695,7 @@ export default function Medications() {
           </div>
 
         )}
+
 
         {/* =================================================
             INFORMATION
@@ -1358,21 +1710,19 @@ export default function Medications() {
               className="mt-0.5 shrink-0 text-blue-600"
             />
 
+
             <div>
 
               <h3 className="font-semibold text-blue-900">
-                Medication display logic
+                Medication display
               </h3>
 
+
               <p className="mt-1 text-sm leading-6 text-blue-800">
-                One patient is displayed once.
-                Each medicine is displayed once.
-                All timings for that medicine are
-                shown underneath it. STAT is shown
-                once at the medicine level. Use
-                Wrap Up to collapse a patient's
-                medication information and Expand
-                to view it again.
+                Patient sections are collapsed by default
+                to keep the dashboard compact. Expand a
+                patient to view their medicines and timings,
+                then use Wrap Up when finished.
               </p>
 
             </div>
@@ -1381,7 +1731,9 @@ export default function Medications() {
 
         </div>
 
+
       </div>
+
     </MainLayout>
   )
 }

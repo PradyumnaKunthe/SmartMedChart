@@ -116,7 +116,7 @@ export default function QRScanner() {
           // the selected medication belongs to this patient.
           if (response.valid) {
             navigate(
-              `/nurse/administration/${scheduleId}`,
+              `/nurse/medications/${scheduleId}/administration`,
               {
                 replace: true,
               },
@@ -189,9 +189,11 @@ export default function QRScanner() {
           }
           className="inline-flex items-center gap-2 rounded-xl px-1 py-2 text-sm font-semibold text-slate-600 transition hover:text-slate-900"
         >
+
           <ArrowLeft className="h-4 w-4" />
 
           Back to medication
+
         </button>
 
 
@@ -206,7 +208,9 @@ export default function QRScanner() {
             <div className="flex items-start gap-4">
 
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cyan-500/10">
+
                 <QrCode className="h-6 w-6 text-cyan-400" />
+
               </div>
 
               <div className="min-w-0">
@@ -287,7 +291,9 @@ export default function QRScanner() {
             <div className="flex items-start gap-3">
 
               <div className="shrink-0 rounded-xl bg-indigo-50 p-3">
+
                 <Pill className="h-5 w-5 text-indigo-600" />
+
               </div>
 
               <div className="min-w-0">
@@ -339,9 +345,11 @@ export default function QRScanner() {
                   }
                   className="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700"
                 >
+
                   Select medication
 
                   <ChevronRight className="h-4 w-4" />
+
                 </button>
 
               </div>
@@ -349,6 +357,7 @@ export default function QRScanner() {
             </div>
 
           </section>
+
         )}
 
 
@@ -365,7 +374,9 @@ export default function QRScanner() {
               <div className="flex items-center gap-3">
 
                 <div className="rounded-xl bg-cyan-50 p-2.5">
+
                   <QrCode className="h-5 w-5 text-cyan-600" />
+
                 </div>
 
                 <div>
@@ -436,7 +447,9 @@ export default function QRScanner() {
             <div className="flex items-start gap-3">
 
               <div className="rounded-xl bg-emerald-100 p-3">
+
                 <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+
               </div>
 
               <div className="min-w-0">
@@ -474,7 +487,9 @@ export default function QRScanner() {
             <div className="flex items-start gap-3">
 
               <div className="shrink-0 rounded-xl bg-indigo-50 p-3">
+
                 <Pill className="h-5 w-5 text-indigo-600" />
+
               </div>
 
               <div className="min-w-0">
@@ -563,9 +578,11 @@ export default function QRScanner() {
                           : "text-red-900",
                       ].join(" ")}
                     >
+
                       {medicationResult.valid
                         ? "Medication Verified"
                         : "Medication Verification Failed"}
+
                     </p>
 
                     <p
@@ -576,39 +593,39 @@ export default function QRScanner() {
                           : "text-red-700",
                       ].join(" ")}
                     >
+
                       {
                         medicationResult.message
                       }
+
                     </p>
 
 
                     {medicationResult.valid &&
                       medicationResult.medicine_name && (
 
-                        <div className="mt-4 rounded-xl border border-emerald-100 bg-white/80 p-3">
+                      <div className="mt-4 rounded-xl border border-emerald-100 bg-white/80 p-3">
 
-                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                            Verified Medicine
-                          </p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Verified Medicine
+                        </p>
 
-                          <p className="mt-1 text-sm font-bold text-emerald-900">
-                            {
-                              medicationResult.medicine_name
-                            }
-                          </p>
+                        <p className="mt-1 text-sm font-bold text-emerald-900">
+                          {
+                            medicationResult.medicine_name
+                          }
+                        </p>
 
-                        </div>
+                      </div>
 
-                      )}
+                    )}
 
                   </div>
 
                 </div>
 
 
-                {/* Manual fallback / explicit administration button.
-                    Normally successful verification navigates automatically,
-                    but this button remains available if navigation is delayed. */}
+                {/* Manual fallback / explicit administration button */}
 
                 {medicationResult.valid && (
 
@@ -616,7 +633,7 @@ export default function QRScanner() {
                     type="button"
                     onClick={() =>
                       navigate(
-                        `/nurse/administration/${scheduleId}`,
+                        `/nurse/medications/${scheduleId}/administration`,
                         {
                           replace: true,
                         },
@@ -624,9 +641,11 @@ export default function QRScanner() {
                     }
                     className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 sm:w-auto"
                   >
+
                     Proceed to Administration
 
                     <ChevronRight className="h-4 w-4" />
+
                   </button>
 
                 )}
@@ -696,6 +715,7 @@ export default function QRScanner() {
 
         </section>
 
+
       </div>
 
     </MainLayout>
@@ -747,7 +767,9 @@ function SecurityItem({
                 : "text-slate-500",
           ].join(" ")}
         >
+
           {label}
+
         </span>
 
       </div>

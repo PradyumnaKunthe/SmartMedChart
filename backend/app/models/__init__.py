@@ -14,6 +14,8 @@ from app.models.medication_administration import MedicationAdministration
 from app.models.qr_verification import QRVerification
 from app.models.ai_prediction import AIPrediction
 from app.models.nurse_patient_assignment import NursePatientAssignment
+from app.models.encounter import Encounter
+from app.models.patient_billing import PatientBilling
 __all__ = [
     "Allergy",
     "Bed",
@@ -31,4 +33,6 @@ __all__ = [
     "QRVerification",
     "AIPrediction",
     "NursePatientAssignment",
+    "Encounter",
+    "PatientBilling",
 ]

@@ -1,619 +1,409 @@
 import { useState } from "react"
-
 import {
   Activity,
-  LockKeyhole,
-  User,
+  ArrowRight,
+  Building2,
+  CheckCircle2,
+  ChevronDown,
   Eye,
   EyeOff,
-  ShieldCheck,
-  Stethoscope,
   HeartPulse,
+  LockKeyhole,
   Shield,
+  ShieldCheck,
+  Sparkles,
+  Stethoscope,
+  UserRound,
 } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { useAuth } from "../context/AuthContext"
 
-import {
-  useNavigate,
-} from "react-router-dom"
+const ROLE_OPTIONS = [
+  {
+    value: "admin",
+    label: "Admin",
+    description: "Manage staff, wards, and hospital operations.",
+    Icon: Shield,
+  },
+  {
+    value: "doctor",
+    label: "Doctor",
+    description: "Access your clinical workspace and patient care tools.",
+    Icon: Stethoscope,
+  },
+  {
+    value: "nurse",
+    label: "Nurse",
+    description: "Open assigned patients and medication workflows.",
+    Icon: HeartPulse,
+  },
+  {
+    value: "hospital",
+    label: "Hospital Staff",
+    description: "Manage patient admissions and hospital records.",
+    Icon: Building2,
+  },
+  {
+    value: "receptionist",
+    label: "Receptionist",
+    description: "Manage patient check-ins and administrative tasks.",
+    Icon: UserRound,
+  }
+]
 
-import {
-  useAuth,
-} from "../context/AuthContext"
+function normalizeRole(role) {
+  return typeof role === "string" ? role.trim().toLowerCase() : ""
+}
 
+function roleMatchesSelection(selectedRole, actualRole) {
+  if (selectedRole === "admin") {
+    return actualRole === "admin" || actualRole === "administrator"
+  }
+
+  if (selectedRole === "hospital") {
+    return actualRole === "hospital" || actualRole === "hospital_staff"
+  }
+
+  return selectedRole === actualRole
+}
 
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
 
-  const [
-    selectedRole,
-    setSelectedRole,
-  ] = useState("")
+  const [selectedRole, setSelectedRole] = useState("")
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
 
-  const [
-    username,
-    setUsername,
-  ] = useState("")
-
-  const [
-    password,
-    setPassword,
-  ] = useState("")
-
-  const [
-    showPassword,
-    setShowPassword,
-  ] = useState(false)
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(false)
-
-
-  // =========================================================
-  // LOGIN
-  // =========================================================
+  const selectedRoleInfo = ROLE_OPTIONS.find((role) => role.value === selectedRole)
+  const SelectedRoleIcon = selectedRoleInfo?.Icon
 
   async function handleSubmit(event) {
     event.preventDefault()
-
     setError("")
 
-    // -------------------------------------------------------
-    // Validate role selection first
-    // -------------------------------------------------------
-
     if (!selectedRole) {
-      setError(
-        "Please select your role before signing in.",
-      )
-
+      setError("Please select your role before signing in.")
       return
     }
 
     if (!username.trim()) {
-      setError(
-        "Please enter your username.",
-      )
-
+      setError("Please enter your username.")
       return
     }
 
     if (!password) {
-      setError(
-        "Please enter your password.",
-      )
-
+      setError("Please enter your password.")
       return
     }
 
     setLoading(true)
 
     try {
-      // -----------------------------------------------------
-      // Login through backend
-      // -----------------------------------------------------
+      // Keep the existing AuthContext/backend authentication flow.
+      const currentUser = await login(username.trim(), password)
+      const actualRole = normalizeRole(currentUser?.role)
 
-      const currentUser = await login(
-        username.trim(),
-        password,
-      )
-
-      // -----------------------------------------------------
-      // Get actual role returned by backend
-      // -----------------------------------------------------
-
-      const actualRole =
-        typeof currentUser?.role === "string"
-          ? currentUser.role
-              .trim()
-              .toLowerCase()
-          : ""
-
-      // -----------------------------------------------------
-      // Compare selected role with actual account role
-      // -----------------------------------------------------
-
-      const normalizedSelectedRole =
-        selectedRole
-          .trim()
-          .toLowerCase()
-
-      const roleMatches =
-        (
-          normalizedSelectedRole === "admin" &&
-          (
-            actualRole === "admin" ||
-            actualRole === "administrator"
-          )
-        ) ||
-        actualRole ===
-          normalizedSelectedRole
-
-      if (!roleMatches) {
+      if (!roleMatchesSelection(selectedRole, actualRole)) {
         setError(
-          `Role mismatch. This account is registered as "${
-            currentUser?.role || "Unknown"
-          }". Please select the correct role.`,
+          `Role mismatch. This account is registered as "${currentUser?.role || "Unknown"}". Please select the correct role.`,
         )
-
         return
       }
 
-      // -----------------------------------------------------
-      // Redirect according to authenticated backend role
-      // -----------------------------------------------------
-
       if (actualRole === "nurse") {
-        navigate(
-          "/nurse/dashboard",
-          {
-            replace: true,
-          },
-        )
-
+        navigate("/nurse/dashboard", { replace: true })
         return
       }
 
       if (actualRole === "doctor") {
-        navigate(
-          "/doctor/dashboard",
-          {
-            replace: true,
-          },
-        )
+        navigate("/doctor/dashboard", { replace: true })
+        return
+      }
+      if (actualRole === "receptionist") {
+        navigate("/hospital/dashboard", {
+        replace: true,
+     })
 
         return
       }
 
-      if (
-        actualRole === "admin" ||
-        actualRole === "administrator"
-      ) {
-        navigate(
-          "/admin/dashboard",
-          {
-            replace: true,
-          },
-        )
-
+      if (actualRole === "admin" || actualRole === "administrator") {
+        navigate("/admin/dashboard", { replace: true })
         return
       }
 
-      setError(
-        "Your account does not have a valid application role.",
-      )
+      if (actualRole === "hospital" || actualRole === "hospital_staff") {
+        navigate("/hospital/dashboard", { replace: true })
+        return
+      }
 
-    } catch (
-      requestError
-    ) {
-      const detail =
-        requestError?.response?.data?.detail
+      setError("Your account does not have a valid application role.")
+    } catch (requestError) {
+      const detail = requestError?.response?.data?.detail
 
       if (Array.isArray(detail)) {
-        setError(
-          detail
-            .map(
-              (item) =>
-                item?.msg ||
-                "Invalid login data.",
-            )
-            .join(", "),
-        )
-      } else if (
-        typeof detail === "string"
-      ) {
+        setError(detail.map((item) => item?.msg || "Invalid login data.").join(", "))
+      } else if (typeof detail === "string") {
         setError(detail)
-      } else if (
-        requestError?.request &&
-        !requestError?.response
-      ) {
-        setError(
-          "Cannot connect to SmartMedChart server. Make sure the backend is running.",
-        )
+      } else if (requestError?.request && !requestError?.response) {
+        setError("Cannot connect to SmartMedChart server. Make sure the backend is running.")
       } else {
-        setError(
-          "Unable to sign in. Please check your credentials.",
-        )
+        setError("Unable to sign in. Please check your credentials.")
       }
-
     } finally {
       setLoading(false)
     }
   }
 
-
-  // =========================================================
-  // RETURN
-  // =========================================================
-
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-8 sm:px-6 lg:px-8">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#2639bd] p-3 sm:p-6 lg:p-8">
+      {/* Soft decorative background glows */}
+      <div aria-hidden="true" className="pointer-events-none absolute -left-36 -top-40 h-[28rem] w-[28rem] rounded-full bg-cyan-300/15 blur-3xl" />
+      <div aria-hidden="true" className="pointer-events-none absolute -bottom-48 -right-28 h-[34rem] w-[34rem] rounded-full bg-indigo-300/20 blur-3xl" />
 
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center justify-center">
-
-        <div className="w-full">
-
-          {/* =================================================
-              BRAND
-          ================================================= */}
-
-          <div className="mb-8 text-center">
-
-            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-400/20 bg-cyan-500/10 shadow-lg shadow-cyan-500/5">
-
-              <Activity className="h-8 w-8 text-cyan-400" />
-
+      <section className="relative grid w-full max-w-[1180px] overflow-hidden rounded-[26px] bg-white shadow-[0_35px_100px_rgba(4,10,57,0.34)] sm:rounded-[34px] lg:min-h-[680px] lg:grid-cols-[0.92fr_1.08fr]">
+        {/* Login form */}
+        <div className="flex min-w-0 flex-col justify-center px-6 py-8 sm:px-10 sm:py-10 lg:px-12 lg:py-12 xl:px-16">
+          <div className="mb-8 flex items-center gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#eef2ff] text-[#2639bd] ring-1 ring-indigo-100">
+              <Activity className="h-6 w-6" strokeWidth={2.5} />
             </div>
+            <div>
+              <p className="text-sm font-extrabold tracking-tight text-slate-900 sm:text-base">SmartMedChart</p>
+              <p className="mt-0.5 text-xs font-medium text-slate-500">Intelligent medication management</p>
+            </div>
+          </div>
 
-            <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              SmartMedChart
-            </h1>
-
-            <p className="mt-2 text-sm text-slate-400 sm:text-base">
-              Intelligent medication management
+          <div className="mb-7">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#edf4ff] px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.13em] text-[#2639bd]">
+              <ShieldCheck className="h-4 w-4" /> Secure clinical access
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-950 sm:text-[2.15rem]">Welcome back</h1>
+            <p className="mt-2 max-w-sm text-sm leading-6 text-slate-500">
+              Sign in to continue to your clinical workspace.
             </p>
-
           </div>
 
-
-          {/* =================================================
-              LOGIN CARD
-          ================================================= */}
-
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/95 p-6 shadow-2xl shadow-black/30 backdrop-blur sm:p-8">
-
-            {/* Header */}
-
-            <div className="mb-8">
-
-              <div className="mb-4 flex items-center gap-2 text-cyan-400">
-
-                <ShieldCheck className="h-5 w-5" />
-
-                <span className="text-xs font-semibold uppercase tracking-widest">
-                  Secure Access
-                </span>
-
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label htmlFor="role" className="mb-2 block text-sm font-semibold text-slate-700">
+                Login as
+              </label>
+              <div className="relative">
+                <Shield className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-400" />
+                <select
+                  id="role"
+                  value={selectedRole}
+                  onChange={(event) => {
+                    setSelectedRole(event.target.value)
+                    setError("")
+                  }}
+                  required
+                  disabled={loading}
+                  className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 py-3.5 pl-11 pr-11 text-sm font-medium text-slate-800 outline-none transition hover:border-indigo-200 focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="" disabled>Select your role</option>
+                  {ROLE_OPTIONS.map((role) => (
+                    <option key={role.value} value={role.value}>
+                      {role.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               </div>
-
-              <h2 className="text-2xl font-semibold text-white">
-                Welcome back
-              </h2>
-
-              <p className="mt-1 text-sm text-slate-400">
-                Sign in to continue to your clinical workspace.
-              </p>
-
             </div>
 
+            {selectedRoleInfo && (
+              <div className="flex items-center gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 px-3.5 py-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-indigo-600 shadow-sm ring-1 ring-indigo-100">
+                  {SelectedRoleIcon && <SelectedRoleIcon className="h-5 w-5" />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800">{selectedRoleInfo.label} workspace</p>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-500">{selectedRoleInfo.description}</p>
+                </div>
+              </div>
+            )}
 
-            {/* =================================================
-                FORM
-            ================================================= */}
+            <div>
+              <label htmlFor="username" className="mb-2 block text-sm font-semibold text-slate-700">
+                Username
+              </label>
+              <div className="relative">
+                <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-400" />
+                <input
+                  id="username"
+                  name="username"
+                  type="text"
+                  value={username}
+                  onChange={(event) => {
+                    setUsername(event.target.value)
+                    setError("")
+                  }}
+                  required
+                  autoComplete="username"
+                  disabled={loading}
+                  placeholder="Enter your username"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3.5 pl-11 pr-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-indigo-200 focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </div>
+            </div>
 
-            <form
-              onSubmit={handleSubmit}
-              className="space-y-5"
+            <div>
+              <label htmlFor="password" className="mb-2 block text-sm font-semibold text-slate-700">
+                Password
+              </label>
+              <div className="relative">
+                <LockKeyhole className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-400" />
+                <input
+                  id="password"
+                  name="password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => {
+                    setPassword(event.target.value)
+                    setError("")
+                  }}
+                  required
+                  autoComplete="current-password"
+                  disabled={loading}
+                  placeholder="Enter your password"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3.5 pl-11 pr-12 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-indigo-200 focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((previous) => !previous)}
+                  disabled={loading}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-400 transition hover:bg-indigo-50 hover:text-indigo-600 disabled:cursor-not-allowed"
+                >
+                  {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm leading-5 text-rose-700">
+                <Shield className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || !selectedRole || !username.trim() || !password}
+              className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[#2639bd] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-900/15 transition hover:-translate-y-0.5 hover:bg-[#1f2fa4] hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0"
             >
-
-              {/* =================================================
-                  LOGIN AS
-              ================================================= */}
-
-              <div>
-
-                <label
-                  htmlFor="role"
-                  className="mb-2 block text-sm font-medium text-slate-300"
-                >
-                  Login As
-                </label>
-
-                <div className="relative">
-
-                  <Shield
-                    className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500"
-                  />
-
-                  <select
-                    id="role"
-                    value={selectedRole}
-                    onChange={(event) => {
-                      setSelectedRole(
-                        event.target.value,
-                      )
-
-                      setError("")
-                    }}
-                    required
-                    disabled={loading}
-                    className="w-full appearance-none rounded-xl border border-slate-700 bg-slate-800 py-3.5 pl-11 pr-10 text-sm text-white outline-none transition hover:border-slate-600 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-
-                    <option
-                      value=""
-                      disabled
-                      className="bg-slate-800 text-slate-400"
-                    >
-                      Select your role
-                    </option>
-
-                    <option
-                      value="doctor"
-                      className="bg-slate-800 text-white"
-                    >
-                      Doctor
-                    </option>
-
-                    <option
-                      value="nurse"
-                      className="bg-slate-800 text-white"
-                    >
-                      Nurse
-                    </option>
-
-                    <option
-                      value="admin"
-                      className="bg-slate-800 text-white"
-                    >
-                      Admin
-                    </option>
-
-                  </select>
-
-                  <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="m6 9 6 6 6-6" />
-                    </svg>
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              {/* =================================================
-                  ROLE INFORMATION
-              ================================================= */}
-
-              {selectedRole && (
-
-                <div className="rounded-2xl border border-cyan-400/10 bg-cyan-500/5 p-4">
-
-                  <div className="flex items-start gap-3">
-
-                    {selectedRole === "doctor" && (
-                      <div className="rounded-xl bg-blue-500/10 p-2.5">
-                        <Stethoscope className="h-5 w-5 text-blue-400" />
-                      </div>
-                    )}
-
-                    {selectedRole === "nurse" && (
-                      <div className="rounded-xl bg-emerald-500/10 p-2.5">
-                        <HeartPulse className="h-5 w-5 text-emerald-400" />
-                      </div>
-                    )}
-
-                    {selectedRole === "admin" && (
-                      <div className="rounded-xl bg-violet-500/10 p-2.5">
-                        <Shield className="h-5 w-5 text-violet-400" />
-                      </div>
-                    )}
-
-                    <div>
-
-                      <p className="text-sm font-semibold capitalize text-white">
-                        {selectedRole} access
-                      </p>
-
-                      <p className="mt-1 text-xs leading-5 text-slate-400">
-                        Sign in using your registered{" "}
-                        {selectedRole} account.
-                      </p>
-
-                    </div>
-
-                  </div>
-
-                </div>
-
+              {loading ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white" />
+                  Signing in...
+                </>
+              ) : (
+                <>
+                  Sign in securely
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                </>
               )}
+            </button>
+          </form>
 
-
-              {/* =================================================
-                  USERNAME
-              ================================================= */}
-
-              <div>
-
-                <label
-                  htmlFor="username"
-                  className="mb-2 block text-sm font-medium text-slate-300"
-                >
-                  Username
-                </label>
-
-                <div className="relative">
-
-                  <User
-                    className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500"
-                  />
-
-                  <input
-                    id="username"
-                    type="text"
-                    value={username}
-                    onChange={(event) => {
-                      setUsername(
-                        event.target.value,
-                      )
-
-                      setError("")
-                    }}
-                    required
-                    autoComplete="username"
-                    disabled={loading}
-                    placeholder="Enter username"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 py-3.5 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-slate-500 hover:border-slate-600 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  />
-
-                </div>
-
-              </div>
-
-
-              {/* =================================================
-                  PASSWORD
-              ================================================= */}
-
-              <div>
-
-                <label
-                  htmlFor="password"
-                  className="mb-2 block text-sm font-medium text-slate-300"
-                >
-                  Password
-                </label>
-
-                <div className="relative">
-
-                  <LockKeyhole
-                    className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500"
-                  />
-
-                  <input
-                    id="password"
-                    type={
-                      showPassword
-                        ? "text"
-                        : "password"
-                    }
-                    value={password}
-                    onChange={(event) => {
-                      setPassword(
-                        event.target.value,
-                      )
-
-                      setError("")
-                    }}
-                    required
-                    autoComplete="current-password"
-                    disabled={loading}
-                    placeholder="Enter password"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 py-3.5 pl-11 pr-12 text-sm text-white outline-none transition placeholder:text-slate-500 hover:border-slate-600 focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setShowPassword(
-                        (previous) =>
-                          !previous,
-                      )
-                    }
-                    disabled={loading}
-                    aria-label={
-                      showPassword
-                        ? "Hide password"
-                        : "Show password"
-                    }
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300 disabled:cursor-not-allowed"
-                  >
-
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" />
-                    ) : (
-                      <Eye className="h-5 w-5" />
-                    )}
-
-                  </button>
-
-                </div>
-
-              </div>
-
-
-              {/* =================================================
-                  ERROR
-              ================================================= */}
-
-              {error && (
-
-                <div
-                  role="alert"
-                  className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-300"
-                >
-                  {error}
-                </div>
-
-              )}
-
-
-              {/* =================================================
-                  SUBMIT
-              ================================================= */}
-
-              <button
-                type="submit"
-                disabled={
-                  loading ||
-                  !selectedRole ||
-                  !username.trim() ||
-                  !password
-                }
-                className="flex w-full items-center justify-center rounded-xl bg-cyan-500 px-4 py-3.5 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/10 transition hover:bg-cyan-400 focus:outline-none focus:ring-4 focus:ring-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-
-                {loading ? (
-                  <>
-                    <span className="mr-2 h-5 w-5 animate-spin rounded-full border-2 border-slate-950/30 border-t-slate-950" />
-                    Signing in...
-                  </>
-                ) : (
-                  "Sign In"
-                )}
-
-              </button>
-
-            </form>
-
+          <div className="mt-7 flex items-center justify-center gap-2 text-center text-xs text-slate-400">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            <span>Protected, role-based clinical access</span>
           </div>
-
-
-          {/* =================================================
-              FOOTER
-          ================================================= */}
-
-          <div className="mt-6 flex items-center justify-center gap-2 text-center text-xs text-slate-500">
-
-            <ShieldCheck className="h-4 w-4" />
-
-            <span>
-              Secure clinical medication management
-            </span>
-
-          </div>
-
         </div>
 
-      </div>
+        {/* Abstract blue visual panel inspired by the supplied reference */}
+        <aside className="relative hidden min-h-[680px] overflow-hidden bg-[#071451] lg:block">
+          <svg
+            aria-hidden="true"
+            className="absolute inset-0 h-full w-full"
+            viewBox="0 0 620 900"
+            preserveAspectRatio="xMidYMid slice"
+          >
+            <defs>
+              <linearGradient id="panelBase" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#09164f" />
+                <stop offset="48%" stopColor="#172da8" />
+                <stop offset="100%" stopColor="#080d3a" />
+              </linearGradient>
+              <linearGradient id="panelWave" x1="0" y1="0" x2="0.9" y2="1">
+                <stop offset="0%" stopColor="#a5b4fc" />
+                <stop offset="35%" stopColor="#6366f1" />
+                <stop offset="72%" stopColor="#3449de" />
+                <stop offset="100%" stopColor="#0b1765" />
+              </linearGradient>
+              <linearGradient id="panelHighlight" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#e0e7ff" stopOpacity="0.96" />
+                <stop offset="50%" stopColor="#818cf8" stopOpacity="0.65" />
+                <stop offset="100%" stopColor="#312e81" stopOpacity="0.1" />
+              </linearGradient>
+              <radialGradient id="panelGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.6" />
+                <stop offset="100%" stopColor="#60a5fa" stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            <rect width="620" height="900" fill="url(#panelBase)" />
+            <ellipse cx="510" cy="260" rx="390" ry="390" fill="url(#panelGlow)" />
+            <path d="M180 -70 C360 -10 360 150 450 260 C500 320 610 340 690 260 L690 -70 Z" fill="#161f8b" opacity="0.85" />
+            <path d="M250 -60 C420 25 315 190 410 275 C470 330 540 300 650 210 L650 -60 Z" fill="url(#panelWave)" />
+            <path d="M390 -50 C470 50 425 170 495 260 C530 305 595 310 660 278 L660 -50 Z" fill="url(#panelHighlight)" />
+            <path d="M-60 480 C95 390 170 475 242 555 C322 645 380 600 455 550 C535 497 605 525 680 590 L680 940 L-60 940 Z" fill="#101d78" opacity="0.9" />
+            <path d="M-50 600 C70 485 160 530 250 610 C335 686 390 660 470 605 C555 545 615 590 675 645 L675 940 L-50 940 Z" fill="url(#panelWave)" opacity="0.86" />
+            <path d="M-50 720 C75 620 160 655 252 730 C350 808 410 755 490 714 C560 680 625 710 675 750 L675 940 L-50 940 Z" fill="#080f49" opacity="0.7" />
+          </svg>
 
-    </div>
+          <div aria-hidden="true" className="absolute -right-24 top-44 h-72 w-72 rounded-full border border-white/10 bg-white/5 blur-sm" />
+          <div aria-hidden="true" className="absolute bottom-20 left-12 h-40 w-40 rounded-full border border-cyan-100/15 bg-cyan-300/10 blur-xl" />
+
+          <div className="relative z-10 flex min-h-[680px] flex-col justify-between p-10 xl:p-14">
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3.5 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-50 backdrop-blur-md">
+              <span className="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.85)]" />
+              Clinical operations platform
+            </div>
+
+            <div className="max-w-md pb-3 text-white">
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-white/10 shadow-xl backdrop-blur-md">
+                <HeartPulse className="h-7 w-7 text-cyan-200" />
+              </div>
+              <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-100/80">
+                <Sparkles className="h-4 w-4" /> Connected care
+              </p>
+              <h2 className="text-4xl font-semibold leading-[1.12] tracking-tight xl:text-5xl">
+                Every detail.
+                <br />
+                Better connected.
+              </h2>
+              <p className="mt-5 max-w-sm text-sm leading-7 text-indigo-100/80 xl:text-base">
+                Bring people, medication workflows, and patient information together in one secure clinical workspace.
+              </p>
+
+              <div className="mt-8 space-y-3">
+                {[
+                  "Role-based access for clinical teams",
+                  "Medication workflows in one place",
+                  "Clearer patient-care coordination",
+                ].map((item) => (
+                  <div key={item} className="flex items-center gap-3 text-sm text-white/90">
+                    <CheckCircle2 className="h-[18px] w-[18px] shrink-0 text-cyan-200" />
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t border-white/15 pt-5 text-xs text-indigo-100/70">
+              <span className="flex items-center gap-2"><ShieldCheck className="h-4 w-4" /> SmartMedChart security</span>
+              <span>Care with clarity</span>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
   )
 }

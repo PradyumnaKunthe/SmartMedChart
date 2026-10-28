@@ -6,10 +6,11 @@ import {
   LayoutDashboard,
   LogOut,
   QrCode,
-  ShieldCheck,
-  UserRound,
   UserPlus,
+  UserRound,
   Users,
+  UsersRound,
+  Stethoscope,
 } from "lucide-react"
 
 import { NavLink } from "react-router-dom"
@@ -94,28 +95,49 @@ export default function Sidebar() {
   // ADMIN
   // =====================================================
 
-if (
-  role === "admin" ||
-  role === "administrator"
-) {
-  navigation.push(
-    {
-      label: "Dashboard",
-      icon: LayoutDashboard,
-      path: "/admin/dashboard",
-    },
-    {
-      label: "Staff & Assignments",
-      icon: Users,
-      path: "/admin/staff",
-    },
-    {
-      label: "Hospital Portal",
-      icon: Building2,
-      path: "/hospital/dashboard",
-    },
-  )
-}
+  if (
+    role === "admin" ||
+    role === "administrator"
+  ) {
+    navigation.push(
+      {
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        path: "/admin/dashboard",
+      },
+      {
+        label: "Staff & Assignments",
+        icon: Users,
+        path: "/admin/staff",
+      },
+      {
+        label: "CareMatch",
+        icon: Stethoscope,
+        path: "/admin/doctor-profiles",
+      },
+      {
+        label: "Patient Management",
+        icon: UsersRound,
+        path: "/admin/patients",
+      },
+      {
+        label: "Ward & Beds",
+        icon: Building2,
+        path: "/admin/ward-bed-management",
+      },
+      {
+        label: "Patient QR",
+        icon: QrCode,
+        path: "/admin/qr",
+      },
+      {
+        label: "Hospital Portal",
+        icon: Building2,
+        path: "/hospital/dashboard",
+      },
+    )
+  }
+
 
   // =====================================================
   // HOSPITAL STAFF

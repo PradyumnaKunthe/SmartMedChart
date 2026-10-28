@@ -14,6 +14,7 @@ from app.routes.dashboard import router as dashboard_router
 from app.routes.safety import router as safety_router
 from app.routes.hospital import router as hospital_router
 from app.routes.allergies import router as allergies_router
+from app.routes.carematch import router as carematch_router
 
 app = FastAPI(
     title="SmartMedChart API",
@@ -55,6 +56,8 @@ app.include_router(hospital_router)
 app.include_router(chat.router)
 app.include_router(admin_router)
 app.include_router(allergies_router)
+app.include_router(carematch_router)
+
 # =========================================================
 # Root
 # =========================================================
@@ -80,3 +83,6 @@ def database_health():
         "database": "SQLite",
         "status": "connected",
     }
+from app.routes.mongodb_status import router as mongodb_status_router
+
+app.include_router(mongodb_status_router)

@@ -7,6 +7,7 @@ from app.database import get_db
 
 from app.models import (
     Allergy,
+    Encounter,
     MedicationSchedule,
     Medicine,
     Patient,
@@ -39,6 +40,45 @@ router = APIRouter(
     prefix="/api/doctor",
     tags=["Doctor"],
 )
+
+
+# =========================================================
+# Doctor patient access helper
+# =========================================================
+
+def get_doctor_patient_or_404(
+    patient_id: int,
+    db: Session,
+    current_user: User,
+) -> Patient:
+    """
+    Return a patient only when the patient is active and
+    specifically assigned to the currently logged-in doctor
+    through an active encounter.
+    """
+
+    patient = db.scalar(
+        select(Patient)
+        .join(
+            Encounter,
+            Encounter.patient_id == Patient.id,
+        )
+        .where(
+            Patient.id == patient_id,
+            Patient.is_active.is_(True),
+            Encounter.doctor_id == current_user.id,
+            Encounter.status == "ACTIVE",
+        )
+        .distinct()
+    )
+
+    if patient is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Patient is not assigned to this doctor.",
+        )
+
+    return patient
 
 
 # =========================================================
@@ -79,12 +119,22 @@ def search_patients(
     ),
 ):
     """
-    Search active patients by patient ID,
-    first name, or last name.
+    Show only patients specifically assigned to
+    the currently logged-in doctor.
     """
 
-    query = select(Patient).where(
-        Patient.is_active.is_(True)
+    query = (
+        select(Patient)
+        .join(
+            Encounter,
+            Encounter.patient_id == Patient.id,
+        )
+        .where(
+            Patient.is_active.is_(True),
+            Encounter.doctor_id == current_user.id,
+            Encounter.status == "ACTIVE",
+        )
+        .distinct()
     )
 
     if search:
@@ -92,15 +142,9 @@ def search_patients(
 
         query = query.where(
             or_(
-                Patient.patient_id.ilike(
-                    search_term
-                ),
-                Patient.first_name.ilike(
-                    search_term
-                ),
-                Patient.last_name.ilike(
-                    search_term
-                ),
+                Patient.patient_id.ilike(search_term),
+                Patient.first_name.ilike(search_term),
+                Patient.last_name.ilike(search_term),
             )
         )
 
@@ -110,7 +154,6 @@ def search_patients(
     )
 
     return db.scalars(query).all()
-
 
 # =========================================================
 # Get single patient
@@ -128,23 +171,14 @@ def get_patient(
     ),
 ):
     """
-    Return a single active patient.
+    Return a patient only when assigned to the current doctor.
     """
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
+    return get_doctor_patient_or_404(
+        patient_id=patient_id,
+        db=db,
+        current_user=current_user,
     )
-
-    if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
-
-    return patient
 
 
 # =========================================================
@@ -166,18 +200,11 @@ def get_patient_allergies(
     Return all allergies recorded for an active patient.
     """
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
+    patient = get_doctor_patient_or_404(
+        patient_id=patient_id,
+        db=db,
+        current_user=current_user,
     )
-
-    if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
 
     allergies = db.scalars(
         select(Allergy)
@@ -209,18 +236,11 @@ def get_current_medications(
     Return active medications for an active patient.
     """
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
+    patient = get_doctor_patient_or_404(
+        patient_id=patient_id,
+        db=db,
+        current_user=current_user,
     )
-
-    if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
 
     rows = db.execute(
         select(
@@ -350,18 +370,11 @@ def get_patient_medication_schedules(
     # 1. Verify patient
     # -----------------------------------------------------
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
+    patient = get_doctor_patient_or_404(
+        patient_id=patient_id,
+        db=db,
+        current_user=current_user,
     )
-
-    if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
 
     # -----------------------------------------------------
     # 2. Get schedules belonging to this patient
@@ -445,18 +458,11 @@ def create_prescription(
     # 1. Verify patient
     # -----------------------------------------------------
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == request.patient_id,
-            Patient.is_active.is_(True),
-        )
+    patient = get_doctor_patient_or_404(
+        patient_id=request.patient_id,
+        db=db,
+        current_user=current_user,
     )
-
-    if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
 
     # -----------------------------------------------------
     # 2. Verify medicine
@@ -820,18 +826,11 @@ def get_prescription_history(
     Both active and stopped prescriptions are included.
     """
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
+    patient = get_doctor_patient_or_404(
+        patient_id=patient_id,
+        db=db,
+        current_user=current_user,
     )
-
-    if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
 
     rows = db.execute(
         select(
