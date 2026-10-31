@@ -1,9 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.models import Patient, User
+from app.mongo_client import mongo_db
 from app.schemas.qr import QRGenerateResponse
 from app.security import require_permission
 from app.services.qr_service import generate_patient_qr_token
@@ -21,8 +18,7 @@ router = APIRouter(
 )
 def generate_patient_qr(
     patient_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("MANAGE_USERS")
     ),
 ):
@@ -32,12 +28,13 @@ def generate_patient_qr(
     Only an authorized user can generate the patient QR.
     """
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "$or": [
+            {"_id": patient_id},
+            {"id": patient_id},
+        ],
+        "is_active": {"$in": [1, True]},
+    })
 
     if patient is None:
         raise HTTPException(
@@ -45,14 +42,19 @@ def generate_patient_qr(
             detail="Patient not found.",
         )
 
+    actual_patient_id = patient.get("id", patient.get("_id"))
+
     token = generate_patient_qr_token(
-        db=db,
-        patient=patient,
+        patient_id=actual_patient_id
     )
 
+    updated_patient = mongo_db.patients.find_one({
+        "_id": actual_patient_id
+    })
+
     return {
-        "patient_id": patient.id,
+        "patient_id": actual_patient_id,
         "qr_token": token,
         "qr_data": token,
-        "generated_at": patient.qr_generated_at,
+        "generated_at": updated_patient.get("qr_generated_at"),
     }

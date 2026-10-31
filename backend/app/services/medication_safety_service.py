@@ -1,14 +1,4 @@
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.models import (
-    Allergy,
-    Medicine,
-    MedicationSchedule,
-    Patient,
-    Prescription,
-    PrescriptionItem,
-)
+from app.mongo_client import mongo_db
 
 
 def _text_matches_allergen(
@@ -47,72 +37,80 @@ def _text_matches_allergen(
 
 
 def check_medication_safety(
-    db: Session,
     schedule_id: int,
+    db=None,
 ) -> dict:
     """
     Check a medication schedule for important safety
-    conflicts before administration.
+    conflicts before administration using MongoDB collections.
     """
 
     # -----------------------------------------------------
     # 1. Find medication schedule
     # -----------------------------------------------------
 
-    schedule = db.scalar(
-        select(MedicationSchedule).where(
-            MedicationSchedule.id
-            == schedule_id
-        )
-    )
+    schedule = mongo_db.medication_schedules.find_one({
+        "$or": [
+            {"_id": schedule_id},
+            {"id": schedule_id},
+        ]
+    })
 
     if schedule is None:
         raise ValueError(
             "Medication schedule not found."
         )
 
+    actual_schedule_id = int(schedule.get("id", schedule.get("_id")))
+    prescription_item_id = int(schedule["prescription_item_id"])
+
     # -----------------------------------------------------
     # 2. Find prescription item
     # -----------------------------------------------------
 
-    prescription_item = db.scalar(
-        select(PrescriptionItem).where(
-            PrescriptionItem.id
-            == schedule.prescription_item_id
-        )
-    )
+    prescription_item = mongo_db.prescription_items.find_one({
+        "$or": [
+            {"_id": prescription_item_id},
+            {"id": prescription_item_id},
+        ]
+    })
 
     if prescription_item is None:
         raise ValueError(
             "Prescription item not found."
         )
 
+    prescription_id = int(prescription_item["prescription_id"])
+    medicine_id = int(prescription_item["medicine_id"])
+
     # -----------------------------------------------------
     # 3. Find prescription
     # -----------------------------------------------------
 
-    prescription = db.scalar(
-        select(Prescription).where(
-            Prescription.id
-            == prescription_item.prescription_id
-        )
-    )
+    prescription = mongo_db.prescriptions.find_one({
+        "$or": [
+            {"_id": prescription_id},
+            {"id": prescription_id},
+        ]
+    })
 
     if prescription is None:
         raise ValueError(
             "Prescription not found."
         )
 
+    patient_id = int(prescription["patient_id"])
+
     # -----------------------------------------------------
     # 4. Find patient
     # -----------------------------------------------------
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id
-            == prescription.patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "$or": [
+            {"_id": patient_id},
+            {"id": patient_id},
+        ]
+    })
 
     if patient is None:
         raise ValueError(
@@ -123,12 +121,12 @@ def check_medication_safety(
     # 5. Find medicine
     # -----------------------------------------------------
 
-    medicine = db.scalar(
-        select(Medicine).where(
-            Medicine.id
-            == prescription_item.medicine_id
-        )
-    )
+    medicine = mongo_db.medicines.find_one({
+        "$or": [
+            {"_id": medicine_id},
+            {"id": medicine_id},
+        ]
+    })
 
     if medicine is None:
         raise ValueError(
@@ -141,7 +139,7 @@ def check_medication_safety(
     # 6. Prescription status check
     # -----------------------------------------------------
 
-    if prescription.status != "ACTIVE":
+    if prescription.get("status") != "ACTIVE":
         warnings.append(
             {
                 "type": "PRESCRIPTION_INACTIVE",
@@ -160,7 +158,7 @@ def check_medication_safety(
     # 7. Prescription item status check
     # -----------------------------------------------------
 
-    if prescription_item.status != "ACTIVE":
+    if prescription_item.get("status", "ACTIVE") != "ACTIVE":
         warnings.append(
             {
                 "type": "PRESCRIPTION_ITEM_INACTIVE",
@@ -179,13 +177,13 @@ def check_medication_safety(
     # 8. Medicine status check
     # -----------------------------------------------------
 
-    if not medicine.is_active:
+    if not (medicine.get("is_active") in (1, True)):
         warnings.append(
             {
                 "type": "MEDICINE_INACTIVE",
                 "severity": "HIGH",
                 "message": (
-                    f"Medicine '{medicine.name}' is inactive."
+                    f"Medicine '{medicine.get('name')}' is inactive."
                 ),
                 "reason": (
                     "The prescribed medicine is not "
@@ -198,7 +196,7 @@ def check_medication_safety(
     # 9. Patient status check
     # -----------------------------------------------------
 
-    if not patient.is_active:
+    if not (patient.get("is_active") in (1, True)):
         warnings.append(
             {
                 "type": "PATIENT_INACTIVE",
@@ -218,27 +216,20 @@ def check_medication_safety(
     # 10. Allergy checks
     # -----------------------------------------------------
 
-    allergies = db.scalars(
-        select(Allergy).where(
-            Allergy.patient_id
-            == patient.id
-        )
-    ).all()
-
-    allergy_matches = []
+    allergies = list(
+        mongo_db.patient_allergies.find({
+            "patient_id": patient_id
+        })
+    )
 
     for allergy in allergies:
         if _text_matches_allergen(
-            medicine_name=medicine.name,
-            generic_name=medicine.generic_name,
-            allergen=allergy.allergen,
+            medicine_name=medicine.get("name", ""),
+            generic_name=medicine.get("generic_name"),
+            allergen=allergy.get("allergen", ""),
         ):
-            allergy_matches.append(
-                allergy
-            )
-
             severity = (
-                allergy.severity
+                allergy.get("severity")
                 or "UNSPECIFIED"
             )
 
@@ -248,17 +239,17 @@ def check_medication_safety(
                     "severity": "HIGH",
                     "message": (
                         f"Patient has a recorded "
-                        f"allergy to '{allergy.allergen}'."
+                        f"allergy to '{allergy.get('allergen')}'."
                     ),
                     "reason": (
                         f"The prescribed medicine "
-                        f"'{medicine.name}' matches "
+                        f"'{medicine.get('name')}' matches "
                         f"the recorded allergen."
                     ),
-                    "allergen": allergy.allergen,
-                    "reaction": allergy.reaction,
+                    "allergen": allergy.get("allergen"),
+                    "reaction": allergy.get("reaction"),
                     "allergy_severity": severity,
-                    "notes": allergy.notes,
+                    "notes": allergy.get("notes"),
                 }
             )
 
@@ -297,19 +288,12 @@ def check_medication_safety(
     return {
         "safe": safe,
         "severity": overall_severity,
-
-        "schedule_id": schedule.id,
-
-        "patient_id": patient.id,
-
-        "medicine_id": medicine.id,
-
-        "medicine_name": medicine.name,
-
+        "schedule_id": actual_schedule_id,
+        "patient_id": patient_id,
+        "medicine_id": medicine_id,
+        "medicine_name": medicine.get("name"),
         "warnings": warnings,
-
         "warning_count": len(warnings),
-
         "message": (
             "No medication safety conflicts detected."
             if safe

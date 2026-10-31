@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from datetime import datetime
 
-from app.database import get_db
-from app.models import Allergy, Patient, User
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.mongo_client import mongo_db
 from app.schemas.allergy import (
     AllergyCreate,
     AllergyResponse,
@@ -18,6 +17,33 @@ router = APIRouter(
 )
 
 
+def next_mongo_id(collection_name: str) -> int:
+    collection = mongo_db[collection_name]
+    latest = collection.find_one(
+        {},
+        sort=[("_id", -1)],
+        projection={"_id": 1},
+    )
+    maximum = (
+        int(latest["_id"])
+        if latest and isinstance(latest["_id"], int)
+        else 0
+    )
+
+    counters = mongo_db["_id_sequences"]
+    counters.update_one(
+        {"_id": collection_name},
+        {"$max": {"value": maximum}},
+        upsert=True,
+    )
+    result = counters.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"value": 1}},
+        return_document=True,
+    )
+    return int(result["value"])
+
+
 # =========================================================
 # ADD ALLERGY
 # =========================================================
@@ -29,17 +55,19 @@ router = APIRouter(
 def create_patient_allergy(
     patient_id: int,
     request: AllergyCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("VIEW_PATIENT")
     ),
 ):
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id,
+        "is_active": {"$in": [1, True]},
+    })
+    if not patient:
+        patient = mongo_db.patients.find_one({
+            "id": patient_id,
+            "is_active": {"$in": [1, True]},
+        })
 
     if patient is None:
         raise HTTPException(
@@ -47,31 +75,43 @@ def create_patient_allergy(
             detail="Patient not found.",
         )
 
-    allergy = Allergy(
-        patient_id=patient.id,
-        allergen=request.allergen.strip(),
-        reaction=(
+    allergy_id = next_mongo_id("patient_allergies")
+    now = datetime.utcnow().isoformat()
+
+    allergy_doc = {
+        "_id": allergy_id,
+        "id": allergy_id,
+        "patient_id": patient_id,
+        "allergen": request.allergen.strip(),
+        "reaction": (
             request.reaction.strip()
             if request.reaction
             else None
         ),
-        severity=(
+        "severity": (
             request.severity.strip().upper()
             if request.severity
             else None
         ),
-        notes=(
+        "notes": (
             request.notes.strip()
             if request.notes
             else None
         ),
-    )
+        "created_at": now,
+        "updated_at": now,
+    }
 
-    db.add(allergy)
-    db.commit()
-    db.refresh(allergy)
+    mongo_db.patient_allergies.insert_one(allergy_doc)
 
-    return allergy
+    return {
+        "id": allergy_doc["id"],
+        "patient_id": allergy_doc["patient_id"],
+        "allergen": allergy_doc["allergen"],
+        "reaction": allergy_doc["reaction"],
+        "severity": allergy_doc["severity"],
+        "notes": allergy_doc["notes"],
+    }
 
 
 # =========================================================
@@ -86,17 +126,16 @@ def update_patient_allergy(
     patient_id: int,
     allergy_id: int,
     request: AllergyUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("VIEW_PATIENT")
     ),
 ):
-    allergy = db.scalar(
-        select(Allergy).where(
-            Allergy.id == allergy_id,
-            Allergy.patient_id == patient_id,
-        )
-    )
+    allergy = mongo_db.patient_allergies.find_one({
+        "$or": [
+            {"_id": allergy_id, "patient_id": patient_id},
+            {"id": allergy_id, "patient_id": patient_id},
+        ]
+    })
 
     if allergy is None:
         raise HTTPException(
@@ -108,38 +147,47 @@ def update_patient_allergy(
         exclude_unset=True
     )
 
-    if "allergen" in update_data:
-        allergy.allergen = (
-            update_data["allergen"].strip()
-            if update_data["allergen"]
-            else allergy.allergen
-        )
+    updates = {}
+    if "allergen" in update_data and update_data["allergen"]:
+        updates["allergen"] = update_data["allergen"].strip()
 
     if "reaction" in update_data:
-        allergy.reaction = (
+        updates["reaction"] = (
             update_data["reaction"].strip()
             if update_data["reaction"]
             else None
         )
 
     if "severity" in update_data:
-        allergy.severity = (
+        updates["severity"] = (
             update_data["severity"].strip().upper()
             if update_data["severity"]
             else None
         )
 
     if "notes" in update_data:
-        allergy.notes = (
+        updates["notes"] = (
             update_data["notes"].strip()
             if update_data["notes"]
             else None
         )
 
-    db.commit()
-    db.refresh(allergy)
+    updates["updated_at"] = datetime.utcnow().isoformat()
 
-    return allergy
+    updated = mongo_db.patient_allergies.find_one_and_update(
+        {"_id": allergy["_id"]},
+        {"$set": updates},
+        return_document=True,
+    )
+
+    return {
+        "id": updated.get("id", updated.get("_id")),
+        "patient_id": updated["patient_id"],
+        "allergen": updated["allergen"],
+        "reaction": updated.get("reaction"),
+        "severity": updated.get("severity"),
+        "notes": updated.get("notes"),
+    }
 
 
 # =========================================================
@@ -152,26 +200,22 @@ def update_patient_allergy(
 def delete_patient_allergy(
     patient_id: int,
     allergy_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("VIEW_PATIENT")
     ),
 ):
-    allergy = db.scalar(
-        select(Allergy).where(
-            Allergy.id == allergy_id,
-            Allergy.patient_id == patient_id,
-        )
-    )
+    result = mongo_db.patient_allergies.delete_one({
+        "$or": [
+            {"_id": allergy_id, "patient_id": patient_id},
+            {"id": allergy_id, "patient_id": patient_id},
+        ]
+    })
 
-    if allergy is None:
+    if result.deleted_count == 0:
         raise HTTPException(
             status_code=404,
             detail="Allergy not found.",
         )
-
-    db.delete(allergy)
-    db.commit()
 
     return {
         "message": "Allergy removed successfully.",

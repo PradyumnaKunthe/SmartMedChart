@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 
 from fastapi import (
@@ -8,15 +9,7 @@ from fastapi import (
 
 from pydantic import BaseModel, Field
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.database import get_db
-from app.models import (
-    AIPrediction,
-    MedicationSchedule,
-    User,
-)
+from app.mongo_client import mongo_db, next_mongo_id
 from app.security import require_permission
 
 from ai.feature_service import (
@@ -115,10 +108,8 @@ class AIPredictionRequest(BaseModel):
 @router.post("/predict")
 def predict_ai(
     request: AIPredictionRequest,
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
@@ -150,28 +141,26 @@ def predict_ai(
 )
 def predict_schedule_risk(
     schedule_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
     Generate AI delay and missed-dose predictions
     directly from a real SmartMedChart medication
-    schedule and save the prediction in the database.
+    schedule and save the prediction in MongoDB.
     """
 
     # -----------------------------------------------------
-    # 1. Find medication schedule
+    # 1. Find medication schedule in MongoDB
     # -----------------------------------------------------
 
-    schedule = db.scalar(
-        select(MedicationSchedule).where(
-            MedicationSchedule.id == schedule_id
-        )
-    )
+    schedule = mongo_db.medication_schedules.find_one({
+        "$or": [
+            {"_id": schedule_id},
+            {"id": schedule_id},
+        ]
+    })
 
     if schedule is None:
         raise HTTPException(
@@ -179,14 +168,15 @@ def predict_schedule_risk(
             detail="Medication schedule not found.",
         )
 
+    actual_schedule_id = schedule.get("id", schedule.get("_id"))
+
     # -----------------------------------------------------
-    # 2. Build AI features from real database
+    # 2. Build AI features from MongoDB
     # -----------------------------------------------------
 
     try:
         features = build_medication_features(
-            db=db,
-            schedule_id=schedule_id,
+            schedule_id=actual_schedule_id,
         )
 
     except ValueError as error:
@@ -204,56 +194,29 @@ def predict_schedule_risk(
     )
 
     # -----------------------------------------------------
-    # 4. Create database record
+    # 4. Create MongoDB record
     # -----------------------------------------------------
 
-    ai_record = AIPrediction(
-        medication_schedule_id=schedule_id,
+    new_id = next_mongo_id("ai_predictions")
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-        delay_probability=prediction[
-            "delay_probability"
-        ],
+    ai_record = {
+        "_id": new_id,
+        "id": new_id,
+        "medication_schedule_id": actual_schedule_id,
+        "delay_probability": prediction["delay_probability"],
+        "delay_risk_level": prediction["delay_risk_level"],
+        "delay_prediction": prediction["delay_prediction"],
+        "missed_probability": prediction["missed_probability"],
+        "missed_risk_level": prediction["missed_risk_level"],
+        "missed_prediction": prediction["missed_prediction"],
+        "delay_reasons": json.dumps(prediction["delay_reasons"]),
+        "missed_reasons": json.dumps(prediction["missed_reasons"]),
+        "model_version": "delay-rf-v1 / missed-rf-v1",
+        "created_at": now_str,
+    }
 
-        delay_risk_level=prediction[
-            "delay_risk_level"
-        ],
-
-        delay_prediction=prediction[
-            "delay_prediction"
-        ],
-
-        missed_probability=prediction[
-            "missed_probability"
-        ],
-
-        missed_risk_level=prediction[
-            "missed_risk_level"
-        ],
-
-        missed_prediction=prediction[
-            "missed_prediction"
-        ],
-
-        delay_reasons=json.dumps(
-            prediction[
-                "delay_reasons"
-            ]
-        ),
-
-        missed_reasons=json.dumps(
-            prediction[
-                "missed_reasons"
-            ]
-        ),
-
-        model_version=(
-            "delay-rf-v1 / missed-rf-v1"
-        ),
-    )
-
-    db.add(ai_record)
-    db.commit()
-    db.refresh(ai_record)
+    mongo_db.ai_predictions.insert_one(ai_record)
 
     # -----------------------------------------------------
     # 5. Return prediction
@@ -263,181 +226,136 @@ def predict_schedule_risk(
         "message": (
             "AI prediction generated and saved successfully."
         ),
-
-        "prediction_id": ai_record.id,
-
-        "schedule_id": schedule_id,
-
+        "prediction_id": new_id,
+        "schedule_id": actual_schedule_id,
         "features": features,
-
         "prediction": prediction,
     }
+
+
+# =========================================================
+# Recent AI Predictions
+# =========================================================
+
 @router.get("/predictions")
 def get_ai_predictions(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Return recent AI medication-risk predictions.
+    Return recent AI medication-risk predictions from MongoDB.
     """
 
-    predictions = db.scalars(
-        select(AIPrediction)
-        .order_by(
-            AIPrediction.created_at.desc()
-        )
-    ).all()
+    predictions = list(
+        mongo_db.ai_predictions.find().sort("created_at", -1)
+    )
+
+    results = []
+    for prediction in predictions:
+        delay_reasons = prediction.get("delay_reasons", "[]")
+        if isinstance(delay_reasons, str):
+            try:
+                delay_reasons = json.loads(delay_reasons)
+            except Exception:
+                delay_reasons = []
+
+        missed_reasons = prediction.get("missed_reasons", "[]")
+        if isinstance(missed_reasons, str):
+            try:
+                missed_reasons = json.loads(missed_reasons)
+            except Exception:
+                missed_reasons = []
+
+        delay_prob = float(prediction.get("delay_probability") or 0.0)
+        missed_prob = float(prediction.get("missed_probability") or 0.0)
+
+        results.append({
+            "id": prediction.get("id", prediction.get("_id")),
+            "medication_schedule_id": prediction.get("medication_schedule_id"),
+            "delay_probability": delay_prob,
+            "delay_risk_percent": round(delay_prob * 100, 2),
+            "delay_risk_level": prediction.get("delay_risk_level"),
+            "delay_prediction": prediction.get("delay_prediction"),
+            "missed_probability": missed_prob,
+            "missed_risk_percent": round(missed_prob * 100, 2),
+            "missed_risk_level": prediction.get("missed_risk_level"),
+            "missed_prediction": prediction.get("missed_prediction"),
+            "delay_reasons": delay_reasons,
+            "missed_reasons": missed_reasons,
+            "model_version": prediction.get("model_version"),
+            "created_at": prediction.get("created_at"),
+        })
 
     return {
-        "count": len(predictions),
-        "predictions": [
-            {
-                "id": prediction.id,
-                "medication_schedule_id": (
-                    prediction.medication_schedule_id
-                ),
-                "delay_probability": (
-                    prediction.delay_probability
-                ),
-                "delay_risk_percent": round(
-                    prediction.delay_probability * 100,
-                    2,
-                ),
-                "delay_risk_level": (
-                    prediction.delay_risk_level
-                ),
-                "delay_prediction": (
-                    prediction.delay_prediction
-                ),
-                "missed_probability": (
-                    prediction.missed_probability
-                ),
-                "missed_risk_percent": round(
-                    prediction.missed_probability * 100,
-                    2,
-                ),
-                "missed_risk_level": (
-                    prediction.missed_risk_level
-                ),
-                "missed_prediction": (
-                    prediction.missed_prediction
-                ),
-                "delay_reasons": json.loads(
-                    prediction.delay_reasons
-                )
-                if prediction.delay_reasons
-                else [],
-                "missed_reasons": json.loads(
-                    prediction.missed_reasons
-                )
-                if prediction.missed_reasons
-                else [],
-                "model_version": (
-                    prediction.model_version
-                ),
-                "created_at": prediction.created_at,
-            }
-            for prediction in predictions
-        ],
+        "count": len(results),
+        "predictions": results,
     }
+
+
 # =========================================================
 # High-Risk AI Predictions
 # =========================================================
 
 @router.get("/predictions/high-risk")
 def get_high_risk_predictions(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
     Return AI predictions where either delay risk
-    or missed-dose risk is HIGH.
+    or missed-dose risk is HIGH from MongoDB.
     """
 
-    predictions = db.scalars(
-        select(AIPrediction)
-        .where(
-            (AIPrediction.delay_risk_level == "HIGH")
-            | (
-                AIPrediction.missed_risk_level
-                == "HIGH"
-            )
-        )
-        .order_by(
-            AIPrediction.created_at.desc()
-        )
-    ).all()
+    query = {
+        "$or": [
+            {"delay_risk_level": "HIGH"},
+            {"missed_risk_level": "HIGH"},
+        ]
+    }
+
+    predictions = list(
+        mongo_db.ai_predictions.find(query).sort("created_at", -1)
+    )
+
+    results = []
+    for prediction in predictions:
+        delay_reasons = prediction.get("delay_reasons", "[]")
+        if isinstance(delay_reasons, str):
+            try:
+                delay_reasons = json.loads(delay_reasons)
+            except Exception:
+                delay_reasons = []
+
+        missed_reasons = prediction.get("missed_reasons", "[]")
+        if isinstance(missed_reasons, str):
+            try:
+                missed_reasons = json.loads(missed_reasons)
+            except Exception:
+                missed_reasons = []
+
+        delay_prob = float(prediction.get("delay_probability") or 0.0)
+        missed_prob = float(prediction.get("missed_probability") or 0.0)
+
+        results.append({
+            "id": prediction.get("id", prediction.get("_id")),
+            "medication_schedule_id": prediction.get("medication_schedule_id"),
+            "delay_probability": delay_prob,
+            "delay_risk_percent": round(delay_prob * 100, 2),
+            "delay_risk_level": prediction.get("delay_risk_level"),
+            "delay_prediction": prediction.get("delay_prediction"),
+            "missed_probability": missed_prob,
+            "missed_risk_percent": round(missed_prob * 100, 2),
+            "missed_risk_level": prediction.get("missed_risk_level"),
+            "missed_prediction": prediction.get("missed_prediction"),
+            "delay_reasons": delay_reasons,
+            "missed_reasons": missed_reasons,
+            "model_version": prediction.get("model_version"),
+            "created_at": prediction.get("created_at"),
+        })
 
     return {
-        "count": len(predictions),
-        "predictions": [
-            {
-                "id": prediction.id,
-
-                "medication_schedule_id": (
-                    prediction.medication_schedule_id
-                ),
-
-                "delay_probability": (
-                    prediction.delay_probability
-                ),
-
-                "delay_risk_percent": round(
-                    prediction.delay_probability * 100,
-                    2,
-                ),
-
-                "delay_risk_level": (
-                    prediction.delay_risk_level
-                ),
-
-                "delay_prediction": (
-                    prediction.delay_prediction
-                ),
-
-                "missed_probability": (
-                    prediction.missed_probability
-                ),
-
-                "missed_risk_percent": round(
-                    prediction.missed_probability * 100,
-                    2,
-                ),
-
-                "missed_risk_level": (
-                    prediction.missed_risk_level
-                ),
-
-                "missed_prediction": (
-                    prediction.missed_prediction
-                ),
-
-                "delay_reasons": json.loads(
-                    prediction.delay_reasons
-                )
-                if prediction.delay_reasons
-                else [],
-
-                "missed_reasons": json.loads(
-                    prediction.missed_reasons
-                )
-                if prediction.missed_reasons
-                else [],
-
-                "model_version": (
-                    prediction.model_version
-                ),
-
-                "created_at": prediction.created_at,
-            }
-            for prediction in predictions
-        ],
+        "count": len(results),
+        "predictions": results,
     }

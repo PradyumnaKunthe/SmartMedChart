@@ -1,13 +1,9 @@
-﻿from datetime import date, datetime
+from datetime import date, datetime
 import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError, PyMongoError
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.models import Encounter, Patient, Role, User
 from app.mongo_client import mongo_db
 from app.security import require_permission
 
@@ -44,7 +40,7 @@ class DoctorProfileRequest(BaseModel):
 # HELPERS
 # ---------------------------------------------------------
 
-def require_admin_permission(current_user: User):
+def require_admin_permission(current_user):
     permission_names = {
         permission.name
         for permission in current_user.role.permissions
@@ -104,16 +100,21 @@ def profile_to_dict(profile: dict | None, doctor_id: int) -> dict:
     }
 
 
-def find_active_doctor(db: Session, doctor_id: int) -> User:
-    doctor = db.scalar(
-        select(User)
-        .join(Role, User.role_id == Role.id)
-        .where(
-            User.id == doctor_id,
-            Role.name == "Doctor",
-            User.is_active.is_(True),
-        )
-    )
+def find_active_doctor(doctor_id: int):
+    doctor_role = mongo_db.roles.find_one({"name": "Doctor"})
+    role_id = doctor_role["id"] if doctor_role else 1
+
+    doctor = mongo_db.users.find_one({
+        "_id": doctor_id,
+        "role_id": role_id,
+        "is_active": {"$in": [1, True]},
+    })
+    if not doctor:
+        doctor = mongo_db.users.find_one({
+            "id": doctor_id,
+            "role_id": role_id,
+            "is_active": {"$in": [1, True]},
+        })
 
     if doctor is None:
         raise HTTPException(
@@ -130,22 +131,21 @@ def find_active_doctor(db: Session, doctor_id: int) -> User:
 
 @router.get("/admin/doctors")
 def get_carematch_doctors(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("MANAGE_USERS")
     ),
 ):
     require_admin_permission(current_user)
 
-    doctors = db.scalars(
-        select(User)
-        .join(Role, User.role_id == Role.id)
-        .where(
-            Role.name == "Doctor",
-            User.is_active.is_(True),
-        )
-        .order_by(User.full_name.asc())
-    ).all()
+    doctor_role = mongo_db.roles.find_one({"name": "Doctor"})
+    role_id = doctor_role["id"] if doctor_role else 1
+
+    doctors = list(
+        mongo_db.users.find({
+            "role_id": role_id,
+            "is_active": {"$in": [1, True]},
+        }).sort("full_name", 1)
+    )
 
     try:
         profiles = {
@@ -164,15 +164,15 @@ def get_carematch_doctors(
         "count": len(doctors),
         "doctors": [
             {
-                "id": doctor.id,
-                "full_name": doctor.full_name,
-                "username": doctor.username,
-                "email": doctor.email,
+                "id": doctor.get("id", doctor.get("_id")),
+                "full_name": doctor.get("full_name"),
+                "username": doctor.get("username"),
+                "email": doctor.get("email"),
                 "profile": profile_to_dict(
-                    profiles.get(doctor.id),
-                    doctor.id,
+                    profiles.get(doctor.get("id", doctor.get("_id"))),
+                    doctor.get("id", doctor.get("_id")),
                 ),
-                "profile_configured": doctor.id in profiles,
+                "profile_configured": doctor.get("id", doctor.get("_id")) in profiles,
             }
             for doctor in doctors
         ],
@@ -187,14 +187,14 @@ def get_carematch_doctors(
 def save_doctor_profile(
     doctor_id: int,
     request: DoctorProfileRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("MANAGE_USERS")
     ),
 ):
     require_admin_permission(current_user)
 
-    doctor = find_active_doctor(db, doctor_id)
+    doctor = find_active_doctor(doctor_id)
+    doc_id = doctor.get("id", doctor.get("_id"))
 
     specializations = clean_list(request.specializations)
     expertise_keywords = clean_list(request.expertise_keywords)
@@ -228,7 +228,7 @@ def save_doctor_profile(
     now = datetime.utcnow()
 
     profile_data = {
-        "doctor_id": doctor.id,
+        "doctor_id": doc_id,
         "qualifications": request.qualifications.strip(),
         "specializations": specializations,
         "experience_years": request.experience_years,
@@ -242,7 +242,7 @@ def save_doctor_profile(
 
     try:
         mongo_db.doctor_profiles.update_one(
-            {"doctor_id": doctor.id},
+            {"doctor_id": doc_id},
             {
                 "$set": profile_data,
                 "$setOnInsert": {"created_at": now},
@@ -259,15 +259,17 @@ def save_doctor_profile(
     return {
         "message": "Doctor profile saved successfully.",
         "doctor": {
-            "id": doctor.id,
-            "full_name": doctor.full_name,
-            "username": doctor.username,
+            "id": doc_id,
+            "full_name": doctor.get("full_name"),
+            "username": doctor.get("username"),
         },
         "profile": profile_to_dict(
             profile_data,
-            doctor.id,
+            doc_id,
         ),
     }
+
+
 # =========================================================
 # CAREMATCH: RECOMMEND AVAILABLE DOCTORS
 # =========================================================
@@ -275,8 +277,7 @@ def save_doctor_profile(
 @router.post("/recommendations")
 def recommend_doctors(
     request: dict,
-    db=Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("REGISTER_PATIENT")
     ),
 ):
@@ -302,20 +303,20 @@ def recommend_doctors(
             status_code=400,
             detail="Visit reason is too long.",
         )
-        preferred_language = str(
+
+    preferred_language = str(
         request.get("preferred_language") or ""
     ).strip().casefold()
 
-    # Find active doctor accounts in the existing SQL database.
-    doctors = db.scalars(
-        select(User)
-        .join(Role, User.role_id == Role.id)
-        .where(
-            Role.name == "Doctor",
-            User.is_active.is_(True),
-        )
-        .order_by(User.full_name.asc())
-    ).all()
+    doctor_role = mongo_db.roles.find_one({"name": "Doctor"})
+    role_id = doctor_role["id"] if doctor_role else 1
+
+    doctors = list(
+        mongo_db.users.find({
+            "role_id": role_id,
+            "is_active": {"$in": [1, True]},
+        }).sort("full_name", 1)
+    )
 
     if not doctors:
         return {
@@ -324,14 +325,15 @@ def recommend_doctors(
             "message": "No active doctors are registered.",
         }
 
-    # Use the same doctor_profiles collection as the
-    # existing administrator Doctor Profiles page.
+    doctor_ids = [
+        d.get("id", d.get("_id"))
+        for d in doctors
+    ]
+
     try:
         profiles = list(
             mongo_db.doctor_profiles.find({
-                "doctor_id": {
-                    "$in": [doctor.id for doctor in doctors]
-                },
+                "doctor_id": {"$in": doctor_ids},
                 "is_available": True,
             })
         )
@@ -345,8 +347,8 @@ def recommend_doctors(
         ) from exc
 
     doctors_by_id = {
-        doctor.id: doctor
-        for doctor in doctors
+        d.get("id", d.get("_id")): d
+        for d in doctors
     }
 
     reason_lower = reason.casefold()
@@ -367,6 +369,9 @@ def recommend_doctors(
 
         if doctor is None:
             continue
+
+        doc_id = doctor.get("id", doctor.get("_id"))
+        doc_name = doctor.get("full_name")
 
         specializations = profile.get(
             "specializations", []
@@ -389,7 +394,8 @@ def recommend_doctors(
                 for item in expertise.split(",")
                 if item.strip()
             ]
-                    # Match the patient's preferred language.
+
+        # Match the patient's preferred language.
         languages = profile.get("languages", [])
 
         if isinstance(languages, str):
@@ -451,8 +457,8 @@ def recommend_doctors(
             match_reasons = unique_matches[:5]
 
         recommendations.append({
-            "doctor_id": doctor.id,
-            "full_name": doctor.full_name,
+            "doctor_id": doc_id,
+            "full_name": doc_name,
             "qualifications": profile.get(
                 "qualifications", ""
             ),
@@ -477,6 +483,7 @@ def recommend_doctors(
             item["full_name"].casefold(),
         )
     )
+
     return {
         "count": len(recommendations),
         "recommendations": recommendations,
@@ -487,6 +494,8 @@ def recommend_doctors(
             "specializations and availability."
         ),
     }
+
+
 # =========================================================
 # CAREMATCH: SAVE APPOINTMENT
 # =========================================================
@@ -494,12 +503,11 @@ def recommend_doctors(
 @router.post("/appointments")
 def save_carematch_appointment(
     request: dict,
-    db=Depends(get_db),
     current_user=Depends(
         require_permission("REGISTER_PATIENT")
     ),
 ):
-    """Save appointment metadata linked to existing SQL records."""
+    """Save appointment metadata linked to patient records."""
 
     try:
         patient_id = int(request.get("patient_id"))
@@ -552,8 +560,13 @@ def save_carematch_appointment(
             detail="The appointment date cannot be in the past.",
         )
 
-    # Confirm the patient exists in the existing SQL database.
-    patient = db.get(Patient, patient_id)
+    # Confirm the patient exists in MongoDB.
+    patient = mongo_db.patients.find_one({
+        "$or": [
+            {"_id": patient_id},
+            {"id": patient_id},
+        ]
+    })
 
     if patient is None:
         raise HTTPException(
@@ -561,12 +574,19 @@ def save_carematch_appointment(
             detail="Patient not found.",
         )
 
-    # Confirm the encounter belongs to this patient.
-    encounter = db.get(Encounter, encounter_id)
+    actual_patient_id = patient.get("id", patient.get("_id"))
+
+    # Confirm the encounter belongs to this patient in MongoDB.
+    encounter = mongo_db.encounters.find_one({
+        "$or": [
+            {"_id": encounter_id},
+            {"id": encounter_id},
+        ]
+    })
 
     if (
         encounter is None
-        or encounter.patient_id != patient.id
+        or encounter.get("patient_id") != actual_patient_id
     ):
         raise HTTPException(
             status_code=400,
@@ -574,8 +594,8 @@ def save_carematch_appointment(
         )
 
     if (
-        encounter.doctor_id != doctor_id
-        or encounter.status != "ACTIVE"
+        encounter.get("doctor_id") != doctor_id
+        or encounter.get("status") != "ACTIVE"
     ):
         raise HTTPException(
             status_code=400,
@@ -585,27 +605,15 @@ def save_carematch_appointment(
             ),
         )
 
-    # Confirm the doctor account is still active.
-    doctor = db.scalar(
-        select(User)
-        .join(Role, User.role_id == Role.id)
-        .where(
-            User.id == doctor_id,
-            Role.name == "Doctor",
-            User.is_active.is_(True),
-        )
-    )
-
-    if doctor is None:
-        raise HTTPException(
-            status_code=404,
-            detail="The selected doctor is no longer active.",
-        )
+    # Confirm the doctor account is still active in MongoDB.
+    doctor = find_active_doctor(doctor_id)
+    doc_id = doctor.get("id", doctor.get("_id"))
+    doc_name = doctor.get("full_name")
 
     # Recheck the doctor's current availability in MongoDB.
     try:
         profile = mongo_db.doctor_profiles.find_one({
-            "doctor_id": doctor_id,
+            "doctor_id": doc_id,
             "is_available": True,
         })
 
@@ -633,10 +641,10 @@ def save_carematch_appointment(
         )
 
         appointment_doc = {
-            "patient_id": patient.id,
-            "encounter_id": encounter.id,
-            "doctor_id": doctor.id,
-            "doctor_name": doctor.full_name,
+            "patient_id": actual_patient_id,
+            "encounter_id": encounter.get("id", encounter.get("_id")),
+            "doctor_id": doc_id,
+            "doctor_name": doc_name,
             "visit_reason": visit_reason,
             "appointment_date": parsed_date.isoformat(),
             "appointment_time": parsed_time,
@@ -666,10 +674,10 @@ def save_carematch_appointment(
         "message": "Appointment saved successfully.",
         "appointment": {
             "id": str(saved.inserted_id),
-            "patient_id": patient.id,
-            "encounter_id": encounter.id,
-            "doctor_id": doctor.id,
-            "doctor_name": doctor.full_name,
+            "patient_id": actual_patient_id,
+            "encounter_id": encounter.get("id", encounter.get("_id")),
+            "doctor_id": doc_id,
+            "doctor_name": doc_name,
             "appointment_date": parsed_date.isoformat(),
             "appointment_time": parsed_time,
             "status": "BOOKED",

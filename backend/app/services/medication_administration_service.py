@@ -1,10 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.models.medication_administration import MedicationAdministration
-from app.models.medication_schedule import MedicationSchedule
+from app.mongo_client import mongo_db, next_mongo_id
 
 
 VALID_ADMINISTRATION_STATUSES = {
@@ -17,18 +13,15 @@ VALID_ADMINISTRATION_STATUSES = {
 
 
 def record_medication_administration(
-    db: Session,
     medication_schedule_id: int,
     administered_by: int,
     status: str,
     notes: str | None = None,
     administered_at: datetime | None = None,
-) -> MedicationAdministration:
+    db=None,
+) -> dict:
     """
-    Record the result of a medication administration attempt.
-
-    The schedule is the planned medication event.
-    The administration record stores what actually happened.
+    Record the result of a medication administration attempt using MongoDB.
     """
 
     status = status.upper().strip()
@@ -39,24 +32,24 @@ def record_medication_administration(
             f"Allowed values: {', '.join(sorted(VALID_ADMINISTRATION_STATUSES))}"
         )
 
-    schedule = db.scalar(
-        select(MedicationSchedule).where(
-            MedicationSchedule.id == medication_schedule_id
-        )
-    )
+    schedule = mongo_db.medication_schedules.find_one({
+        "$or": [
+            {"_id": medication_schedule_id},
+            {"id": medication_schedule_id},
+        ]
+    })
 
     if schedule is None:
         raise ValueError(
             f"Medication schedule {medication_schedule_id} was not found."
         )
 
+    actual_schedule_id = schedule.get("id", schedule.get("_id"))
+
     # Prevent the same scheduled dose from being recorded multiple times.
-    existing = db.scalar(
-        select(MedicationAdministration).where(
-            MedicationAdministration.medication_schedule_id
-            == medication_schedule_id
-        )
-    )
+    existing = mongo_db.medication_administrations.find_one({
+        "medication_schedule_id": actual_schedule_id
+    })
 
     if existing is not None:
         raise ValueError(
@@ -67,22 +60,38 @@ def record_medication_administration(
     if administered_at is None:
         administered_at = datetime.utcnow()
 
-    administration = MedicationAdministration(
-        medication_schedule_id=medication_schedule_id,
-        administered_by=administered_by,
-        status=status,
-        administered_at=administered_at,
-        notes=notes,
+    administered_at_str = (
+        administered_at.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(administered_at, datetime)
+        else str(administered_at)
     )
 
-    db.add(administration)
+    new_id = next_mongo_id("medication_administrations")
+    administration = {
+        "_id": new_id,
+        "id": new_id,
+        "medication_schedule_id": actual_schedule_id,
+        "administered_by": administered_by,
+        "status": status,
+        "administered_at": administered_at_str,
+        "notes": notes,
+        "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    mongo_db.medication_administrations.insert_one(administration)
 
     # Keep the schedule synchronized with the actual result.
-    schedule.status = status
-    schedule.actual_administration_time = administered_at
-    schedule.administered_by = administered_by
-
-    db.commit()
-    db.refresh(administration)
+    mongo_db.medication_schedules.update_one(
+        {"$or": [{"_id": actual_schedule_id}, {"id": actual_schedule_id}]},
+        {
+            "$set": {
+                "status": status,
+                "actual_administration_time": administered_at_str,
+                "administered_by": administered_by,
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        },
+    )
 
     return administration

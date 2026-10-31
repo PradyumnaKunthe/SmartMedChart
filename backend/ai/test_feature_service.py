@@ -1,39 +1,23 @@
-from sqlalchemy import select
-
-from app.database import SessionLocal
-from app.models import MedicationSchedule
+from app.mongo_client import mongo_db
 from ai.feature_service import build_medication_features
 
 
-db = SessionLocal()
+schedule = mongo_db.medication_schedules.find_one({"$or": [{"_id": 2}, {"id": 2}]})
+if schedule is None:
+    schedule = mongo_db.medication_schedules.find_one()
 
-try:
-    schedule = db.scalar(
-        select(MedicationSchedule).where(
-            MedicationSchedule.id == 2
-        )
-    )
+if schedule is None:
+    raise RuntimeError("No medication schedule found in MongoDB.")
 
-    if schedule is None:
-        raise RuntimeError(
-            "Medication schedule 2 was not found."
-        )
+sched_id = schedule.get("id", schedule.get("_id"))
+features = build_medication_features(schedule_id=sched_id)
 
-    features = build_medication_features(
-        db=db,
-        schedule_id=2,
-    )
+print("=" * 60)
+print("SMARTMEDCHART AI FEATURE EXTRACTION (MONGODB)")
+print("=" * 60)
 
-    print("=" * 60)
-    print("SMARTMEDCHART AI FEATURE EXTRACTION")
-    print("=" * 60)
+print("\nSchedule ID:", sched_id)
 
-    print("\nSchedule ID:", schedule.id)
-
-    print("\nAI features:")
-
-    for key, value in features.items():
-        print(f"{key}: {value}")
-
-finally:
-    db.close()
+print("\nAI features:")
+for key, value in features.items():
+    print(f"{key}: {value}")

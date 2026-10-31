@@ -3,48 +3,52 @@ import secrets
 from datetime import datetime, timezone
 
 import qrcode
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.models import Patient
+from app.mongo_client import mongo_db
 
 
-def generate_unique_qr_token(
-    db: Session,
-) -> str:
+def generate_unique_qr_token() -> str:
     """
     Generate a cryptographically secure, unique QR token.
     """
-
     while True:
         token = secrets.token_urlsafe(32)
 
-        existing_patient = db.scalar(
-            select(Patient).where(
-                Patient.qr_token == token
-            )
-        )
+        existing_patient = mongo_db.patients.find_one({
+            "qr_token": token
+        })
 
         if existing_patient is None:
             return token
 
 
 def generate_patient_qr_token(
-    db: Session,
-    patient: Patient,
+    patient_id: int,
+    db=None,
+    patient=None,
 ) -> str:
     """
-    Generate and save a new QR token for a patient.
+    Generate and save a new QR token for a patient in MongoDB.
     """
+    token = generate_unique_qr_token()
+    now = datetime.now(timezone.utc).isoformat()
 
-    token = generate_unique_qr_token(db)
-
-    patient.qr_token = token
-    patient.qr_generated_at = datetime.now(timezone.utc)
-    patient.qr_is_active = True
-
-    db.commit()
-    db.refresh(patient)
+    mongo_db.patients.update_one(
+        {
+            "$or": [
+                {"_id": patient_id},
+                {"id": patient_id},
+            ]
+        },
+        {
+            "$set": {
+                "qr_token": token,
+                "qr_generated_at": now,
+                "qr_is_active": True,
+                "updated_at": now,
+            }
+        },
+    )
 
     return token
 
@@ -55,7 +59,6 @@ def create_patient_qr_image(
     """
     Create a PNG QR image containing only the secure token.
     """
-
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,

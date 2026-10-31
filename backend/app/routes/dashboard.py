@@ -1,24 +1,9 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
-from app.database import get_db
-
-from app.models import (
-    AIPrediction,
-    MedicationAdministration,
-    MedicationSchedule,
-    Medicine,
-    Patient,
-    Prescription,
-    PrescriptionItem,
-    User,
-)
-
+from app.mongo_client import mongo_db
 from app.security import require_permission
-
 from app.services.medication_safety_service import (
     check_medication_safety,
 )
@@ -34,7 +19,7 @@ router = APIRouter(
 # Helpers
 # =========================================================
 
-def schedule_status_counts(db: Session):
+def schedule_status_counts():
     statuses = [
         "GIVEN",
         "UPCOMING",
@@ -45,21 +30,10 @@ def schedule_status_counts(db: Session):
     ]
 
     result = {}
-
     for status in statuses:
-        result[status.lower()] = int(
-            db.scalar(
-                select(
-                    func.count(
-                        MedicationSchedule.id
-                    )
-                ).where(
-                    MedicationSchedule.status
-                    == status
-                )
-            )
-            or 0
-        )
+        result[status.lower()] = mongo_db.medication_schedules.count_documents({
+            "status": status
+        })
 
     return result
 
@@ -70,152 +44,64 @@ def schedule_status_counts(db: Session):
 
 @router.get("/medication-summary")
 def get_medication_summary(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Return medication monitoring statistics.
-
-    Counts are calculated from medication schedule
-    records in the database.
+    Return medication monitoring statistics from MongoDB.
     """
 
-    total = int(
-        db.scalar(
-            select(
-                func.count(
-                    MedicationSchedule.id
-                )
-            )
+    total = mongo_db.medication_schedules.count_documents({})
+    counts = schedule_status_counts()
+
+    today_str = date.today().isoformat()
+    today_filter = {"scheduled_date": {"$regex": f"^{today_str}"}}
+
+    today_total = mongo_db.medication_schedules.count_documents(today_filter)
+    today_given = mongo_db.medication_schedules.count_documents({
+        **today_filter,
+        "status": "GIVEN",
+    })
+    today_upcoming = mongo_db.medication_schedules.count_documents({
+        **today_filter,
+        "status": "UPCOMING",
+    })
+    today_delayed = mongo_db.medication_schedules.count_documents({
+        **today_filter,
+        "status": "DELAYED",
+    })
+
+    # Count schedules with stat prescription items
+    stat_item_docs = list(
+        mongo_db.prescription_items.find(
+            {"is_stat": {"$in": [1, True]}},
+            {"_id": 1, "id": 1},
         )
-        or 0
+    )
+    stat_item_ids = [
+        it.get("id", it.get("_id"))
+        for it in stat_item_docs
+    ]
+    stat = (
+        mongo_db.medication_schedules.count_documents({
+            "prescription_item_id": {"$in": stat_item_ids}
+        })
+        if stat_item_ids
+        else 0
     )
 
-
-    counts = schedule_status_counts(db)
-
-
-    today = date.today()
-
-
-    today_total = int(
-        db.scalar(
-            select(
-                func.count(
-                    MedicationSchedule.id
-                )
-            ).where(
-                MedicationSchedule.scheduled_date
-                == today
-            )
-        )
-        or 0
-    )
-
-
-    today_given = int(
-        db.scalar(
-            select(
-                func.count(
-                    MedicationSchedule.id
-                )
-            ).where(
-                MedicationSchedule.scheduled_date
-                == today,
-                MedicationSchedule.status
-                == "GIVEN",
-            )
-        )
-        or 0
-    )
-
-
-    today_upcoming = int(
-        db.scalar(
-            select(
-                func.count(
-                    MedicationSchedule.id
-                )
-            ).where(
-                MedicationSchedule.scheduled_date
-                == today,
-                MedicationSchedule.status
-                == "UPCOMING",
-            )
-        )
-        or 0
-    )
-
-
-    today_delayed = int(
-        db.scalar(
-            select(
-                func.count(
-                    MedicationSchedule.id
-                )
-            ).where(
-                MedicationSchedule.scheduled_date
-                == today,
-                MedicationSchedule.status
-                == "DELAYED",
-            )
-        )
-        or 0
-    )
-
-
-    stat = int(
-        db.scalar(
-            select(
-                func.count(
-                    MedicationSchedule.id
-                )
-            )
-            .join(
-                MedicationSchedule.prescription_item
-            )
-            .where(
-                MedicationSchedule.prescription_item.has(
-                    is_stat=True
-                )
-            )
-        )
-        or 0
-    )
-
-
-    ai_high_risk = int(
-        db.scalar(
-            select(
-                func.count(
-                    AIPrediction.id
-                )
-            ).where(
-                (
-                    AIPrediction.delay_risk_level
-                    == "HIGH"
-                )
-                |
-                (
-                    AIPrediction.missed_risk_level
-                    == "HIGH"
-                )
-            )
-        )
-        or 0
-    )
-
+    ai_high_risk = mongo_db.ai_predictions.count_documents({
+        "$or": [
+            {"delay_risk_level": "HIGH"},
+            {"missed_risk_level": "HIGH"},
+        ]
+    })
 
     return {
         "message": (
-            "Medication monitoring summary "
-            "generated successfully."
+            "Medication monitoring summary generated successfully."
         ),
-
         "summary": {
             "total": total,
             "given": counts["given"],
@@ -227,7 +113,6 @@ def get_medication_summary(
             "stat": stat,
             "ai_high_risk": ai_high_risk,
         },
-
         "today": {
             "total": today_total,
             "given": today_given,
@@ -241,9 +126,7 @@ def get_medication_summary(
 # Technical Schedule Monitoring
 # =========================================================
 
-@router.get(
-    "/monitoring/schedules"
-)
+@router.get("/monitoring/schedules")
 def get_monitoring_schedules(
     status: str | None = Query(
         default=None,
@@ -254,227 +137,164 @@ def get_monitoring_schedules(
         ge=1,
         le=500,
     ),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Return detailed medication schedules
-    with patient, medicine, prescription,
-    and administration information.
+    Return detailed medication schedules with patient,
+    medicine, prescription, and administration information.
     """
 
-    query = (
-        select(
-            MedicationSchedule.id.label(
-                "schedule_id"
-            ),
+    filter_query = {}
+    if isinstance(status, str) and status.strip():
+        filter_query["status"] = status.upper().strip()
 
-            MedicationSchedule.scheduled_date,
+    actual_limit = limit if isinstance(limit, int) else 100
 
-            MedicationSchedule.scheduled_time,
-
-            MedicationSchedule.status,
-
-            MedicationSchedule.actual_administration_time,
-
-            MedicationSchedule.administered_by,
-
-            MedicationSchedule.notes,
-
-            Prescription.id.label(
-                "prescription_id"
-            ),
-
-            Prescription.patient_id,
-
-            Prescription.doctor_id,
-
-            Prescription.status.label(
-                "prescription_status"
-            ),
-
-            PrescriptionItem.id.label(
-                "prescription_item_id"
-            ),
-
-            PrescriptionItem.dose,
-
-            PrescriptionItem.route,
-
-            PrescriptionItem.frequency,
-
-            PrescriptionItem.duration_days,
-
-            PrescriptionItem.is_stat,
-
-            PrescriptionItem.instructions,
-
-            Medicine.id.label(
-                "medicine_id"
-            ),
-
-            Medicine.name.label(
-                "medicine_name"
-            ),
-
-            Medicine.generic_name.label(
-                "generic_name"
-            ),
-
-            Medicine.strength.label(
-                "medicine_strength"
-            ),
-
-            Patient.patient_id.label(
-                "patient_code"
-            ),
-
-            Patient.first_name,
-
-            Patient.last_name,
-
-            User.username.label(
-                "administered_by_username"
-            ),
-        )
-        .join(
-            PrescriptionItem,
-            MedicationSchedule.prescription_item_id
-            == PrescriptionItem.id,
-        )
-        .join(
-            Prescription,
-            PrescriptionItem.prescription_id
-            == Prescription.id,
-        )
-        .join(
-            Medicine,
-            PrescriptionItem.medicine_id
-            == Medicine.id,
-        )
-        .join(
-            Patient,
-            Prescription.patient_id
-            == Patient.id,
-        )
-        .outerjoin(
-            User,
-            MedicationSchedule.administered_by
-            == User.id,
-        )
+    schedules = list(
+        mongo_db.medication_schedules.find(filter_query)
+        .sort([
+            ("scheduled_date", -1),
+            ("scheduled_time", -1),
+            ("_id", -1),
+        ])
+        .limit(actual_limit)
     )
 
+    # Bulk fetch related records
+    item_ids = list({
+        s.get("prescription_item_id")
+        for s in schedules
+        if s.get("prescription_item_id") is not None
+    })
+    item_docs = list(
+        mongo_db.prescription_items.find({
+            "$or": [
+                {"_id": {"$in": item_ids}},
+                {"id": {"$in": item_ids}},
+            ]
+        })
+    ) if item_ids else []
+    item_map = {
+        it.get("id", it.get("_id")): it
+        for it in item_docs
+    }
 
-    if status:
-        query = query.where(
-            MedicationSchedule.status
-            == status.upper().strip()
-        )
+    rx_ids = list({
+        it.get("prescription_id")
+        for it in item_docs
+        if it.get("prescription_id") is not None
+    })
+    rx_docs = list(
+        mongo_db.prescriptions.find({
+            "$or": [
+                {"_id": {"$in": rx_ids}},
+                {"id": {"$in": rx_ids}},
+            ]
+        })
+    ) if rx_ids else []
+    rx_map = {
+        rx.get("id", rx.get("_id")): rx
+        for rx in rx_docs
+    }
 
+    med_ids = list({
+        it.get("medicine_id")
+        for it in item_docs
+        if it.get("medicine_id") is not None
+    })
+    med_docs = list(
+        mongo_db.medicines.find({
+            "$or": [
+                {"_id": {"$in": med_ids}},
+                {"id": {"$in": med_ids}},
+            ]
+        })
+    ) if med_ids else []
+    med_map = {
+        m.get("id", m.get("_id")): m
+        for m in med_docs
+    }
 
-    query = (
-        query
-        .order_by(
-            MedicationSchedule.scheduled_date.desc(),
-            MedicationSchedule.scheduled_time.desc(),
-            MedicationSchedule.id.desc(),
-        )
-        .limit(limit)
-    )
+    pat_ids = list({
+        rx.get("patient_id")
+        for rx in rx_docs
+        if rx.get("patient_id") is not None
+    })
+    pat_docs = list(
+        mongo_db.patients.find({
+            "$or": [
+                {"_id": {"$in": pat_ids}},
+                {"id": {"$in": pat_ids}},
+            ]
+        })
+    ) if pat_ids else []
+    pat_map = {
+        p.get("id", p.get("_id")): p
+        for p in pat_docs
+    }
 
+    user_ids = list({
+        s.get("administered_by")
+        for s in schedules
+        if s.get("administered_by") is not None
+    })
+    user_docs = list(
+        mongo_db.users.find({
+            "$or": [
+                {"_id": {"$in": user_ids}},
+                {"id": {"$in": user_ids}},
+            ]
+        })
+    ) if user_ids else []
+    user_map = {
+        u.get("id", u.get("_id")): u
+        for u in user_docs
+    }
 
-    rows = db.execute(query).all()
+    results = []
+    for s in schedules:
+        sched_id = s.get("id", s.get("_id"))
+        item = item_map.get(s.get("prescription_item_id"), {})
+        rx = rx_map.get(item.get("prescription_id"), {})
+        med = med_map.get(item.get("medicine_id"), {})
+        pat = pat_map.get(rx.get("patient_id"), {})
+        user = user_map.get(s.get("administered_by"), {})
 
+        pat_name = f"{pat.get('first_name', '')} {pat.get('last_name', '')}".strip() or "Unknown Patient"
+
+        results.append({
+            "schedule_id": sched_id,
+            "scheduled_date": s.get("scheduled_date"),
+            "scheduled_time": s.get("scheduled_time"),
+            "status": s.get("status"),
+            "actual_administration_time": s.get("actual_administration_time"),
+            "administered_by": s.get("administered_by"),
+            "administered_by_username": user.get("username"),
+            "notes": s.get("notes"),
+            "prescription_id": rx.get("id", rx.get("_id")),
+            "prescription_item_id": item.get("id", item.get("_id")),
+            "prescription_status": rx.get("status"),
+            "patient_id": pat.get("id", pat.get("_id")),
+            "patient_code": pat.get("patient_id"),
+            "patient_name": pat_name,
+            "doctor_id": rx.get("doctor_id"),
+            "medicine_id": med.get("id", med.get("_id")),
+            "medicine_name": med.get("name"),
+            "generic_name": med.get("generic_name"),
+            "medicine_strength": med.get("strength"),
+            "dose": item.get("dose"),
+            "route": item.get("route"),
+            "frequency": item.get("frequency"),
+            "duration_days": item.get("duration_days"),
+            "is_stat": bool(item.get("is_stat") in [1, True]),
+            "instructions": item.get("instructions"),
+        })
 
     return {
-        "count": len(rows),
-
-        "schedules": [
-            {
-                "schedule_id":
-                    row.schedule_id,
-
-                "scheduled_date":
-                    row.scheduled_date,
-
-                "scheduled_time":
-                    row.scheduled_time,
-
-                "status":
-                    row.status,
-
-                "actual_administration_time":
-                    row.actual_administration_time,
-
-                "administered_by":
-                    row.administered_by,
-
-                "administered_by_username":
-                    row.administered_by_username,
-
-                "notes":
-                    row.notes,
-
-                "prescription_id":
-                    row.prescription_id,
-
-                "prescription_item_id":
-                    row.prescription_item_id,
-
-                "prescription_status":
-                    row.prescription_status,
-
-                "patient_id":
-                    row.patient_id,
-
-                "patient_code":
-                    row.patient_code,
-
-                "patient_name":
-                    (
-                        f"{row.first_name} "
-                        f"{row.last_name}"
-                    ),
-
-                "doctor_id":
-                    row.doctor_id,
-
-                "medicine_id":
-                    row.medicine_id,
-
-                "medicine_name":
-                    row.medicine_name,
-
-                "generic_name":
-                    row.generic_name,
-
-                "medicine_strength":
-                    row.medicine_strength,
-
-                "dose":
-                    row.dose,
-
-                "route":
-                    row.route,
-
-                "frequency":
-                    row.frequency,
-
-                "duration_days":
-                    row.duration_days,
-
-                "is_stat":
-                    row.is_stat,
-
-                "instructions":
-                    row.instructions,
-            }
-            for row in rows
-        ],
+        "count": len(results),
+        "schedules": results,
     }
 
 
@@ -482,175 +302,171 @@ def get_monitoring_schedules(
 # AI Monitoring
 # =========================================================
 
-@router.get(
-    "/monitoring/ai"
-)
+@router.get("/monitoring/ai")
 def get_ai_monitoring(
     limit: int = Query(
         default=100,
         ge=1,
         le=500,
     ),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Return recent AI medication risk predictions.
+    Return recent AI medication risk predictions from MongoDB.
     """
 
-    rows = db.execute(
-        select(
-            AIPrediction,
+    actual_limit = limit if isinstance(limit, int) else 100
 
-            MedicationSchedule.scheduled_date,
+    ai_preds = list(
+        mongo_db.ai_predictions.find()
+        .sort([("_id", -1)])
+        .limit(actual_limit)
+    )
 
-            MedicationSchedule.scheduled_time,
+    sched_ids = list({
+        p.get("medication_schedule_id")
+        for p in ai_preds
+        if p.get("medication_schedule_id") is not None
+    })
+    sched_docs = list(
+        mongo_db.medication_schedules.find({
+            "$or": [
+                {"_id": {"$in": sched_ids}},
+                {"id": {"$in": sched_ids}},
+            ]
+        })
+    ) if sched_ids else []
+    sched_map = {
+        s.get("id", s.get("_id")): s
+        for s in sched_docs
+    }
 
-            Patient.patient_id.label(
-                "patient_code"
-            ),
+    item_ids = list({
+        s.get("prescription_item_id")
+        for s in sched_docs
+        if s.get("prescription_item_id") is not None
+    })
+    item_docs = list(
+        mongo_db.prescription_items.find({
+            "$or": [
+                {"_id": {"$in": item_ids}},
+                {"id": {"$in": item_ids}},
+            ]
+        })
+    ) if item_ids else []
+    item_map = {
+        it.get("id", it.get("_id")): it
+        for it in item_docs
+    }
 
-            Patient.first_name,
+    rx_ids = list({
+        it.get("prescription_id")
+        for it in item_docs
+        if it.get("prescription_id") is not None
+    })
+    rx_docs = list(
+        mongo_db.prescriptions.find({
+            "$or": [
+                {"_id": {"$in": rx_ids}},
+                {"id": {"$in": rx_ids}},
+            ]
+        })
+    ) if rx_ids else []
+    rx_map = {
+        rx.get("id", rx.get("_id")): rx
+        for rx in rx_docs
+    }
 
-            Patient.last_name,
+    pat_ids = list({
+        rx.get("patient_id")
+        for rx in rx_docs
+        if rx.get("patient_id") is not None
+    })
+    pat_docs = list(
+        mongo_db.patients.find({
+            "$or": [
+                {"_id": {"$in": pat_ids}},
+                {"id": {"$in": pat_ids}},
+            ]
+        })
+    ) if pat_ids else []
+    pat_map = {
+        p.get("id", p.get("_id")): p
+        for p in pat_docs
+    }
 
-            Medicine.name.label(
-                "medicine_name"
-            ),
-        )
-        .join(
-            MedicationSchedule,
-            AIPrediction.medication_schedule_id
-            == MedicationSchedule.id,
-        )
-        .join(
-            PrescriptionItem,
-            MedicationSchedule.prescription_item_id
-            == PrescriptionItem.id,
-        )
-        .join(
-            Prescription,
-            PrescriptionItem.prescription_id
-            == Prescription.id,
-        )
-        .join(
-            Patient,
-            Prescription.patient_id
-            == Patient.id,
-        )
-        .join(
-            Medicine,
-            PrescriptionItem.medicine_id
-            == Medicine.id,
-        )
-        .order_by(
-            AIPrediction.id.desc()
-        )
-        .limit(limit)
-    ).all()
-
+    med_ids = list({
+        it.get("medicine_id")
+        for it in item_docs
+        if it.get("medicine_id") is not None
+    })
+    med_docs = list(
+        mongo_db.medicines.find({
+            "$or": [
+                {"_id": {"$in": med_ids}},
+                {"id": {"$in": med_ids}},
+            ]
+        })
+    ) if med_ids else []
+    med_map = {
+        m.get("id", m.get("_id")): m
+        for m in med_docs
+    }
 
     high = 0
     medium = 0
     low = 0
-
-
     predictions = []
 
-
-    for row in rows:
-
-        ai = row[0]
-
-
+    for ai in ai_preds:
         levels = [
-            ai.delay_risk_level,
-            ai.missed_risk_level,
+            ai.get("delay_risk_level"),
+            ai.get("missed_risk_level"),
         ]
-
 
         if "HIGH" in levels:
             high += 1
-
         elif "MEDIUM" in levels:
             medium += 1
-
         else:
             low += 1
 
+        sched = sched_map.get(ai.get("medication_schedule_id"), {})
+        item = item_map.get(sched.get("prescription_item_id"), {})
+        rx = rx_map.get(item.get("prescription_id"), {})
+        pat = pat_map.get(rx.get("patient_id"), {})
+        med = med_map.get(item.get("medicine_id"), {})
 
-        predictions.append(
-            {
-                "prediction_id":
-                    ai.id,
+        delay_prob = float(ai.get("delay_probability") or 0.0)
+        missed_prob = float(ai.get("missed_probability") or 0.0)
+        pat_name = f"{pat.get('first_name', '')} {pat.get('last_name', '')}".strip() or "Unknown Patient"
 
-                "schedule_id":
-                    ai.medication_schedule_id,
-
-                "patient_code":
-                    row.patient_code,
-
-                "patient_name":
-                    (
-                        f"{row.first_name} "
-                        f"{row.last_name}"
-                    ),
-
-                "medicine_name":
-                    row.medicine_name,
-
-                "scheduled_date":
-                    row.scheduled_date,
-
-                "scheduled_time":
-                    row.scheduled_time,
-
-                "delay_probability":
-                    ai.delay_probability,
-
-                "delay_risk_percent":
-                    round(
-                        ai.delay_probability * 100,
-                        2,
-                    ),
-
-                "delay_risk_level":
-                    ai.delay_risk_level,
-
-                "missed_probability":
-                    ai.missed_probability,
-
-                "missed_risk_percent":
-                    round(
-                        ai.missed_probability * 100,
-                        2,
-                    ),
-
-                "missed_risk_level":
-                    ai.missed_risk_level,
-            }
-        )
-
+        predictions.append({
+            "prediction_id": ai.get("id", ai.get("_id")),
+            "schedule_id": ai.get("medication_schedule_id"),
+            "patient_code": pat.get("patient_id"),
+            "patient_name": pat_name,
+            "medicine_name": med.get("name"),
+            "scheduled_date": sched.get("scheduled_date"),
+            "scheduled_time": sched.get("scheduled_time"),
+            "delay_probability": delay_prob,
+            "delay_risk_percent": round(delay_prob * 100, 2),
+            "delay_risk_level": ai.get("delay_risk_level"),
+            "missed_probability": missed_prob,
+            "missed_risk_percent": round(missed_prob * 100, 2),
+            "missed_risk_level": ai.get("missed_risk_level"),
+        })
 
     return {
-        "count":
-            len(predictions),
-
+        "count": len(predictions),
         "risk_summary": {
-            "high":
-                high,
-            "medium":
-                medium,
-            "low":
-                low,
+            "high": high,
+            "medium": medium,
+            "low": low,
         },
-
-        "predictions":
-            predictions,
+        "predictions": predictions,
     }
 
 
@@ -658,134 +474,166 @@ def get_ai_monitoring(
 # Administration Monitoring
 # =========================================================
 
-@router.get(
-    "/monitoring/administrations"
-)
+@router.get("/monitoring/administrations")
 def get_administration_monitoring(
     limit: int = Query(
         default=100,
         ge=1,
         le=500,
     ),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Return detailed medication administration audit data.
+    Return detailed medication administration audit data from MongoDB.
     """
 
-    rows = db.execute(
-        select(
-            MedicationAdministration,
+    actual_limit = limit if isinstance(limit, int) else 100
 
-            MedicationSchedule.scheduled_date,
+    admins = list(
+        mongo_db.medication_administrations.find()
+        .sort([("_id", -1)])
+        .limit(actual_limit)
+    )
 
-            MedicationSchedule.scheduled_time,
+    sched_ids = list({
+        a.get("medication_schedule_id")
+        for a in admins
+        if a.get("medication_schedule_id") is not None
+    })
+    sched_docs = list(
+        mongo_db.medication_schedules.find({
+            "$or": [
+                {"_id": {"$in": sched_ids}},
+                {"id": {"$in": sched_ids}},
+            ]
+        })
+    ) if sched_ids else []
+    sched_map = {
+        s.get("id", s.get("_id")): s
+        for s in sched_docs
+    }
 
-            Patient.patient_id.label(
-                "patient_code"
-            ),
+    item_ids = list({
+        s.get("prescription_item_id")
+        for s in sched_docs
+        if s.get("prescription_item_id") is not None
+    })
+    item_docs = list(
+        mongo_db.prescription_items.find({
+            "$or": [
+                {"_id": {"$in": item_ids}},
+                {"id": {"$in": item_ids}},
+            ]
+        })
+    ) if item_ids else []
+    item_map = {
+        it.get("id", it.get("_id")): it
+        for it in item_docs
+    }
 
-            Patient.first_name,
+    rx_ids = list({
+        it.get("prescription_id")
+        for it in item_docs
+        if it.get("prescription_id") is not None
+    })
+    rx_docs = list(
+        mongo_db.prescriptions.find({
+            "$or": [
+                {"_id": {"$in": rx_ids}},
+                {"id": {"$in": rx_ids}},
+            ]
+        })
+    ) if rx_ids else []
+    rx_map = {
+        rx.get("id", rx.get("_id")): rx
+        for rx in rx_docs
+    }
 
-            Patient.last_name,
+    pat_ids = list({
+        rx.get("patient_id")
+        for rx in rx_docs
+        if rx.get("patient_id") is not None
+    })
+    pat_docs = list(
+        mongo_db.patients.find({
+            "$or": [
+                {"_id": {"$in": pat_ids}},
+                {"id": {"$in": pat_ids}},
+            ]
+        })
+    ) if pat_ids else []
+    pat_map = {
+        p.get("id", p.get("_id")): p
+        for p in pat_docs
+    }
 
-            Medicine.name.label(
-                "medicine_name"
-            ),
+    med_ids = list({
+        it.get("medicine_id")
+        for it in item_docs
+        if it.get("medicine_id") is not None
+    })
+    med_docs = list(
+        mongo_db.medicines.find({
+            "$or": [
+                {"_id": {"$in": med_ids}},
+                {"id": {"$in": med_ids}},
+            ]
+        })
+    ) if med_ids else []
+    med_map = {
+        m.get("id", m.get("_id")): m
+        for m in med_docs
+    }
 
-            User.username.label(
-                "administered_by_username"
-            ),
-        )
-        .join(
-            MedicationSchedule,
-            MedicationAdministration.medication_schedule_id
-            == MedicationSchedule.id,
-        )
-        .join(
-            PrescriptionItem,
-            MedicationSchedule.prescription_item_id
-            == PrescriptionItem.id,
-        )
-        .join(
-            Prescription,
-            PrescriptionItem.prescription_id
-            == Prescription.id,
-        )
-        .join(
-            Patient,
-            Prescription.patient_id
-            == Patient.id,
-        )
-        .join(
-            Medicine,
-            PrescriptionItem.medicine_id
-            == Medicine.id,
-        )
-        .outerjoin(
-            User,
-            MedicationAdministration.administered_by
-            == User.id,
-        )
-        .order_by(
-            MedicationAdministration.id.desc()
-        )
-        .limit(limit)
-    ).all()
+    user_ids = list({
+        a.get("administered_by")
+        for a in admins
+        if a.get("administered_by") is not None
+    })
+    user_docs = list(
+        mongo_db.users.find({
+            "$or": [
+                {"_id": {"$in": user_ids}},
+                {"id": {"$in": user_ids}},
+            ]
+        })
+    ) if user_ids else []
+    user_map = {
+        u.get("id", u.get("_id")): u
+        for u in user_docs
+    }
 
+    results = []
+    for adm in admins:
+        sched = sched_map.get(adm.get("medication_schedule_id"), {})
+        item = item_map.get(sched.get("prescription_item_id"), {})
+        rx = rx_map.get(item.get("prescription_id"), {})
+        pat = pat_map.get(rx.get("patient_id"), {})
+        med = med_map.get(item.get("medicine_id"), {})
+        user = user_map.get(adm.get("administered_by"), {})
+
+        pat_name = f"{pat.get('first_name', '')} {pat.get('last_name', '')}".strip() or "Unknown Patient"
+
+        results.append({
+            "administration_id": adm.get("id", adm.get("_id")),
+            "schedule_id": adm.get("medication_schedule_id"),
+            "status": adm.get("status"),
+            "administered_by": adm.get("administered_by"),
+            "administered_by_username": user.get("username"),
+            "administered_at": adm.get("administered_at"),
+            "notes": adm.get("notes"),
+            "scheduled_date": sched.get("scheduled_date"),
+            "scheduled_time": sched.get("scheduled_time"),
+            "patient_code": pat.get("patient_id"),
+            "patient_name": pat_name,
+            "medicine_name": med.get("name"),
+        })
 
     return {
-        "count":
-            len(rows),
-
-        "administrations": [
-            {
-                "administration_id":
-                    row[0].id,
-
-                "schedule_id":
-                    row[0].medication_schedule_id,
-
-                "status":
-                    row[0].status,
-
-                "administered_by":
-                    row[0].administered_by,
-
-                "administered_by_username":
-                    row.administered_by_username,
-
-                "administered_at":
-                    row[0].administered_at,
-
-                "notes":
-                    row[0].notes,
-
-                "scheduled_date":
-                    row.scheduled_date,
-
-                "scheduled_time":
-                    row.scheduled_time,
-
-                "patient_code":
-                    row.patient_code,
-
-                "patient_name":
-                    (
-                        f"{row.first_name} "
-                        f"{row.last_name}"
-                    ),
-
-                "medicine_name":
-                    row.medicine_name,
-            }
-            for row in rows
-        ],
+        "count": len(results),
+        "administrations": results,
     }
 
 
@@ -793,102 +641,61 @@ def get_administration_monitoring(
 # Safety Monitoring
 # =========================================================
 
-@router.get(
-    "/monitoring/safety"
-)
+@router.get("/monitoring/safety")
 def get_safety_monitoring(
     limit: int = Query(
         default=100,
         ge=1,
         le=200,
     ),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Run safety checks for medication schedules
-    and return the results for monitoring.
-
-    Safety results are computed from current clinical
-    data rather than read from a separate fake table.
+    Run safety checks for medication schedules and return results from MongoDB.
     """
 
-    schedule_ids = db.scalars(
-        select(MedicationSchedule.id)
-        .order_by(
-            MedicationSchedule.id.desc()
-        )
-        .limit(limit)
-    ).all()
+    actual_limit = limit if isinstance(limit, int) else 100
 
+    schedules = list(
+        mongo_db.medication_schedules.find(
+            {},
+            {"_id": 1, "id": 1},
+        )
+        .sort([("_id", -1)])
+        .limit(actual_limit)
+    )
 
     results = []
-
     safe_count = 0
     warning_count = 0
     critical_count = 0
 
-
-    for schedule_id in schedule_ids:
-
+    for s in schedules:
+        schedule_id = s.get("id", s.get("_id"))
         try:
-
-            result = check_medication_safety(
-                db=db,
-                schedule_id=schedule_id,
-            )
-
-
+            result = check_medication_safety(schedule_id=schedule_id)
             results.append(result)
-
 
             if result.get("safe"):
                 safe_count += 1
-
             else:
-
-                severity = str(
-                    result.get(
-                        "severity",
-                        ""
-                    )
-                ).upper()
-
-
-                if severity in {
-                    "HIGH",
-                    "CRITICAL",
-                    "SEVERE",
-                }:
+                severity = str(result.get("severity", "")).upper()
+                if severity in {"HIGH", "CRITICAL", "SEVERE"}:
                     critical_count += 1
-
                 else:
                     warning_count += 1
-
 
         except ValueError:
             continue
 
-
     return {
-        "count":
-            len(results),
-
+        "count": len(results),
         "summary": {
-            "safe":
-                safe_count,
-
-            "warnings":
-                warning_count,
-
-            "critical":
-                critical_count,
+            "safe": safe_count,
+            "warnings": warning_count,
+            "critical": critical_count,
         },
-
-        "checks":
-            results,
+        "checks": results,
     }

@@ -3,15 +3,11 @@ from fastapi import (
     Depends,
     HTTPException,
 )
-from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.models import User
 from app.schemas.safety import (
     MedicationSafetyResponse,
 )
 from app.security import require_permission
-
 from app.services.medication_safety_service import (
     check_medication_safety,
 )
@@ -29,20 +25,16 @@ router = APIRouter(
 )
 def check_medication(
     schedule_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Run medication safety checks for a schedule.
+    Run medication safety checks for a schedule using MongoDB.
     """
 
     try:
         result = check_medication_safety(
-            db=db,
             schedule_id=schedule_id,
         )
 
@@ -52,4 +44,4 @@ def check_medication(
         raise HTTPException(
             status_code=404,
             detail=str(error),
-        ) from error
+        ) from error

@@ -1,9 +1,6 @@
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy.orm import Session
-
-from app.models.medication_schedule import MedicationSchedule
-from app.models.prescription_item import PrescriptionItem
+from app.mongo_client import mongo_db, next_mongo_id
 
 
 # Frequency definitions.
@@ -19,31 +16,24 @@ FREQUENCY_HOURS = {
 }
 
 
-def combine_date_time(schedule_date: date, schedule_time: time) -> datetime:
+def combine_date_time(schedule_date, schedule_time) -> datetime:
     """Combine a date and time into one datetime."""
+    if isinstance(schedule_date, str):
+        schedule_date = datetime.strptime(schedule_date[:10], "%Y-%m-%d").date()
+    if isinstance(schedule_time, str):
+        t_part = schedule_time.split(".")[0].strip()
+        schedule_time = datetime.strptime(t_part, "%H:%M:%S").time()
     return datetime.combine(schedule_date, schedule_time)
 
 
 def generate_schedule_times(
-    start_date: date,
-    start_time: time,
+    start_date,
+    start_time,
     duration_days: int,
     frequency: str,
 ) -> list[datetime]:
     """
     Generate all scheduled medication times.
-
-    Supported frequencies:
-    ONCE
-    ONCE_DAILY
-    TWICE_DAILY
-    THREE_TIMES_DAILY
-    FOUR_TIMES_DAILY
-    EVERY_4_HOURS
-    EVERY_6_HOURS
-    EVERY_8_HOURS
-    EVERY_12_HOURS
-    STAT
     """
 
     if duration_days <= 0:
@@ -74,11 +64,8 @@ def generate_schedule_times(
         )
 
     interval = timedelta(hours=FREQUENCY_HOURS[frequency])
-
     end_datetime = first_datetime + timedelta(days=duration_days)
-
     schedule_times: list[datetime] = []
-
     current_datetime = first_datetime
 
     while current_datetime < end_datetime:
@@ -89,34 +76,52 @@ def generate_schedule_times(
 
 
 def create_medication_schedule(
-    db: Session,
-    prescription_item: PrescriptionItem,
-) -> list[MedicationSchedule]:
+    prescription_item,
+    db=None,
+) -> list[dict]:
     """
-    Generate and save medication schedule records
-    for a prescription item.
+    Generate and save medication schedule records in MongoDB.
+    Accepts either a dict or an object.
     """
+
+    if isinstance(prescription_item, dict):
+        item_id = prescription_item.get("id", prescription_item.get("_id"))
+        start_date = prescription_item.get("start_date")
+        start_time = prescription_item.get("start_time")
+        duration_days = prescription_item.get("duration_days", 1)
+        frequency = prescription_item.get("frequency", "ONCE_DAILY")
+    else:
+        item_id = getattr(prescription_item, "id", None)
+        start_date = getattr(prescription_item, "start_date", None)
+        start_time = getattr(prescription_item, "start_time", None)
+        duration_days = getattr(prescription_item, "duration_days", 1)
+        frequency = getattr(prescription_item, "frequency", "ONCE_DAILY")
 
     schedule_times = generate_schedule_times(
-        start_date=prescription_item.start_date,
-        start_time=prescription_item.start_time,
-        duration_days=prescription_item.duration_days,
-        frequency=prescription_item.frequency,
+        start_date=start_date,
+        start_time=start_time,
+        duration_days=duration_days,
+        frequency=frequency,
     )
 
-    schedule_records: list[MedicationSchedule] = []
+    schedule_records: list[dict] = []
 
     for scheduled_datetime in schedule_times:
-        schedule_record = MedicationSchedule(
-            prescription_item_id=prescription_item.id,
-            scheduled_date=scheduled_datetime.date(),
-            scheduled_time=scheduled_datetime.time(),
-            status="UPCOMING",
-        )
-
-        db.add(schedule_record)
-        schedule_records.append(schedule_record)
-
-    db.commit()
+        new_id = next_mongo_id("medication_schedules")
+        record = {
+            "_id": new_id,
+            "id": new_id,
+            "prescription_item_id": item_id,
+            "scheduled_date": scheduled_datetime.date().isoformat(),
+            "scheduled_time": scheduled_datetime.time().isoformat(),
+            "status": "UPCOMING",
+            "actual_administration_time": None,
+            "administered_by": None,
+            "notes": None,
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        mongo_db.medication_schedules.insert_one(record)
+        schedule_records.append(record)
 
     return schedule_records

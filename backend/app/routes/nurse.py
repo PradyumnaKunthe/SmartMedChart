@@ -1,197 +1,169 @@
+
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
+from pymongo import ReturnDocument
 
-from app.database import get_db
-from app.models import (
-    MedicationSchedule,
-    Medicine,
-    Patient,
-    Prescription,
-    PrescriptionItem,
-    QRVerification,
-    User,
-)
-from app.schemas.administration import (
-    MedicationAdministrationCreate,
-)
-from app.schemas.medication import (
-    MedicationScheduleResponse,
-)
+from app.mongo_client import mongo_db
+from app.schemas.administration import MedicationAdministrationCreate
+from app.schemas.medication import MedicationScheduleResponse
 from app.security import require_permission
-from app.services.medication_administration_service import (
-    record_medication_administration,
-)
-from app.services.nurse_assignment_service import (
-    get_assigned_patient_ids,
-    is_patient_assigned,
-)
 
 
-router = APIRouter(
-    prefix="/api/nurse",
-    tags=["Nurse"],
-)
+router = APIRouter(prefix="/api/nurse", tags=["Nurse"])
 
 
-# =========================================================
-# BUILD MEDICATION RESPONSE
-# =========================================================
+VALID_ADMINISTRATION_STATUSES = {
+    "GIVEN",
+    "DELAYED",
+    "HELD",
+    "REFUSED",
+    "NOT_GIVEN",
+}
 
-def build_medication_response(
-    schedule,
-    patient,
-    prescription_item,
-    medicine,
-):
-    patient_name = None
 
-    if patient is not None:
-        patient_name = (
-            f"{patient.first_name} {patient.last_name}"
-        ).strip()
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _by_id(collection_name: str, value):
+    if value is None:
+        return None
+
+    try:
+        numeric_id = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    return (
+        mongo_db[collection_name].find_one({"_id": numeric_id})
+        or mongo_db[collection_name].find_one({"id": numeric_id})
+    )
+
+
+def _assigned_patient_ids(nurse_id: int) -> set[int]:
+    assignments = mongo_db.nurse_patient_assignments.find(
+        {
+            "nurse_id": int(nurse_id),
+            "is_active": {"$in": [1, True]},
+        },
+        {"patient_id": 1},
+    )
 
     return {
-        # -------------------------------------------------
-        # Schedule
-        # -------------------------------------------------
-
-        "id": schedule.id,
-
-        "prescription_item_id": (
-            schedule.prescription_item_id
-        ),
-
-        "scheduled_date": (
-            schedule.scheduled_date
-        ),
-
-        "scheduled_time": (
-            schedule.scheduled_time
-        ),
-
-        "status": (
-            schedule.status
-        ),
-
-        "actual_administration_time": (
-            schedule.actual_administration_time
-        ),
-
-        "administered_by": (
-            schedule.administered_by
-        ),
-
-        "notes": (
-            schedule.notes
-        ),
-
-        # -------------------------------------------------
-        # Patient
-        # -------------------------------------------------
-
-        "patient_id": (
-            patient.id
-            if patient is not None
-            else None
-        ),
-
-        "patient_name": patient_name,
-
-        "patient_code": (
-            patient.patient_id
-            if patient is not None
-            else None
-        ),
-
-        # -------------------------------------------------
-        # Medicine
-        # -------------------------------------------------
-
-        "medicine_id": (
-            medicine.id
-            if medicine is not None
-            else None
-        ),
-
-        "medicine_name": (
-            medicine.name
-            if medicine is not None
-            else None
-        ),
-
-        "generic_name": (
-            getattr(
-                medicine,
-                "generic_name",
-                None,
-            )
-            if medicine is not None
-            else None
-        ),
-
-        "strength": (
-            getattr(
-                medicine,
-                "strength",
-                None,
-            )
-            if medicine is not None
-            else None
-        ),
-
-        "dosage_form": (
-            getattr(
-                medicine,
-                "dosage_form",
-                None,
-            )
-            if medicine is not None
-            else None
-        ),
-
-        # -------------------------------------------------
-        # Prescription Item
-        # -------------------------------------------------
-
-        "dose": (
-            prescription_item.dose
-            if prescription_item is not None
-            else None
-        ),
-
-        "route": (
-            prescription_item.route
-            if prescription_item is not None
-            else None
-        ),
-
-        "frequency": (
-            prescription_item.frequency
-            if prescription_item is not None
-            else None
-        ),
-
-        "duration_days": (
-            prescription_item.duration_days
-            if prescription_item is not None
-            else None
-        ),
-
-        "is_stat": (
-            bool(
-                prescription_item.is_stat
-            )
-            if prescription_item is not None
-            else False
-        ),
-
-        "instructions": (
-            prescription_item.instructions
-            if prescription_item is not None
-            else None
-        ),
+        int(row["patient_id"])
+        for row in assignments
+        if row.get("patient_id") is not None
     }
+
+
+def _is_patient_assigned(nurse_id: int, patient_id: int) -> bool:
+    return mongo_db.nurse_patient_assignments.find_one(
+        {
+            "nurse_id": int(nurse_id),
+            "patient_id": int(patient_id),
+            "is_active": {"$in": [1, True]},
+        }
+    ) is not None
+
+
+def _schedule_context(schedule):
+    item = _by_id(
+        "prescription_items",
+        schedule.get("prescription_item_id"),
+    )
+
+    if not item:
+        return None
+
+    prescription = _by_id(
+        "prescriptions",
+        item.get("prescription_id"),
+    )
+
+    if not prescription:
+        return None
+
+    patient = _by_id(
+        "patients",
+        prescription.get("patient_id"),
+    )
+
+    medicine = _by_id(
+        "medicines",
+        item.get("medicine_id"),
+    )
+
+    if patient is None or medicine is None:
+        return None
+
+    return item, prescription, patient, medicine
+
+
+def _build_medication_response(schedule, item, patient, medicine):
+    first_name = (patient.get("first_name") or "").strip()
+    last_name = (patient.get("last_name") or "").strip()
+    patient_name = f"{first_name} {last_name}".strip() or None
+
+    return {
+        "id": schedule.get("id", schedule.get("_id")),
+        "prescription_item_id": schedule.get("prescription_item_id"),
+        "scheduled_date": schedule.get("scheduled_date"),
+        "scheduled_time": schedule.get("scheduled_time"),
+        "status": schedule.get("status"),
+        "actual_administration_time": schedule.get(
+            "actual_administration_time"
+        ),
+        "administered_by": schedule.get("administered_by"),
+        "notes": schedule.get("notes"),
+
+        "patient_id": patient.get("id", patient.get("_id")),
+        "patient_name": patient_name,
+        "patient_code": patient.get("patient_id"),
+
+        "medicine_id": medicine.get("id", medicine.get("_id")),
+        "medicine_name": medicine.get("name"),
+        "generic_name": medicine.get("generic_name"),
+        "strength": medicine.get("strength"),
+        "dosage_form": medicine.get("dosage_form"),
+
+        "dose": item.get("dose"),
+        "route": item.get("route"),
+        "frequency": item.get("frequency"),
+        "duration_days": item.get("duration_days"),
+        "is_stat": bool(item.get("is_stat", False)),
+        "instructions": item.get("instructions"),
+    }
+
+
+def _get_nurse_schedule(schedule_id: int, nurse_id: int):
+    schedule = _by_id("medication_schedules", schedule_id)
+
+    if schedule is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Medication schedule not found.",
+        )
+
+    context = _schedule_context(schedule)
+
+    if context is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Patient or medication details for this schedule were not found.",
+        )
+
+    item, prescription, patient, medicine = context
+
+    patient_id = int(patient.get("id", patient.get("_id")))
+
+    if not _is_patient_assigned(nurse_id, patient_id):
+        raise HTTPException(
+            status_code=403,
+            detail="This patient is not assigned to this nurse.",
+        )
+
+    return schedule, item, prescription, patient, medicine
 
 
 # =========================================================
@@ -200,109 +172,60 @@ def build_medication_response(
 
 @router.get(
     "/medications",
-    response_model=list[
-        MedicationScheduleResponse
-    ],
+    response_model=list[MedicationScheduleResponse],
 )
 def get_nurse_medications(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
-    """
-    Return medication schedules available to the
-    currently logged-in nurse.
+    assigned_patient_ids = _assigned_patient_ids(current_user.id)
 
-    A nurse can see medication schedules only for
-    patients assigned to that nurse.
-    """
-
-    # -------------------------------------------------
-    # Get patients assigned to this nurse
-    # -------------------------------------------------
-
-    assigned_patient_ids = get_assigned_patient_ids(
-        db=db,
-        nurse_id=current_user.id,
-    )
-
-    # No assignments = no medication access
     if not assigned_patient_ids:
         return []
 
-    # -------------------------------------------------
-    # Load schedules
-    # -------------------------------------------------
+    results = []
 
-    rows = db.execute(
-        select(
-            MedicationSchedule,
-            Patient,
-            PrescriptionItem,
-            Medicine,
-        )
+    schedules = mongo_db.medication_schedules.find({}).sort(
+        [
+            ("scheduled_date", 1),
+            ("scheduled_time", 1),
+            ("_id", 1),
+        ]
+    )
 
-        # Schedule -> Prescription Item
-        .join(
-            PrescriptionItem,
-            PrescriptionItem.id
-            == MedicationSchedule.prescription_item_id,
-        )
+    for schedule in schedules:
+        context = _schedule_context(schedule)
 
-        # Prescription Item -> Prescription
-        .join(
-            Prescription,
-            Prescription.id
-            == PrescriptionItem.prescription_id,
-        )
+        if context is None:
+            continue
 
-        # Prescription -> Patient
-        .join(
-            Patient,
-            Patient.id
-            == Prescription.patient_id,
-        )
+        item, prescription, patient, medicine = context
 
-        # Prescription Item -> Medicine
-        .join(
-            Medicine,
-            Medicine.id
-            == PrescriptionItem.medicine_id,
-        )
+        patient_id = int(patient.get("id", patient.get("_id")))
 
-        # Only patients assigned to this nurse
-        .where(
-            Patient.id.in_(
-                assigned_patient_ids
+        if patient_id not in assigned_patient_ids:
+            continue
+
+        results.append(
+            _build_medication_response(
+                schedule,
+                item,
+                patient,
+                medicine,
             )
         )
 
-        # Ordering
-        .order_by(
-            Patient.patient_id,
-            Medicine.name,
-            MedicationSchedule.scheduled_date,
-            MedicationSchedule.scheduled_time,
+    results.sort(
+        key=lambda row: (
+            row.get("patient_code") or "",
+            row.get("medicine_name") or "",
+            row.get("scheduled_date") or "",
+            row.get("scheduled_time") or "",
         )
-    ).all()
+    )
 
-    return [
-        build_medication_response(
-            schedule=schedule,
-            patient=patient,
-            prescription_item=prescription_item,
-            medicine=medicine,
-        )
-        for (
-            schedule,
-            patient,
-            prescription_item,
-            medicine,
-        ) in rows
-    ]
+    return results
 
 
 # =========================================================
@@ -315,295 +238,181 @@ def get_nurse_medications(
 )
 def get_medication(
     schedule_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "VIEW_MEDICATION_SCHEDULE"
-        )
+    current_user=Depends(
+        require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
-    """
-    Return one medication schedule.
-
-    The schedule is accessible only when its patient
-    is assigned to the currently logged-in nurse.
-    """
-
-    row = db.execute(
-        select(
-            MedicationSchedule,
-            Patient,
-            PrescriptionItem,
-            Medicine,
+    schedule, item, prescription, patient, medicine = (
+        _get_nurse_schedule(
+            schedule_id,
+            current_user.id,
         )
-
-        # Schedule -> Prescription Item
-        .join(
-            PrescriptionItem,
-            PrescriptionItem.id
-            == MedicationSchedule.prescription_item_id,
-        )
-
-        # Prescription Item -> Prescription
-        .join(
-            Prescription,
-            Prescription.id
-            == PrescriptionItem.prescription_id,
-        )
-
-        # Prescription -> Patient
-        .join(
-            Patient,
-            Patient.id
-            == Prescription.patient_id,
-        )
-
-        # Prescription Item -> Medicine
-        .join(
-            Medicine,
-            Medicine.id
-            == PrescriptionItem.medicine_id,
-        )
-
-        # Specific schedule
-        .where(
-            MedicationSchedule.id
-            == schedule_id
-        )
-    ).first()
-
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Medication schedule not found.",
-        )
-
-    (
-        schedule,
-        patient,
-        prescription_item,
-        medicine,
-    ) = row
-
-    # -------------------------------------------------
-    # Nurse assignment security
-    # -------------------------------------------------
-
-    if not is_patient_assigned(
-        db=db,
-        nurse_id=current_user.id,
-        patient_id=patient.id,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "This patient is not assigned "
-                "to this nurse."
-            ),
-        )
-
-    return build_medication_response(
-        schedule=schedule,
-        patient=patient,
-        prescription_item=prescription_item,
-        medicine=medicine,
     )
+
+    return _build_medication_response(
+        schedule,
+        item,
+        patient,
+        medicine,
+    )
+
+
+# =========================================================
+# GENERATE ADMINISTRATION ID
+# =========================================================
+
+def _next_administration_id() -> int:
+    collection = mongo_db.medication_administrations
+
+    last = collection.find_one(
+        sort=[("_id", -1)]
+    )
+
+    max_existing = int(last.get("_id", 0)) if last else 0
+
+    sequences = mongo_db["_id_sequences"]
+
+    sequences.update_one(
+        {"_id": "medication_administrations"},
+        {"$max": {"value": max_existing}},
+        upsert=True,
+    )
+
+    counter = sequences.find_one_and_update(
+        {"_id": "medication_administrations"},
+        {"$inc": {"value": 1}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+    return int(counter["value"])
 
 
 # =========================================================
 # ADMINISTER MEDICATION
 # =========================================================
 
-@router.post(
-    "/medications/{schedule_id}/administer"
-)
+@router.post("/medications/{schedule_id}/administer")
 def administer_medication(
     schedule_id: int,
     request: MedicationAdministrationCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission(
-            "ADMINISTER_MEDICATION"
-        )
+    current_user=Depends(
+        require_permission("ADMINISTER_MEDICATION")
     ),
 ):
-    """
-    Record medication administration.
-
-    Requirements:
-    1. Schedule must exist.
-    2. Patient must be assigned to this nurse.
-    3. Successful patient QR verification must exist.
-    4. Successful medication verification must exist.
-    """
-
-    # -----------------------------------------------------
-    # 1. Find medication schedule
-    # -----------------------------------------------------
-
-    schedule = db.scalar(
-        select(
-            MedicationSchedule
-        ).where(
-            MedicationSchedule.id
-            == schedule_id
+    schedule, item, prescription, patient, medicine = (
+        _get_nurse_schedule(
+            schedule_id,
+            current_user.id,
         )
     )
 
-    if schedule is None:
+    status = (request.status or "").strip().upper()
+
+    if status not in VALID_ADMINISTRATION_STATUSES:
         raise HTTPException(
-            status_code=404,
-            detail="Medication schedule not found.",
-        )
-
-    # -----------------------------------------------------
-    # 2. Find patient belonging to the schedule
-    # -----------------------------------------------------
-
-    patient_id = db.scalar(
-        select(
-            Patient.id
-        )
-        .join(
-            Prescription,
-            Prescription.patient_id
-            == Patient.id,
-        )
-        .join(
-            PrescriptionItem,
-            PrescriptionItem.prescription_id
-            == Prescription.id,
-        )
-        .where(
-            PrescriptionItem.id
-            == schedule.prescription_item_id,
-        )
-    )
-
-    if patient_id is None:
-        raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail=(
-                "Patient for medication schedule "
-                "not found."
+                "Invalid administration status. Allowed values: "
+                + ", ".join(sorted(VALID_ADMINISTRATION_STATUSES))
             ),
         )
 
-    # -----------------------------------------------------
-    # 3. Check nurse assignment
-    # -----------------------------------------------------
+    patient_id = int(patient.get("id", patient.get("_id")))
 
-    if not is_patient_assigned(
-        db=db,
-        nurse_id=current_user.id,
-        patient_id=patient_id,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "This patient is not assigned "
-                "to this nurse."
-            ),
-        )
-
-    # -----------------------------------------------------
-    # 4. Find latest successful QR verification
-    # -----------------------------------------------------
-
-    verification = db.scalar(
-        select(
-            QRVerification
-        )
-        .where(
-            QRVerification.medication_schedule_id
-            == schedule_id,
-
-            QRVerification.verified_by
-            == current_user.id,
-
-            QRVerification.patient_qr_valid.is_(
-                True
-            ),
-
-            QRVerification.medication_valid.is_(
-                True
-            ),
-
-            QRVerification.result
-            == "SUCCESS",
-        )
-        .order_by(
-            desc(
-                QRVerification.id
-            )
-        )
+    # Require successful patient AND medication QR verification.
+    verification = mongo_db.qr_verifications.find_one(
+        {
+            "medication_schedule_id": int(schedule_id),
+            "patient_id": patient_id,
+            "verified_by": int(current_user.id),
+            "patient_qr_valid": {"$in": [1, True]},
+            "medication_valid": {"$in": [1, True]},
+            "result": "SUCCESS",
+        },
+        sort=[("_id", -1)],
     )
 
     if verification is None:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Patient and medication QR verification "
-                "must be completed before administration."
+                "Patient and medication QR verification must be "
+                "completed before administration."
             ),
         )
 
-    # -----------------------------------------------------
-    # 5. Record administration
-    # -----------------------------------------------------
+    # Prevent duplicate administration records.
+    existing = mongo_db.medication_administrations.find_one(
+        {"medication_schedule_id": int(schedule_id)}
+    )
 
-    try:
-        administration = (
-            record_medication_administration(
-                db=db,
-
-                medication_schedule_id=(
-                    schedule_id
-                ),
-
-                administered_by=(
-                    current_user.id
-                ),
-
-                status=request.status,
-
-                notes=request.notes,
-
-                administered_at=(
-                    request.administered_at
-                ),
-            )
-        )
-
-        return {
-            "message": (
-                "Medication administration "
-                "recorded successfully."
-            ),
-
-            "administration_id": (
-                administration.id
-            ),
-
-            "schedule_id": (
-                schedule_id
-            ),
-
-            "status": (
-                administration.status
-            ),
-
-            "administered_by": (
-                administration.administered_by
-            ),
-
-            "administered_at": (
-                administration.administered_at
-            ),
-        }
-
-    except ValueError as error:
+    if existing is not None:
         raise HTTPException(
             status_code=400,
-            detail=str(error),
+            detail=(
+                f"Medication schedule {schedule_id} "
+                "already has an administration record."
+            ),
+        )
+
+    administered_at = (
+        request.administered_at
+        or datetime.now(timezone.utc)
+    )
+
+    administered_at_value = (
+        administered_at.isoformat()
+        if hasattr(administered_at, "isoformat")
+        else str(administered_at)
+    )
+
+    now = _now_iso()
+    administration_id = _next_administration_id()
+
+    administration = {
+        "_id": administration_id,
+        "id": administration_id,
+        "medication_schedule_id": int(schedule_id),
+        "administered_by": int(current_user.id),
+        "status": status,
+        "administered_at": administered_at_value,
+        "notes": request.notes,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    try:
+        mongo_db.medication_administrations.insert_one(
+            administration
+        )
+
+        mongo_db.medication_schedules.update_one(
+            {"_id": int(schedule_id)},
+            {
+                "$set": {
+                    "status": status,
+                    "actual_administration_time": administered_at_value,
+                    "administered_by": int(current_user.id),
+                    "updated_at": now,
+                }
+            },
+        )
+
+    except Exception as error:
+        mongo_db.medication_administrations.delete_one(
+            {"_id": administration_id}
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save medication administration.",
         ) from error
+
+    return {
+        "message": "Medication administration recorded successfully.",
+        "administration_id": administration_id,
+        "schedule_id": int(schedule_id),
+        "status": status,
+        "administered_by": int(current_user.id),
+        "administered_at": administered_at_value,
+    }

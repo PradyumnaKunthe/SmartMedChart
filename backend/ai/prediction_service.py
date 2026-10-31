@@ -53,7 +53,15 @@ def load_models():
     return delay_model, missed_model
 
 
-delay_model, missed_model = load_models()
+_delay_model = None
+_missed_model = None
+
+
+def get_models():
+    global _delay_model, _missed_model
+    if _delay_model is None or _missed_model is None:
+        _delay_model, _missed_model = load_models()
+    return _delay_model, _missed_model
 
 
 def predict_medication_risk(
@@ -63,6 +71,8 @@ def predict_medication_risk(
     Predict delay and missed-dose risk and
     provide human-readable explanations.
     """
+
+    delay_model, missed_model = get_models()
 
     input_data = pd.DataFrame(
         [medication_data]

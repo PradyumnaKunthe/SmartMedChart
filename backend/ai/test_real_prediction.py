@@ -1,59 +1,34 @@
-from sqlalchemy import select
-
-from app.database import SessionLocal
-from app.models import MedicationSchedule
-
+from app.mongo_client import mongo_db
 from ai.feature_service import build_medication_features
 from ai.prediction_service import predict_medication_risk
 
 
-db = SessionLocal()
+schedule = mongo_db.medication_schedules.find_one({"$or": [{"_id": 1}, {"id": 1}]})
+if schedule is None:
+    schedule = mongo_db.medication_schedules.find_one()
 
-try:
-    schedule_id = 2
+if schedule is None:
+    raise RuntimeError("No medication schedule found in MongoDB.")
 
-    schedule = db.scalar(
-        select(MedicationSchedule).where(
-            MedicationSchedule.id == schedule_id
-        )
-    )
+schedule_id = schedule.get("id", schedule.get("_id"))
 
-    if schedule is None:
-        raise RuntimeError(
-            f"Medication schedule {schedule_id} was not found."
-        )
+# Build AI features from MongoDB
+features = build_medication_features(schedule_id=schedule_id)
 
-    # ---------------------------------------------
-    # Build AI features from the real database
-    # ---------------------------------------------
+# Run the trained AI models
+result = predict_medication_risk(features)
 
-    features = build_medication_features(
-        db=db,
-        schedule_id=schedule_id,
-    )
+print("=" * 60)
+print("SMARTMEDCHART REAL-DATABASE AI TEST (MONGODB)")
+print("=" * 60)
 
-    # ---------------------------------------------
-    # Run the trained AI models
-    # ---------------------------------------------
+print("\nSchedule ID:")
+print(schedule_id)
 
-    result = predict_medication_risk(
-        features
-    )
+print("\nFeatures used by AI:")
+for key, value in features.items():
+    print(f"{key}: {value}")
 
-    print("=" * 60)
-    print("SMARTMEDCHART REAL-DATABASE AI TEST")
-    print("=" * 60)
-
-    print("\nSchedule ID:")
-    print(schedule_id)
-
-    print("\nFeatures used by AI:")
-    for key, value in features.items():
-        print(f"{key}: {value}")
-
-    print("\nAI prediction:")
-    for key, value in result.items():
-        print(f"{key}: {value}")
-
-finally:
-    db.close()
+print("\nAI prediction:")
+for key, value in result.items():
+    print(f"{key}: {value}")

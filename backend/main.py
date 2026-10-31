@@ -1,8 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
-from sqlalchemy import text
 from app.routes import chat
-from app.database import engine
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
 from app.routes.doctor import router as doctor_router
@@ -74,15 +72,22 @@ def root():
 # Database health
 # =========================================================
 
+from app.mongo_client import ping_mongodb
+
 @app.get("/health/database")
 def database_health():
-    with engine.connect() as connection:
-        connection.execute(text("SELECT 1"))
-
-    return {
-        "database": "SQLite",
-        "status": "connected",
-    }
+    try:
+        ping_mongodb()
+        return {
+            "database": "MongoDB",
+            "status": "connected",
+        }
+    except Exception as error:
+        return {
+            "database": "MongoDB",
+            "status": "disconnected",
+            "error": str(error),
+        }
 from app.routes.mongodb_status import router as mongodb_status_router
 
 app.include_router(mongodb_status_router)

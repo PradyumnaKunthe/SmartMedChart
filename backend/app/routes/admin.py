@@ -1227,13 +1227,15 @@ def discharge_patient(
         )
 
     mongo_db.patients.update_one(
-        {"_id": patient_id},
-        {"$set": {
-            "is_active": False,
-            "qr_is_active": False,
-            "updated_at": now,
-        }},
-    )
+    {"_id": patient_id},
+    {"$set": {
+        "is_active": False,
+        "qr_is_active": False,
+        "ward_id": None,
+        "bed_id": None,
+        "updated_at": now,
+    }},
+       )
 
     return {
         "message": "Patient discharged successfully.",
