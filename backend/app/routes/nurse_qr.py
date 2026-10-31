@@ -95,19 +95,10 @@ def verify_patient_qr(
     # -----------------------------------------------------
     # 3. Check nurse assignment
     # -----------------------------------------------------
-
-    if not is_patient_assigned(
+    assigned = is_patient_assigned(
         nurse_id=int(current_user.id),
         patient_id=patient_id,
-    ):
-        return QRVerifyResponse(
-            valid=False,
-            patient_id=patient_id,
-            message=(
-                "This patient is not assigned "
-                "to this nurse."
-            ),
-        )
+    )
 
     # -----------------------------------------------------
     # 4. Save successful patient verification in MongoDB
@@ -115,6 +106,12 @@ def verify_patient_qr(
 
     v_id = next_mongo_id("qr_verifications")
     now = datetime.now(timezone.utc).isoformat()
+
+    msg = (
+        "Patient QR verified successfully."
+        if assigned
+        else "Patient QR verified (Covering Nurse Coverage). Clinical override justification required upon administration."
+    )
 
     verification_doc = {
         "_id": v_id,
@@ -126,7 +123,8 @@ def verify_patient_qr(
         "patient_qr_valid": True,
         "medication_valid": None,
         "result": "SUCCESS",
-        "message": "Patient QR verified successfully.",
+        "is_override": not assigned,
+        "message": msg,
         "created_at": now,
         "updated_at": now,
     }
@@ -136,7 +134,7 @@ def verify_patient_qr(
     return QRVerifyResponse(
         valid=True,
         patient_id=patient_id,
-        message="Patient QR verified successfully.",
+        message=msg,
     )
 
 
@@ -188,21 +186,10 @@ def verify_medication(
     # 2. Check nurse assignment
     # -----------------------------------------------------
 
-    if not is_patient_assigned(
+    assigned = is_patient_assigned(
         nurse_id=int(current_user.id),
         patient_id=patient_id,
-    ):
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=(
-                request.medication_schedule_id
-            ),
-            message=(
-                "This patient is not assigned "
-                "to this nurse."
-            ),
-        )
+    )
 
     # -----------------------------------------------------
     # 3. Verify medication schedule
@@ -360,6 +347,12 @@ def verify_medication(
     # 12. Update or create verification record in MongoDB
     # -----------------------------------------------------
 
+    v_msg = (
+        "Patient and medication verified successfully."
+        if assigned
+        else "Patient and medication verified (Covering Nurse Coverage). Clinical override justification required upon administration."
+    )
+
     if verification is not None:
         mongo_db.qr_verifications.update_one(
             {"_id": verification["_id"]},
@@ -367,8 +360,9 @@ def verify_medication(
                 "$set": {
                     "medication_schedule_id": schedule_id,
                     "medication_valid": True,
+                    "is_override": not assigned,
                     "result": "SUCCESS",
-                    "message": "Patient and medication verified successfully.",
+                    "message": v_msg,
                     "updated_at": now,
                 }
             },
@@ -384,8 +378,9 @@ def verify_medication(
             "verified_at": now,
             "patient_qr_valid": True,
             "medication_valid": True,
+            "is_override": not assigned,
             "result": "SUCCESS",
-            "message": "Patient and medication verified successfully.",
+            "message": v_msg,
             "created_at": now,
             "updated_at": now,
         })
@@ -400,5 +395,5 @@ def verify_medication(
         medication_schedule_id=schedule_id,
         medicine_id=medicine_id,
         medicine_name=medicine.get("name"),
-        message="Medication verified for patient.",
+        message=v_msg,
     )

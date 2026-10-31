@@ -209,6 +209,152 @@ def _get_nurse_schedule(schedule_id: int, nurse_id: int, allow_override: bool = 
 
 
 # =========================================================
+# GET ASSIGNED PATIENTS FOR NURSE
+# =========================================================
+@router.get("/patients")
+def get_nurse_assigned_patients(
+    current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
+):
+    """
+    Retrieve all active patients assigned to the authenticated nurse.
+    """
+    assigned_patient_ids = list(_assigned_patient_ids(current_user.id))
+    if not assigned_patient_ids:
+        return []
+
+    patients = list(
+        mongo_db.patients.find({
+            "_id": {"$in": assigned_patient_ids},
+            "is_active": {"$in": [1, True]},
+        }).sort([("last_name", 1), ("first_name", 1)])
+    )
+
+    results = []
+    for p in patients:
+        p_id = int(p.get("id", p.get("_id")))
+        first_name = (p.get("first_name") or "").strip()
+        last_name = (p.get("last_name") or "").strip()
+        full_name = f"{first_name} {last_name}".strip() or "Unnamed Patient"
+
+        ward_name = p.get("ward_name")
+        if not ward_name and p.get("ward_id"):
+            ward_doc = mongo_db.wards.find_one({"_id": p.get("ward_id")})
+            if ward_doc:
+                ward_name = ward_doc.get("name")
+
+        bed_number = p.get("bed_number")
+        if not bed_number and p.get("bed_id"):
+            bed_doc = mongo_db.beds.find_one({"_id": p.get("bed_id")})
+            if bed_doc:
+                bed_number = bed_doc.get("bed_number")
+
+        active_rx_count = mongo_db.prescriptions.count_documents({
+            "patient_id": p_id,
+            "status": "ACTIVE",
+        })
+
+        results.append({
+            "id": p_id,
+            "patient_id": p_id,
+            "patient_code": p.get("patient_id") or f"PAT-{p_id:04d}",
+            "first_name": first_name,
+            "last_name": last_name,
+            "patient_name": full_name,
+            "gender": p.get("gender") or "Not stated",
+            "date_of_birth": p.get("date_of_birth"),
+            "weight_kg": p.get("weight_kg"),
+            "ward_id": p.get("ward_id"),
+            "ward_name": ward_name or "General Ward",
+            "bed_id": p.get("bed_id"),
+            "bed_number": bed_number or "—",
+            "active_prescriptions_count": active_rx_count,
+            "qr_token": p.get("qr_token"),
+            "qr_is_active": bool(p.get("qr_is_active", False)),
+            "is_assigned": True,
+            "is_active": True,
+        })
+
+    return results
+
+
+@router.get("/patients/{patient_id}")
+def get_nurse_patient_details(
+    patient_id: int,
+    current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
+):
+    """
+    Retrieve single patient details for bedside nursing context.
+    """
+    p = mongo_db.patients.find_one({
+        "$or": [{"_id": int(patient_id)}, {"id": int(patient_id)}],
+        "is_active": {"$in": [1, True]},
+    })
+    if not p:
+        raise HTTPException(status_code=404, detail="Patient not found or inactive.")
+
+    p_id = int(p.get("id", p.get("_id")))
+    first_name = (p.get("first_name") or "").strip()
+    last_name = (p.get("last_name") or "").strip()
+    full_name = f"{first_name} {last_name}".strip() or "Unnamed Patient"
+
+    is_assigned = _is_patient_assigned(current_user.id, p_id)
+
+    ward_name = p.get("ward_name")
+    if not ward_name and p.get("ward_id"):
+        w = mongo_db.wards.find_one({"_id": p.get("ward_id")})
+        if w:
+            ward_name = w.get("name")
+
+    bed_number = p.get("bed_number")
+    if not bed_number and p.get("bed_id"):
+        b = mongo_db.beds.find_one({"_id": p.get("bed_id")})
+        if b:
+            bed_number = b.get("bed_number")
+
+    doctor_name = None
+    enc = mongo_db.encounters.find_one({"patient_id": p_id, "status": "ACTIVE"})
+    if enc and enc.get("doctor_id"):
+        doc_user = mongo_db.users.find_one({"_id": enc.get("doctor_id")})
+        if doc_user:
+            doctor_name = doc_user.get("full_name")
+
+    allergies = list(mongo_db.patient_allergies.find({"patient_id": p_id}))
+    for al in allergies:
+        al["id"] = al.get("id", al.get("_id"))
+        if "_id" in al:
+            al["_id"] = str(al["_id"])
+
+    prescriptions = list(mongo_db.prescriptions.find({"patient_id": p_id, "status": "ACTIVE"}))
+    for rx in prescriptions:
+        rx["id"] = rx.get("id", rx.get("_id"))
+        if "_id" in rx:
+            rx["_id"] = str(rx["_id"])
+
+    return {
+        "id": p_id,
+        "patient_id": p_id,
+        "patient_code": p.get("patient_id") or f"PAT-{p_id:04d}",
+        "first_name": first_name,
+        "last_name": last_name,
+        "patient_name": full_name,
+        "gender": p.get("gender") or "Not stated",
+        "date_of_birth": p.get("date_of_birth"),
+        "weight_kg": p.get("weight_kg"),
+        "ward_id": p.get("ward_id"),
+        "ward_name": ward_name or "General Ward",
+        "bed_id": p.get("bed_id"),
+        "bed_number": bed_number or "—",
+        "primary_doctor": doctor_name or "Attending Physician",
+        "allergies": allergies,
+        "prescriptions_count": len(prescriptions),
+        "qr_token": p.get("qr_token"),
+        "qr_is_active": bool(p.get("qr_is_active", False)),
+        "is_assigned": is_assigned,
+        "is_active": True,
+    }
+
+
+# =========================================================
 # GET ALL NURSE MEDICATIONS
 # =========================================================
 @router.get(

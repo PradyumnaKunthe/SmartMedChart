@@ -989,6 +989,7 @@ def get_patient_lifecycle(
 
 
 @router.post("/patients/{patient_id}/billing")
+@router.put("/patients/{patient_id}/billing")
 def create_or_update_patient_bill(
     patient_id: int,
     request: dict,

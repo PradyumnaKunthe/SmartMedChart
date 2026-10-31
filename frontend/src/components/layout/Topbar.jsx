@@ -1,3 +1,4 @@
+import { useState } from "react"
 import {
   Bell,
   Calendar,
@@ -14,6 +15,7 @@ export default function Topbar({
   subtitle,
 }) {
   const { user } = useAuth()
+  const [showNotifications, setShowNotifications] = useState(false)
 
   const displayName =
     user?.full_name ||
@@ -77,17 +79,44 @@ export default function Topbar({
         </div>
 
         {/* Notifications */}
-        <button
-          type="button"
-          className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200/80 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-800"
-          aria-label="System Notifications"
-        >
-          <Bell className="h-4.5 w-4.5" />
-          <span className="absolute top-2 right-2 flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500 ring-2 ring-white" />
-          </span>
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowNotifications((prev) => !prev)}
+            className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200/80 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-800"
+            aria-label="System Notifications"
+          >
+            <Bell className="h-4.5 w-4.5" />
+            <span className="absolute top-2 right-2 flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500 ring-2 ring-white" />
+            </span>
+          </button>
+
+          {showNotifications && (
+            <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl z-50 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                <div className="font-bold text-xs text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  Clinical Notifications
+                </div>
+                <span className="text-[10px] font-semibold bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full">
+                  Live
+                </span>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100/80 transition-colors">
+                  <div className="font-bold text-slate-800">QR Engine Ready</div>
+                  <div className="text-[11px] text-slate-500">Camera & wristband barcode verification operational.</div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100/80 transition-colors">
+                  <div className="font-bold text-slate-800">Database Synchronized</div>
+                  <div className="text-[11px] text-slate-500">All MongoDB inpatient & schedule records active.</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="h-6 w-px bg-slate-200" />
 

@@ -1,18 +1,25 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
+  Activity,
   AlertTriangle,
+  Bed,
   CalendarClock,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
+  Clock3,
+  FileText,
   Filter,
+  History,
+  Phone,
   Pill,
   QrCode,
   RefreshCw,
   Search,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   User,
   Users,
@@ -27,9 +34,12 @@ import Loading from "../../components/common/Loading"
 import EmptyState from "../../components/common/EmptyState"
 import StatCard from "../../components/dashboard/StatCard"
 import Modal from "../../components/common/Modal"
-import { getNurseMedications, getNurseMedicationHistory } from "../../services/medications"
+import {
+  getNurseMedications,
+  getNurseMedicationHistory,
+  getNursePatients,
+} from "../../services/medications"
 import { hideTestPatients } from "../../utils/patientFilter"
-import { Clock3, History, ShieldCheck } from "lucide-react"
 
 function normalizeStatus(status) {
   return String(status || "").trim().toUpperCase().replace(/_/g, " ")
@@ -83,8 +93,30 @@ function formatDate(dateString) {
   }).format(date)
 }
 
-function buildPatientGroups(medications) {
+function buildPatientGroups(medications, assignedPatients = []) {
   const map = new Map()
+
+  // First seed all assigned patients so newly assigned patients without prescriptions yet appear!
+  assignedPatients.forEach((ap) => {
+    const patientId = ap.patient_id ?? null
+    const patientCode = ap.patient_code ?? null
+    const patientKey = patientCode || patientId || ap.patient_name || "UNKNOWN-PATIENT"
+
+    map.set(patientKey, {
+      patient_id: patientId,
+      patient_code: patientCode || "N/A",
+      patient_name: ap.patient_name || "Inpatient",
+      ward: ap.ward || null,
+      bed_number: ap.bed_number || null,
+      gender: ap.gender || null,
+      age: ap.age || null,
+      active_prescriptions_count: ap.active_prescriptions_count || 0,
+      wristband_qr_status: ap.wristband_qr_status || "PENDING",
+      emergency_contact: ap.emergency_contact || null,
+      is_assigned: true,
+      medications: new Map(),
+    })
+  })
 
   medications.forEach((med) => {
     const patientId = med.patient_id ?? null
@@ -97,6 +129,9 @@ function buildPatientGroups(medications) {
         patient_id: patientId,
         patient_code: patientCode || "N/A",
         patient_name: med.patient_name || "Unknown Inpatient",
+        ward: med.ward || null,
+        bed_number: med.bed_number || null,
+        is_assigned: med.is_assigned !== false,
         medications: new Map(),
       })
     }
@@ -135,6 +170,7 @@ export default function NurseDashboard() {
   const navigate = useNavigate()
 
   const [medications, setMedications] = useState([])
+  const [assignedPatients, setAssignedPatients] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [search, setSearch] = useState("")
@@ -143,18 +179,31 @@ export default function NurseDashboard() {
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const [historyList, setHistoryList] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [selectedPatientModal, setSelectedPatientModal] = useState(null)
 
   async function loadMedications() {
     setLoading(true)
     setError("")
     try {
-      const response = await getNurseMedications()
-      const data = Array.isArray(response) ? response : []
-      const filtered = hideTestPatients(data)
-      setMedications(filtered)
+      const [medsRes, ptsRes] = await Promise.allSettled([
+        getNurseMedications(),
+        getNursePatients(),
+      ])
+
+      const medsData =
+        medsRes.status === "fulfilled" && Array.isArray(medsRes.value)
+          ? hideTestPatients(medsRes.value)
+          : []
+      const ptsData =
+        ptsRes.status === "fulfilled" && Array.isArray(ptsRes.value)
+          ? hideTestPatients(ptsRes.value)
+          : []
+
+      setMedications(medsData)
+      setAssignedPatients(ptsData)
 
       // Auto-expand the first 2 patients for nurse convenience
-      const groups = buildPatientGroups(filtered)
+      const groups = buildPatientGroups(medsData, ptsData)
       if (groups.length > 0) {
         setExpandedPatients(new Set(groups.slice(0, 2).map((g) => g.patient_code)))
       }
@@ -231,16 +280,17 @@ export default function NurseDashboard() {
       )
     }).length
     const statDoses = medications.filter((m) => Boolean(m.is_stat)).length
-    const uniquePatients = new Set(
-      medications.map((m) => m.patient_code || m.patient_id || m.patient_name)
-    ).size
+    const uniquePatients = Math.max(
+      assignedPatients.length,
+      new Set(medications.map((m) => m.patient_code || m.patient_id || m.patient_name)).size
+    )
 
     return { total, given, due, overdue, upcoming, attention, statDoses, uniquePatients }
-  }, [medications])
+  }, [medications, assignedPatients])
 
   // Filter and Search
   const filteredGroups = useMemo(() => {
-    let result = buildPatientGroups(medications)
+    let result = buildPatientGroups(medications, assignedPatients)
 
     // Search filter
     if (search.trim()) {
@@ -249,7 +299,8 @@ export default function NurseDashboard() {
         .map((patient) => {
           const matchPatient =
             patient.patient_name.toLowerCase().includes(term) ||
-            patient.patient_code.toLowerCase().includes(term)
+            patient.patient_code.toLowerCase().includes(term) ||
+            (patient.ward && String(patient.ward).toLowerCase().includes(term))
 
           const matchedMeds = patient.medications.filter((m) =>
             m.medicine_name.toLowerCase().includes(term)
@@ -305,7 +356,7 @@ export default function NurseDashboard() {
     }
 
     return result
-  }, [medications, search, filterTab])
+  }, [medications, assignedPatients, search, filterTab])
 
   return (
     <MainLayout
@@ -594,17 +645,28 @@ export default function NurseDashboard() {
                         <User className="w-5 h-5" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-base font-bold text-slate-900">
                             {patient.patient_name}
                           </h3>
+                          {patient.ward && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-slate-200/70 text-slate-700 px-2 py-0.5 rounded-md">
+                              <Bed className="w-3 h-3 text-slate-500" />
+                              Ward {patient.ward} · Bed {patient.bed_number || "—"}
+                            </span>
+                          )}
                           {hasStat && (
                             <Badge variant="warning" size="sm">
                               STAT ORDER
                             </Badge>
                           )}
+                          {patient.is_assigned && (
+                            <span className="text-[10px] font-bold bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded">
+                              Assigned
+                            </span>
+                          )}
                         </div>
-                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
+                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
                           <span>
                             ID:{" "}
                             <strong className="text-slate-700 font-mono">
@@ -623,7 +685,19 @@ export default function NurseDashboard() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={FileText}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedPatientModal(patient)
+                        }}
+                      >
+                        Profile
+                      </Button>
+
                       <Button
                         size="sm"
                         variant="primary"
@@ -649,7 +723,42 @@ export default function NurseDashboard() {
                   {/* Expanded Medication List */}
                   {isExpanded && (
                     <div className="p-5 border-t border-slate-100 space-y-4 bg-white">
-                      {patient.medications.map((med, idx) => (
+                      {patient.medications.length === 0 ? (
+                        <div className="p-6 text-center space-y-3 bg-sky-50/40 rounded-xl border border-sky-100">
+                          <div className="w-10 h-10 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center mx-auto">
+                            <Pill className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-800">
+                              No Active Medication Schedules Queued
+                            </h4>
+                            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
+                              This patient is assigned to your shift care list. There are currently no active physician medication orders or scheduled doses due at this time.
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-center gap-2 pt-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              icon={FileText}
+                              onClick={() => setSelectedPatientModal(patient)}
+                            >
+                              View EMR Details
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              icon={QrCode}
+                              onClick={() =>
+                                navigate(`/nurse/scanner?patient=${patient.patient_id}`)
+                              }
+                            >
+                              Verify Wristband QR
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        patient.medications.map((med, idx) => (
                         <div
                           key={idx}
                           className="rounded-2xl border border-slate-200/80 bg-slate-50/30 p-4 space-y-3"
@@ -743,8 +852,9 @@ export default function NurseDashboard() {
                             ))}
                           </div>
                         </div>
-                      ))}
-                    </div>
+                      ))
+                    )}
+                  </div>
                   )}
                 </div>
               )
@@ -824,6 +934,120 @@ export default function NurseDashboard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </Modal>
+
+        {/* MODAL: Patient Clinical Profile & Shift Context */}
+        <Modal
+          open={Boolean(selectedPatientModal)}
+          onClose={() => setSelectedPatientModal(null)}
+          title="Assigned Inpatient Profile"
+          subtitle={
+            selectedPatientModal
+              ? `${selectedPatientModal.patient_name} · ID: ${selectedPatientModal.patient_code}`
+              : "Patient Details"
+          }
+          maxWidth="max-w-xl"
+        >
+          {selectedPatientModal && (
+            <div className="space-y-5 p-2">
+              <div className="flex items-center gap-4 p-4 bg-sky-50 rounded-2xl border border-sky-100">
+                <div className="w-14 h-14 rounded-2xl bg-sky-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+                  <User className="w-7 h-7" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {selectedPatientModal.patient_name}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                    <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">
+                      {selectedPatientModal.patient_code}
+                    </span>
+                    <span>•</span>
+                    <span>
+                      {selectedPatientModal.gender || "Gender unstated"}
+                      {selectedPatientModal.age ? `, ${selectedPatientModal.age} yrs` : ""}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                  <span className="text-slate-400 font-semibold block uppercase text-[10px]">
+                    Ward & Bed
+                  </span>
+                  <div className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                    <Bed className="w-4 h-4 text-sky-600" />
+                    Ward {selectedPatientModal.ward || "Unassigned"} · Bed{" "}
+                    {selectedPatientModal.bed_number || "—"}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                  <span className="text-slate-400 font-semibold block uppercase text-[10px]">
+                    Wristband QR Status
+                  </span>
+                  <div className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                    <QrCode className="w-4 h-4 text-emerald-600" />
+                    <span
+                      className={`uppercase ${
+                        selectedPatientModal.wristband_qr_status === "ACTIVE"
+                          ? "text-emerald-700"
+                          : "text-amber-700"
+                      }`}
+                    >
+                      {selectedPatientModal.wristband_qr_status || "PENDING"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                  <span className="text-slate-400 font-semibold block uppercase text-[10px]">
+                    Prescription Orders
+                  </span>
+                  <div className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                    <Pill className="w-4 h-4 text-purple-600" />
+                    {selectedPatientModal.active_prescriptions_count ??
+                      selectedPatientModal.medications?.length ??
+                      0}{" "}
+                    Active Rx
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                  <span className="text-slate-400 font-semibold block uppercase text-[10px]">
+                    Emergency Contact
+                  </span>
+                  <div className="font-bold text-slate-800 text-sm flex items-center gap-1.5 truncate">
+                    <Phone className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span className="truncate">
+                      {selectedPatientModal.emergency_contact || "On File in EMR"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setSelectedPatientModal(null)}
+                >
+                  Close
+                </Button>
+                <Button
+                  variant="primary"
+                  icon={QrCode}
+                  onClick={() => {
+                    const pid = selectedPatientModal.patient_id
+                    setSelectedPatientModal(null)
+                    navigate(`/nurse/scanner?patient=${pid}`)
+                  }}
+                >
+                  Verify Patient QR
+                </Button>
+              </div>
             </div>
           )}
         </Modal>

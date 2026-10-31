@@ -184,6 +184,7 @@ def get_carematch_doctors(
 # ---------------------------------------------------------
 
 @router.put("/admin/doctors/{doctor_id}/profile")
+@router.put("/admin/doctors/{doctor_id}")
 def save_doctor_profile(
     doctor_id: int,
     request: DoctorProfileRequest,
