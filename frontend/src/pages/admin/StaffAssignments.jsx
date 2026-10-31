@@ -1,20 +1,36 @@
 import {
+  AlertCircle,
+  Building2,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
+  Filter,
   Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
   Stethoscope,
+  Trash2,
+  UserCheck,
   UserPlus,
-  Users,
   UserRound,
+  Users,
+  X,
   XCircle,
 } from "lucide-react"
 
-import {
-  useEffect,
-  useState,
-} from "react"
-
+import { useEffect, useMemo, useState } from "react"
 import MainLayout from "../../components/layout/MainLayout"
+import Badge from "../../components/common/Badge"
+import Button from "../../components/common/Button"
+import Card, { CardHeader } from "../../components/common/Card"
+import EmptyState from "../../components/common/EmptyState"
+import ErrorState from "../../components/common/ErrorState"
+import Loading from "../../components/common/Loading"
+import Modal from "../../components/common/Modal"
+import Pagination from "../../components/common/Pagination"
+import StatCard from "../../components/dashboard/StatCard"
 
 import {
   assignPatientToDoctor,
@@ -29,150 +45,31 @@ import {
   removePatientFromDoctor,
 } from "../../services/admin"
 
-
-// =========================================================
-// MESSAGE
-// =========================================================
-
-function Message({
-  type,
-  children,
-}) {
-  if (!children) {
-    return null
-  }
-
-  const success =
-    type === "success"
-
-  return (
-    <div
-      className={[
-        "flex items-start gap-2 rounded-xl border px-4 py-3 text-sm",
-        success
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-red-200 bg-red-50 text-red-700",
-      ].join(" ")}
-    >
-      {success ? (
-        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-      ) : (
-        <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-      )}
-
-      <span>{children}</span>
-    </div>
-  )
-}
-
-
-// =========================================================
-// LOADING
-// =========================================================
-
-function LoadingRow() {
-  return (
-    <div className="flex items-center justify-center py-12 text-sm text-slate-500">
-      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-      Loading...
-    </div>
-  )
-}
-
-
-// =========================================================
-// MAIN
-// =========================================================
-
 export default function StaffAssignments() {
+  const [activeTab, setActiveTab] = useState("assignments") // 'assignments', 'assign_new', 'add_staff'
+  const [subTab, setSubTab] = useState("all") // 'all', 'doctors', 'nurses'
+  const [search, setSearch] = useState("")
 
-  // =======================================================
-  // STAFF / PATIENT DATA
-  // =======================================================
+  // Data
+  const [nurses, setNurses] = useState([])
+  const [doctors, setDoctors] = useState([])
+  const [patients, setPatients] = useState([])
+  const [assignments, setAssignments] = useState([])
+  const [doctorAssignments, setDoctorAssignments] = useState([])
 
-  const [
-    nurses,
-    setNurses,
-  ] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState("")
 
-  const [
-    doctors,
-    setDoctors,
-  ] = useState([])
+  // Form states
+  const [savingStaff, setSavingStaff] = useState(false)
+  const [assigningNurse, setAssigningNurse] = useState(false)
+  const [assigningDoctor, setAssigningDoctor] = useState(false)
+  const [removingId, setRemovingId] = useState(null)
+  const [doctorRemovingId, setDoctorRemovingId] = useState(null)
 
-  const [
-    patients,
-    setPatients,
-  ] = useState([])
-
-  // =======================================================
-  // ASSIGNMENT DATA
-  // =======================================================
-
-  const [
-    assignments,
-    setAssignments,
-  ] = useState([])
-
-  const [
-    doctorAssignments,
-    setDoctorAssignments,
-  ] = useState([])
-
-  // =======================================================
-  // GENERAL LOADING
-  // =======================================================
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-  // =======================================================
-  // CREATE STAFF
-  // =======================================================
-
-  const [
-    savingStaff,
-    setSavingStaff,
-  ] = useState(false)
-
-  // =======================================================
-  // NURSE ASSIGNMENT
-  // =======================================================
-
-  const [
-    assigning,
-    setAssigning,
-  ] = useState(false)
-
-  const [
-    removingId,
-    setRemovingId,
-  ] = useState(null)
-
-  // =======================================================
-  // DOCTOR ASSIGNMENT
-  // =======================================================
-
-  const [
-    doctorAssigning,
-    setDoctorAssigning,
-  ] = useState(false)
-
-  const [
-    doctorRemovingId,
-    setDoctorRemovingId,
-  ] = useState(null)
-
-  // =======================================================
-  // STAFF FORM
-  // =======================================================
-
-  const [
-    staffForm,
-    setStaffForm,
-  ] = useState({
+  // Forms
+  const [staffForm, setStaffForm] = useState({
     full_name: "",
     username: "",
     email: "",
@@ -180,80 +77,32 @@ export default function StaffAssignments() {
     role: "nurse",
   })
 
-  // =======================================================
-  // NURSE ASSIGNMENT FORM
-  // =======================================================
-
-  const [
-    assignmentForm,
-    setAssignmentForm,
-  ] = useState({
+  const [assignmentForm, setAssignmentForm] = useState({
     nurse_id: "",
     patient_id: "",
   })
 
-  // =======================================================
-  // DOCTOR ASSIGNMENT FORM
-  // =======================================================
-
-  const [
-    doctorAssignmentForm,
-    setDoctorAssignmentForm,
-  ] = useState({
+  const [doctorAssignmentForm, setDoctorAssignmentForm] = useState({
     doctor_id: "",
     patient_id: "",
   })
 
-  // =======================================================
-  // MESSAGES
-  // =======================================================
+  // Notifications
+  const [successMessage, setSuccessMessage] = useState("")
+  const [errorMessage, setErrorMessage] = useState("")
 
-  const [
-    staffSuccess,
-    setStaffSuccess,
-  ] = useState("")
-
-  const [
-    staffError,
-    setStaffError,
-  ] = useState("")
-
-  const [
-    assignmentSuccess,
-    setAssignmentSuccess,
-  ] = useState("")
-
-  const [
-    assignmentError,
-    setAssignmentError,
-  ] = useState("")
-
-  const [
-    doctorAssignmentSuccess,
-    setDoctorAssignmentSuccess,
-  ] = useState("")
-
-  const [
-    doctorAssignmentError,
-    setDoctorAssignmentError,
-  ] = useState("")
-
-
-  // =========================================================
-  // LOAD EVERYTHING
-  // =========================================================
-
-  async function loadData() {
-    setLoading(true)
+  async function loadData(isManual = false) {
+    if (isManual) setRefreshing(true)
+    else setLoading(true)
+    setError("")
 
     try {
-
       const [
-        nursesResult,
-        doctorsResult,
-        patientsResult,
-        assignmentsResult,
-        doctorAssignmentsResult,
+        nurseData,
+        doctorData,
+        patientData,
+        nurseAssignmentsData,
+        doctorAssignmentsData,
       ] = await Promise.all([
         getAdminNurses(),
         getAdminDoctors(),
@@ -262,254 +111,52 @@ export default function StaffAssignments() {
         getDoctorAssignments(),
       ])
 
-      // -----------------------------------------------------
-      // Nurses
-      // -----------------------------------------------------
-
-      const loadedNurses =
-        Array.isArray(
-          nursesResult?.nurses,
-        )
-          ? nursesResult.nurses
-          : []
-
-      // -----------------------------------------------------
-      // Doctors
-      // -----------------------------------------------------
-
-      const loadedDoctors =
-        Array.isArray(
-          doctorsResult?.doctors,
-        )
-          ? doctorsResult.doctors
-          : []
-
-      // -----------------------------------------------------
-      // Patients
-      // -----------------------------------------------------
-
-      const loadedPatients =
-        Array.isArray(
-          patientsResult?.patients,
-        )
-          ? patientsResult.patients
-          : []
-
-      // -----------------------------------------------------
-      // Nurse assignments
-      // -----------------------------------------------------
-
-      const loadedAssignments =
-        Array.isArray(
-          assignmentsResult?.assignments,
-        )
-          ? assignmentsResult.assignments
-          : []
-
-      // -----------------------------------------------------
-      // Doctor assignments
-      // -----------------------------------------------------
-
-      const loadedDoctorAssignments =
-        Array.isArray(
-          doctorAssignmentsResult?.assignments,
-        )
-          ? doctorAssignmentsResult.assignments
-          : []
-
-      setNurses(
-        loadedNurses,
-      )
-
-      setDoctors(
-        loadedDoctors,
-      )
-
-      setPatients(
-        loadedPatients,
-      )
-
+      setNurses(Array.isArray(nurseData?.nurses) ? nurseData.nurses : [])
+      setDoctors(Array.isArray(doctorData?.doctors) ? doctorData.doctors : [])
+      setPatients(Array.isArray(patientData?.patients) ? patientData.patients : [])
       setAssignments(
-        loadedAssignments,
+        Array.isArray(nurseAssignmentsData?.assignments)
+          ? nurseAssignmentsData.assignments
+          : [],
       )
-
       setDoctorAssignments(
-        loadedDoctorAssignments,
+        Array.isArray(doctorAssignmentsData?.assignments)
+          ? doctorAssignmentsData.assignments
+          : [],
       )
-
-      // -----------------------------------------------------
-      // Set default nurse assignment values
-      // -----------------------------------------------------
-
-      setAssignmentForm(
-        (current) => ({
-          ...current,
-
-          nurse_id:
-            current.nurse_id ||
-            loadedNurses[0]?.id?.toString() ||
-            "",
-
-          patient_id:
-            current.patient_id ||
-            loadedPatients[0]?.id?.toString() ||
-            "",
-        }),
+    } catch (err) {
+      console.error("Load assignments error:", err)
+      setError(
+        err?.response?.data?.detail ||
+          "Unable to load staff and assignments data.",
       )
-
-      // -----------------------------------------------------
-      // Set default doctor assignment values
-      // -----------------------------------------------------
-
-      setDoctorAssignmentForm(
-        (current) => ({
-          ...current,
-
-          doctor_id:
-            current.doctor_id ||
-            loadedDoctors[0]?.id?.toString() ||
-            "",
-
-          patient_id:
-            current.patient_id ||
-            loadedPatients[0]?.id?.toString() ||
-            "",
-        }),
-      )
-
-    } catch (error) {
-
-      console.error(
-        "Failed to load admin assignment data:",
-        error,
-      )
-
-      setAssignmentError(
-        error?.response?.data?.detail ||
-          "Unable to load staff, doctors and patient data.",
-      )
-
-      setDoctorAssignmentError(
-        error?.response?.data?.detail ||
-          "Unable to load staff, doctors and patient data.",
-      )
-
     } finally {
-
       setLoading(false)
-
+      setRefreshing(false)
     }
   }
-
-
-  // =========================================================
-  // INITIAL LOAD
-  // =========================================================
 
   useEffect(() => {
     loadData()
   }, [])
 
-
-  // =========================================================
-  // STAFF FIELD
-  // =========================================================
-
-  function updateStaffField(event) {
-
-    const {
-      name,
-      value,
-    } = event.target
-
-    setStaffForm(
-      (current) => ({
-        ...current,
-        [name]: value,
-      }),
-    )
-  }
-
-
-  // =========================================================
-  // NURSE ASSIGNMENT FIELD
-  // =========================================================
-
-  function updateAssignmentField(event) {
-
-    const {
-      name,
-      value,
-    } = event.target
-
-    setAssignmentForm(
-      (current) => ({
-        ...current,
-        [name]: value,
-      }),
-    )
-  }
-
-
-  // =========================================================
-  // DOCTOR ASSIGNMENT FIELD
-  // =========================================================
-
-  function updateDoctorAssignmentField(event) {
-
-    const {
-      name,
-      value,
-    } = event.target
-
-    setDoctorAssignmentForm(
-      (current) => ({
-        ...current,
-        [name]: value,
-      }),
-    )
-  }
-
-
-  // =========================================================
-  // CREATE STAFF
-  // =========================================================
-
-  async function handleCreateStaff(event) {
-
-    event.preventDefault()
-
-    setStaffSuccess("")
-    setStaffError("")
-
-    if (
-      !staffForm.full_name.trim() ||
-      !staffForm.username.trim() ||
-      !staffForm.email.trim() ||
-      !staffForm.password
-    ) {
-
-      setStaffError(
-        "Please fill in all staff fields.",
-      )
-
-      return
-    }
-
+  // Create Staff
+  async function handleCreateStaff(e) {
+    e.preventDefault()
     setSavingStaff(true)
+    setSuccessMessage("")
+    setErrorMessage("")
 
     try {
-
-      const result =
-        await createStaff(
-          staffForm,
-        )
-
-      setStaffSuccess(
-        result?.message ||
-          "Staff account created successfully.",
+      const result = await createStaff(
+        staffForm.full_name.trim(),
+        staffForm.username.trim(),
+        staffForm.email.trim(),
+        staffForm.password,
+        staffForm.role,
       )
 
+      setSuccessMessage(result?.message || "Staff account created successfully.")
       setStaffForm({
         full_name: "",
         username: "",
@@ -518,1303 +165,771 @@ export default function StaffAssignments() {
         role: "nurse",
       })
 
-      await loadData()
-
-    } catch (error) {
-
-      console.error(
-        "Create staff error:",
-        error,
-      )
-
-      setStaffError(
-        error?.response?.data?.detail ||
-          "Unable to create staff account.",
-      )
-
+      // Reload
+      await loadData(true)
+      setActiveTab("assignments")
+    } catch (err) {
+      setErrorMessage(err?.response?.data?.detail || "Unable to create staff.")
     } finally {
-
       setSavingStaff(false)
-
     }
   }
 
-
-  // =========================================================
-  // ASSIGN PATIENT TO NURSE
-  // =========================================================
-
-  async function handleAssignment(event) {
-
-    event.preventDefault()
-
-    setAssignmentSuccess("")
-    setAssignmentError("")
-
-    if (
-      !assignmentForm.nurse_id ||
-      !assignmentForm.patient_id
-    ) {
-
-      setAssignmentError(
-        "Please select both a nurse and a patient.",
-      )
-
+  // Assign Nurse
+  async function handleAssignNurse(e) {
+    e.preventDefault()
+    if (!assignmentForm.nurse_id || !assignmentForm.patient_id) {
+      setErrorMessage("Select both a nurse and a patient.")
       return
     }
 
-    setAssigning(true)
+    setAssigningNurse(true)
+    setSuccessMessage("")
+    setErrorMessage("")
 
     try {
-
-      const result =
-        await assignPatientToNurse(
-          assignmentForm.nurse_id,
-          assignmentForm.patient_id,
-        )
-
-      setAssignmentSuccess(
-        result?.message ||
-          "Patient assigned to nurse successfully.",
+      const result = await assignPatientToNurse(
+        assignmentForm.nurse_id,
+        assignmentForm.patient_id,
       )
 
-      const refreshed =
-        await getAdminAssignments()
-
-      setAssignments(
-        Array.isArray(
-          refreshed?.assignments,
-        )
-          ? refreshed.assignments
-          : [],
-      )
-
-    } catch (error) {
-
-      console.error(
-        "Nurse assignment error:",
-        error,
-      )
-
-      setAssignmentError(
-        error?.response?.data?.detail ||
-          "Unable to assign patient to nurse.",
-      )
-
+      setSuccessMessage(result?.message || "Patient successfully assigned to nurse.")
+      setAssignmentForm({ nurse_id: "", patient_id: "" })
+      await loadData(true)
+      setActiveTab("assignments")
+    } catch (err) {
+      setErrorMessage(err?.response?.data?.detail || "Unable to assign nurse.")
     } finally {
-
-      setAssigning(false)
-
+      setAssigningNurse(false)
     }
   }
 
+  // Assign Doctor
+  async function handleAssignDoctor(e) {
+    e.preventDefault()
+    if (!doctorAssignmentForm.doctor_id || !doctorAssignmentForm.patient_id) {
+      setErrorMessage("Select both an attending doctor and a patient.")
+      return
+    }
 
-  // =========================================================
-  // REMOVE NURSE ASSIGNMENT
-  // =========================================================
-
-  async function handleRemoveAssignment(
-    assignmentId,
-  ) {
-
-    setRemovingId(
-      assignmentId,
-    )
-
-    setAssignmentSuccess("")
-    setAssignmentError("")
+    setAssigningDoctor(true)
+    setSuccessMessage("")
+    setErrorMessage("")
 
     try {
-
-      const result =
-        await removePatientAssignment(
-          assignmentId,
-        )
-
-      setAssignmentSuccess(
-        result?.message ||
-          "Nurse assignment removed successfully.",
+      const result = await assignPatientToDoctor(
+        doctorAssignmentForm.doctor_id,
+        doctorAssignmentForm.patient_id,
       )
 
-      const refreshed =
-        await getAdminAssignments()
-
-      setAssignments(
-        Array.isArray(
-          refreshed?.assignments,
-        )
-          ? refreshed.assignments
-          : [],
-      )
-
-    } catch (error) {
-
-      console.error(
-        "Remove nurse assignment error:",
-        error,
-      )
-
-      setAssignmentError(
-        error?.response?.data?.detail ||
-          "Unable to remove nurse assignment.",
-      )
-
+      setSuccessMessage(result?.message || "Patient successfully assigned to doctor.")
+      setDoctorAssignmentForm({ doctor_id: "", patient_id: "" })
+      await loadData(true)
+      setActiveTab("assignments")
+    } catch (err) {
+      setErrorMessage(err?.response?.data?.detail || "Unable to assign doctor.")
     } finally {
+      setAssigningDoctor(false)
+    }
+  }
 
+  // Remove Nurse Assignment
+  async function handleRemoveNurseAssignment(assignmentId) {
+    if (!window.confirm("Remove this nurse patient assignment?")) return
+    setRemovingId(assignmentId)
+
+    try {
+      await removePatientAssignment(assignmentId)
+      setSuccessMessage("Nurse assignment removed.")
+      await loadData(true)
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Unable to remove assignment.")
+    } finally {
       setRemovingId(null)
-
     }
   }
 
-
-  // =========================================================
-  // ASSIGN PATIENT TO DOCTOR
-  // =========================================================
-
-  async function handleAssignDoctor(event) {
-
-    event.preventDefault()
-
-    setDoctorAssignmentSuccess("")
-    setDoctorAssignmentError("")
-
-    if (
-      !doctorAssignmentForm.doctor_id ||
-      !doctorAssignmentForm.patient_id
-    ) {
-
-      setDoctorAssignmentError(
-        "Please select both a doctor and a patient.",
-      )
-
-      return
-    }
-
-    setDoctorAssigning(true)
+  // Remove Doctor Assignment
+  async function handleRemoveDoctorAssignment(encounterId) {
+    if (!window.confirm("Remove this doctor patient assignment?")) return
+    setDoctorRemovingId(encounterId)
 
     try {
-
-      const result =
-        await assignPatientToDoctor(
-          doctorAssignmentForm.doctor_id,
-          doctorAssignmentForm.patient_id,
-        )
-
-      setDoctorAssignmentSuccess(
-        result?.message ||
-          "Patient assigned to doctor successfully.",
-      )
-
-      // ---------------------------------------------------
-      // Refresh doctor assignments
-      // ---------------------------------------------------
-
-      const refreshed =
-        await getDoctorAssignments()
-
-      setDoctorAssignments(
-        Array.isArray(
-          refreshed?.assignments,
-        )
-          ? refreshed.assignments
-          : [],
-      )
-
-    } catch (error) {
-
-      console.error(
-        "Doctor assignment error:",
-        error,
-      )
-
-      setDoctorAssignmentError(
-        error?.response?.data?.detail ||
-          "Unable to assign patient to doctor.",
-      )
-
+      await removePatientFromDoctor(encounterId)
+      setSuccessMessage("Doctor encounter assignment removed.")
+      await loadData(true)
+    } catch (err) {
+      alert(err?.response?.data?.detail || "Unable to remove doctor assignment.")
     } finally {
-
-      setDoctorAssigning(false)
-
+      setDoctorRemovingId(null)
     }
   }
 
-
-  // =========================================================
-  // REMOVE DOCTOR ASSIGNMENT
-  // =========================================================
-
-  async function handleRemoveDoctorAssignment(
-    encounterId,
-  ) {
-
-    setDoctorRemovingId(
-      encounterId,
+  // Filtered lists
+  const filteredNurseAssignments = useMemo(() => {
+    if (!search.trim()) return assignments
+    const q = search.toLowerCase()
+    return assignments.filter(
+      (a) =>
+        (a.nurse_name || "").toLowerCase().includes(q) ||
+        (a.patient_name || "").toLowerCase().includes(q) ||
+        (a.patient_id || "").toLowerCase().includes(q),
     )
+  }, [assignments, search])
 
-    setDoctorAssignmentSuccess("")
-    setDoctorAssignmentError("")
+  const filteredDoctorAssignments = useMemo(() => {
+    if (!search.trim()) return doctorAssignments
+    const q = search.toLowerCase()
+    return doctorAssignments.filter(
+      (a) =>
+        (a.doctor_name || "").toLowerCase().includes(q) ||
+        (a.patient_name || "").toLowerCase().includes(q) ||
+        (a.patient_id || "").toLowerCase().includes(q),
+    )
+  }, [doctorAssignments, search])
 
-    try {
-
-      const result =
-        await removePatientFromDoctor(
-          encounterId,
-        )
-
-      setDoctorAssignmentSuccess(
-        result?.message ||
-          "Doctor assignment removed successfully.",
-      )
-
-      const refreshed =
-        await getDoctorAssignments()
-
-      setDoctorAssignments(
-        Array.isArray(
-          refreshed?.assignments,
-        )
-          ? refreshed.assignments
-          : [],
-      )
-
-    } catch (error) {
-
-      console.error(
-        "Remove doctor assignment error:",
-        error,
-      )
-
-      setDoctorAssignmentError(
-        error?.response?.data?.detail ||
-          "Unable to remove doctor assignment.",
-      )
-
-    } finally {
-
-      setDoctorRemovingId(
-        null,
-      )
-
-    }
+  if (loading) {
+    return (
+      <MainLayout
+        title="Staff & Patient Assignments"
+        subtitle="Clinical role administration & patient encounter assignments"
+      >
+        <Loading
+          fullScreen
+          message="Loading Staff & Care Assignments..."
+          subtext="Fetching clinical rosters, active assignments and patient rosters"
+        />
+      </MainLayout>
+    )
   }
-
-
-  // =========================================================
-  // RETURN
-  // =========================================================
 
   return (
-    <MainLayout title="Staff & Assignments">
-
-      <div className="space-y-6">
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <section className="overflow-hidden rounded-3xl bg-slate-950 text-white shadow-xl">
-
-          <div className="p-6 lg:p-8">
-
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-
-              <div>
-
-                <div className="flex items-center gap-3">
-
-                  <div className="rounded-2xl bg-cyan-500/10 p-3">
-
-                    <Users className="h-6 w-6 text-cyan-400" />
-
-                  </div>
-
-                  <div>
-
-                    <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-400">
-                      SmartMedChart
-                    </p>
-
-                    <h1 className="mt-1 text-2xl font-bold">
-                      Staff & Patient Assignments
-                    </h1>
-
-                  </div>
-
-                </div>
-
-                <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-400">
-                  Create clinical staff accounts and control
-                  which patients each nurse or doctor can access.
-                </p>
-
-              </div>
-
-              <div className="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-xs font-bold uppercase tracking-wide text-emerald-400">
-
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-
-                Access Control Active
-
-              </div>
-
+    <MainLayout
+      title="Staff & Patient Assignments"
+      subtitle="Coordinate clinical doctor encounters, nurse shift allocations, and staff provisioning"
+    >
+      <div className="space-y-6 sm:space-y-8">
+        {/* Top Header Actions */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-sky-500 animate-pulse" />
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Administration Portal
+              </p>
             </div>
-
+            <h2 className="font-heading text-2xl font-extrabold text-slate-900 mt-1">
+              Clinical Team & Care Allocations
+            </h2>
           </div>
 
-        </section>
-
-
-        {/* =================================================
-            LOADING
-        ================================================= */}
-
-        {loading ? (
-
-          <LoadingRow />
-
-        ) : (
-
-          <>
-
-            {/* =================================================
-                CREATE STAFF
-            ================================================= */}
-
-            <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-              <div className="border-b border-slate-100 p-6">
-
-                <div className="flex items-center gap-3">
-
-                  <div className="rounded-xl bg-cyan-50 p-3">
-
-                    <UserPlus className="h-5 w-5 text-cyan-600" />
-
-                  </div>
-
-                  <div>
-
-                    <h2 className="text-lg font-bold text-slate-900">
-                      Add Staff Account
-                    </h2>
-
-                    <p className="text-sm text-slate-500">
-                      Create a new clinical staff account.
-                    </p>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              <form
-                onSubmit={
-                  handleCreateStaff
-                }
-                className="space-y-5 p-6"
-              >
-
-                <Message
-                  type="success"
-                >
-                  {staffSuccess}
-                </Message>
-
-                <Message
-                  type="error"
-                >
-                  {staffError}
-                </Message>
-
-
-                <div>
-
-                  <label className="mb-2 block text-sm font-semibold text-slate-700">
-                    Full Name
-                  </label>
-
-                  <input
-                    name="full_name"
-                    value={
-                      staffForm.full_name
-                    }
-                    onChange={
-                      updateStaffField
-                    }
-                    placeholder="e.g. Priya Sharma"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  />
-
-                </div>
-
-
-                <div className="grid gap-4 md:grid-cols-3">
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Username
-                    </label>
-
-                    <input
-                      name="username"
-                      value={
-                        staffForm.username
-                      }
-                      onChange={
-                        updateStaffField
-                      }
-                      placeholder="priya_nurse"
-                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                    />
-
-                  </div>
-
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Role
-                    </label>
-
-                    <select
-                      name="role"
-                      value={
-                        staffForm.role
-                      }
-                      onChange={
-                        updateStaffField
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                    >
-
-                      <option value="nurse">
-                        Nurse
-                      </option>
-
-                      <option value="receptionist">
-                        Receptionist
-                      </option>
-
-                      <option value="doctor">
-                        Doctor
-                      </option>
-                      
-
-                    </select>
-
-                  </div>
-
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Email
-                    </label>
-
-                    <input
-                      type="email"
-                      name="email"
-                      value={
-                        staffForm.email
-                      }
-                      onChange={
-                        updateStaffField
-                      }
-                      placeholder="staff@smartmedchart.com"
-                      className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                    />
-
-                  </div>
-
-                </div>
-
-
-                <div>
-
-                  <label className="mb-2 block text-sm font-semibold text-slate-700">
-                    Password
-                  </label>
-
-                  <input
-                    type="password"
-                    name="password"
-                    value={
-                      staffForm.password
-                    }
-                    onChange={
-                      updateStaffField
-                    }
-                    placeholder="Minimum 8 characters"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  />
-
-                </div>
-
-
-                <button
-                  type="submit"
-                  disabled={
-                    savingStaff
-                  }
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-
-                  {savingStaff && (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  )}
-
-                  {savingStaff
-                    ? "Creating..."
-                    : `Create ${
-                        staffForm.role ===
-                        "doctor"
-                          ? "Doctor"
-                          : "Nurse"
-                      }`
-                  }
-
-                </button>
-
-              </form>
-
-            </section>
-
-
-            {/* =================================================
-                ASSIGNMENT FORMS
-            ================================================= */}
-
-            <div className="grid gap-6 xl:grid-cols-2">
-
-              {/* =================================================
-                  NURSE ASSIGNMENT
-              ================================================= */}
-
-              <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-                <div className="border-b border-slate-100 p-6">
-
-                  <div className="flex items-center gap-3">
-
-                    <div className="rounded-xl bg-violet-50 p-3">
-
-                      <ClipboardList className="h-5 w-5 text-violet-600" />
-
-                    </div>
-
-                    <div>
-
-                      <h2 className="text-lg font-bold text-slate-900">
-                        Assign Patient to Nurse
-                      </h2>
-
-                      <p className="text-sm text-slate-500">
-                        Control which patients the nurse can access.
-                      </p>
-
-                    </div>
-
-                  </div>
-
-                </div>
-
-
-                <form
-                  onSubmit={
-                    handleAssignment
-                  }
-                  className="space-y-5 p-6"
-                >
-
-                  <Message
-                    type="success"
-                  >
-                    {assignmentSuccess}
-                  </Message>
-
-                  <Message
-                    type="error"
-                  >
-                    {assignmentError}
-                  </Message>
-
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Nurse
-                    </label>
-
-                    <select
-                      name="nurse_id"
-                      value={
-                        assignmentForm.nurse_id
-                      }
-                      onChange={
-                        updateAssignmentField
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-400/10"
-                    >
-
-                      <option value="">
-                        Select nurse
-                      </option>
-
-                      {nurses.map(
-                        (nurse) => (
-                          <option
-                            key={
-                              nurse.id
-                            }
-                            value={
-                              nurse.id
-                            }
-                          >
-                            {nurse.full_name}
-                            {" · "}
-                            @{nurse.username}
-                          </option>
-                        ),
-                      )}
-
-                    </select>
-
-                  </div>
-
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Patient
-                    </label>
-
-                    <select
-                      name="patient_id"
-                      value={
-                        assignmentForm.patient_id
-                      }
-                      onChange={
-                        updateAssignmentField
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-400/10"
-                    >
-
-                      <option value="">
-                        Select patient
-                      </option>
-
-                      {patients.map(
-                        (patient) => (
-                          <option
-                            key={
-                              patient.id
-                            }
-                            value={
-                              patient.id
-                            }
-                          >
-                            {patient.full_name}
-                            {" · "}
-                            {patient.patient_id}
-                          </option>
-                        ),
-                      )}
-
-                    </select>
-
-                  </div>
-
-
-                  <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4">
-
-                    <p className="text-xs font-bold uppercase tracking-wide text-violet-700">
-                      Access Rule
-                    </p>
-
-                    <p className="mt-1 text-sm leading-6 text-violet-900">
-                      The selected nurse will be able to access
-                      medication and QR workflows only for this patient.
-                    </p>
-
-                  </div>
-
-
-                  <button
-                    type="submit"
-                    disabled={
-                      assigning ||
-                      !nurses.length ||
-                      !patients.length
-                    }
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-
-                    {assigning && (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    )}
-
-                    {assigning
-                      ? "Assigning..."
-                      : "Assign Patient to Nurse"
-                    }
-
-                  </button>
-
-                </form>
-
-              </section>
-
-
-              {/* =================================================
-                  DOCTOR ASSIGNMENT
-              ================================================= */}
-
-              <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-                <div className="border-b border-slate-100 p-6">
-
-                  <div className="flex items-center gap-3">
-
-                    <div className="rounded-xl bg-cyan-50 p-3">
-
-                      <Stethoscope className="h-5 w-5 text-cyan-600" />
-
-                    </div>
-
-                    <div>
-
-                      <h2 className="text-lg font-bold text-slate-900">
-                        Assign Patient to Doctor
-                      </h2>
-
-                      <p className="text-sm text-slate-500">
-                        Control which patients the doctor can access.
-                      </p>
-
-                    </div>
-
-                  </div>
-
-                </div>
-
-
-                <form
-                  onSubmit={
-                    handleAssignDoctor
-                  }
-                  className="space-y-5 p-6"
-                >
-
-                  <Message
-                    type="success"
-                  >
-                    {doctorAssignmentSuccess}
-                  </Message>
-
-                  <Message
-                    type="error"
-                  >
-                    {doctorAssignmentError}
-                  </Message>
-
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Doctor
-                    </label>
-
-                    <select
-                      name="doctor_id"
-                      value={
-                        doctorAssignmentForm.doctor_id
-                      }
-                      onChange={
-                        updateDoctorAssignmentField
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                    >
-
-                      <option value="">
-                        Select doctor
-                      </option>
-
-                      {doctors.map(
-                        (doctor) => (
-                          <option
-                            key={
-                              doctor.id
-                            }
-                            value={
-                              doctor.id
-                            }
-                          >
-                            {doctor.full_name}
-                            {" · "}
-                            @{doctor.username}
-                          </option>
-                        ),
-                      )}
-
-                    </select>
-
-                  </div>
-
-
-                  <div>
-
-                    <label className="mb-2 block text-sm font-semibold text-slate-700">
-                      Patient
-                    </label>
-
-                    <select
-                      name="patient_id"
-                      value={
-                        doctorAssignmentForm.patient_id
-                      }
-                      onChange={
-                        updateDoctorAssignmentField
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                    >
-
-                      <option value="">
-                        Select patient
-                      </option>
-
-                      {patients.map(
-                        (patient) => (
-                          <option
-                            key={
-                              patient.id
-                            }
-                            value={
-                              patient.id
-                            }
-                          >
-                            {patient.full_name}
-                            {" · "}
-                            {patient.patient_id}
-                          </option>
-                        ),
-                      )}
-
-                    </select>
-
-                  </div>
-
-
-                  <div className="rounded-2xl border border-cyan-100 bg-cyan-50 p-4">
-
-                    <p className="text-xs font-bold uppercase tracking-wide text-cyan-700">
-                      Access Rule
-                    </p>
-
-                    <p className="mt-1 text-sm leading-6 text-cyan-900">
-                      The selected doctor will be able to access
-                      clinical information for this patient.
-                    </p>
-
-                  </div>
-
-
-                  <button
-                    type="submit"
-                    disabled={
-                      doctorAssigning ||
-                      !doctors.length ||
-                      !patients.length
-                    }
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-
-                    {doctorAssigning && (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    )}
-
-                    {doctorAssigning
-                      ? "Assigning..."
-                      : "Assign Patient to Doctor"
-                    }
-
-                  </button>
-
-                </form>
-
-              </section>
-
+          <div className="flex items-center gap-2.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              loading={refreshing}
+              onClick={() => loadData(true)}
+            >
+              Refresh
+            </Button>
+            <Button
+              variant={activeTab === "assign_new" ? "primary" : "secondary"}
+              size="sm"
+              icon={UserCheck}
+              onClick={() => setActiveTab("assign_new")}
+            >
+              Assign Patient
+            </Button>
+            <Button
+              variant={activeTab === "add_staff" ? "primary" : "secondary"}
+              size="sm"
+              icon={UserPlus}
+              onClick={() => setActiveTab("add_staff")}
+            >
+              New Staff Account
+            </Button>
+          </div>
+        </div>
+
+        {/* Global Notifications */}
+        {successMessage && (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-800 animate-fade-in">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+              <span>{successMessage}</span>
             </div>
-
-
-            {/* =================================================
-                CURRENT NURSE ASSIGNMENTS
-            ================================================= */}
-
-            <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-              <div className="border-b border-slate-100 p-6">
-
-                <div className="flex items-center justify-between gap-4">
-
-                  <div className="flex items-center gap-3">
-
-                    <div className="rounded-xl bg-emerald-50 p-3">
-
-                      <UserRound className="h-5 w-5 text-emerald-600" />
-
-                    </div>
-
-                    <div>
-
-                      <h2 className="text-lg font-bold text-slate-900">
-                        Current Nurse Assignments
-                      </h2>
-
-                      <p className="text-sm text-slate-500">
-                        Active nurse-to-patient access mappings.
-                      </p>
-
-                    </div>
-
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
-                    {assignments.length} active
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              {assignments.length === 0 ? (
-
-                <div className="px-6 py-14 text-center">
-
-                  <Users className="mx-auto h-10 w-10 text-slate-300" />
-
-                  <p className="mt-4 text-sm font-semibold text-slate-700">
-                    No nurse assignments yet
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    Assign a patient to a nurse using the form above.
-                  </p>
-
-                </div>
-
-              ) : (
-
-                <div className="overflow-x-auto">
-
-                  <table className="min-w-[750px] w-full">
-
-                    <thead className="border-b border-slate-100 bg-slate-50">
-
-                      <tr>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Nurse
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Patient
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Patient Code
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Action
-                        </th>
-
-                      </tr>
-
-                    </thead>
-
-
-                    <tbody className="divide-y divide-slate-100">
-
-                      {assignments.map(
-                        (assignment) => (
-
-                          <tr
-                            key={
-                              assignment.id
-                            }
-                            className="hover:bg-slate-50"
-                          >
-
-                            <td className="px-6 py-4">
-
-                              <p className="font-semibold text-slate-800">
-                                {assignment.nurse_name}
-                              </p>
-
-                              <p className="mt-1 text-xs text-slate-400">
-                                @{assignment.nurse_username}
-                              </p>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <p className="font-semibold text-slate-800">
-                                {assignment.patient_name}
-                              </p>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <span className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600">
-                                {assignment.patient_code}
-                              </span>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <button
-                                type="button"
-                                disabled={
-                                  removingId ===
-                                  assignment.id
-                                }
-                                onClick={() =>
-                                  handleRemoveAssignment(
-                                    assignment.id,
-                                  )
-                                }
-                                className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
-                              >
-
-                                {removingId ===
-                                assignment.id
-                                  ? "Removing..."
-                                  : "Remove"
-                                }
-
-                              </button>
-
-                            </td>
-
-                          </tr>
-
-                        ),
-                      )}
-
-                    </tbody>
-
-                  </table>
-
-                </div>
-
-              )}
-
-            </section>
-
-
-            {/* =================================================
-                CURRENT DOCTOR ASSIGNMENTS
-            ================================================= */}
-
-            <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-              <div className="border-b border-slate-100 p-6">
-
-                <div className="flex items-center justify-between gap-4">
-
-                  <div className="flex items-center gap-3">
-
-                    <div className="rounded-xl bg-cyan-50 p-3">
-
-                      <Stethoscope className="h-5 w-5 text-cyan-600" />
-
-                    </div>
-
-                    <div>
-
-                      <h2 className="text-lg font-bold text-slate-900">
-                        Current Doctor Assignments
-                      </h2>
-
-                      <p className="text-sm text-slate-500">
-                        Active doctor-to-patient clinical assignments.
-                      </p>
-
-                    </div>
-
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
-                    {doctorAssignments.length} active
-                  </div>
-
-                </div>
-
-              </div>
-
-
-              {doctorAssignments.length === 0 ? (
-
-                <div className="px-6 py-14 text-center">
-
-                  <Stethoscope className="mx-auto h-10 w-10 text-slate-300" />
-
-                  <p className="mt-4 text-sm font-semibold text-slate-700">
-                    No doctor assignments yet
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    Assign a patient to a doctor using the form above.
-                  </p>
-
-                </div>
-
-              ) : (
-
-                <div className="overflow-x-auto">
-
-                  <table className="min-w-[850px] w-full">
-
-                    <thead className="border-b border-slate-100 bg-slate-50">
-
-                      <tr>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Doctor
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Patient
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Patient Code
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Encounter
-                        </th>
-
-                        <th className="px-6 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Action
-                        </th>
-
-                      </tr>
-
-                    </thead>
-
-
-                    <tbody className="divide-y divide-slate-100">
-
-                      {doctorAssignments.map(
-                        (assignment) => (
-
-                          <tr
-                            key={
-                              assignment.id
-                            }
-                            className="hover:bg-slate-50"
-                          >
-
-                            <td className="px-6 py-4">
-
-                              <p className="font-semibold text-slate-800">
-                                {assignment.doctor_name}
-                              </p>
-
-                              <p className="mt-1 text-xs text-slate-400">
-                                @{assignment.doctor_username}
-                              </p>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <p className="font-semibold text-slate-800">
-                                {assignment.patient_name}
-                              </p>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <span className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600">
-                                {assignment.patient_code}
-                              </span>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <span className="rounded-lg bg-cyan-50 px-2.5 py-1.5 text-xs font-bold text-cyan-700">
-                                {assignment.encounter_type ||
-                                  "ACTIVE"}
-                              </span>
-
-                            </td>
-
-
-                            <td className="px-6 py-4">
-
-                              <button
-                                type="button"
-                                disabled={
-                                  doctorRemovingId ===
-                                  assignment.id
-                                }
-                                onClick={() =>
-                                  handleRemoveDoctorAssignment(
-                                    assignment.id,
-                                  )
-                                }
-                                className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
-                              >
-
-                                {doctorRemovingId ===
-                                assignment.id
-                                  ? "Removing..."
-                                  : "Remove"
-                                }
-
-                              </button>
-
-                            </td>
-
-                          </tr>
-
-                        ),
-                      )}
-
-                    </tbody>
-
-                  </table>
-
-                </div>
-
-              )}
-
-            </section>
-
-          </>
-
+            <button
+              type="button"
+              onClick={() => setSuccessMessage("")}
+              className="text-emerald-600 hover:text-emerald-900"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         )}
 
-      </div>
+        {errorMessage && (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-800 animate-fade-in">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setErrorMessage("")}
+              className="text-rose-600 hover:text-rose-900"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
+        {error && (
+          <ErrorState
+            title="Assignment Service Issue"
+            message={error}
+            onRetry={() => loadData(true)}
+          />
+        )}
+
+        {/* Aggregate KPI Stat Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            title="Registered Doctors"
+            value={doctors.length}
+            description="Attending physicians"
+            icon={Stethoscope}
+            variant="sky"
+          />
+          <StatCard
+            title="Registered Nurses"
+            value={nurses.length}
+            description="Ward care nurses"
+            icon={UserRound}
+            variant="emerald"
+          />
+          <StatCard
+            title="Doctor Encounters"
+            value={doctorAssignments.length}
+            description="Active doctor patient cases"
+            icon={ClipboardList}
+            variant="indigo"
+          />
+          <StatCard
+            title="Nurse Assignments"
+            value={assignments.length}
+            description="Active shift care links"
+            icon={UserCheck}
+            variant="amber"
+          />
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="border-b border-slate-200">
+          <div className="flex items-center gap-6 text-sm font-bold">
+            <button
+              type="button"
+              onClick={() => setActiveTab("assignments")}
+              className={`pb-3 border-b-2 transition-colors ${
+                activeTab === "assignments"
+                  ? "border-sky-600 text-sky-600"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              Active Assignments ({assignments.length + doctorAssignments.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("assign_new")}
+              className={`pb-3 border-b-2 transition-colors ${
+                activeTab === "assign_new"
+                  ? "border-sky-600 text-sky-600"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              Assign Patient to Staff
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("add_staff")}
+              className={`pb-3 border-b-2 transition-colors ${
+                activeTab === "add_staff"
+                  ? "border-sky-600 text-sky-600"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              Create Staff Account
+            </button>
+          </div>
+        </div>
+
+        {/* TAB 1: ASSIGNMENTS BOARD */}
+        {activeTab === "assignments" && (
+          <div className="space-y-6">
+            {/* Filter toolbar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-slate-200/90 bg-white p-3 shadow-xs">
+              <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setSubTab("all")}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+                    subTab === "all"
+                      ? "bg-slate-900 text-white shadow-xs"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  All ({assignments.length + doctorAssignments.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubTab("doctors")}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+                    subTab === "doctors"
+                      ? "bg-sky-600 text-white shadow-xs"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  Doctor Encounters ({doctorAssignments.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubTab("nurses")}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+                    subTab === "nurses"
+                      ? "bg-emerald-600 text-white shadow-xs"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  Nurse Allocations ({assignments.length})
+                </button>
+              </div>
+
+              <div className="relative w-full sm:w-72">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Filter by staff or patient..."
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 py-2 pl-9 pr-8 text-xs font-medium text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Doctor Assignments Column */}
+              {(subTab === "all" || subTab === "doctors") && (
+                <div className={`space-y-3 ${subTab === "doctors" ? "lg:col-span-2" : ""}`}>
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                        <Stethoscope className="h-4 w-4" />
+                      </div>
+                      <h3 className="font-heading text-base font-bold text-slate-900">
+                        Doctor Patient Encounters
+                      </h3>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+                        {filteredDoctorAssignments.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {filteredDoctorAssignments.length === 0 ? (
+                    <EmptyState
+                      icon={Stethoscope}
+                      title="No Doctor Assignments"
+                      description="No active doctor encounters match your query."
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredDoctorAssignments.map((a) => (
+                        <div
+                          key={a.encounter_id || a.id}
+                          className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-xs flex items-center justify-between gap-3 hover:border-sky-300 transition"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="primary" size="sm">
+                                Dr. {a.doctor_name}
+                              </Badge>
+                              <span className="text-xs text-slate-400">→</span>
+                              <span className="font-heading font-bold text-slate-900 text-sm truncate">
+                                {a.patient_name}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">
+                              Patient ID: <span className="font-semibold text-slate-700">{a.patient_id}</span>
+                              {a.encounter_type && ` · Encounter: ${a.encounter_type}`}
+                            </p>
+                          </div>
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={Trash2}
+                            loading={doctorRemovingId === (a.encounter_id || a.id)}
+                            onClick={() => handleRemoveDoctorAssignment(a.encounter_id || a.id)}
+                            className="text-slate-400 hover:text-rose-600"
+                            title="Remove Doctor Assignment"
+                          >
+                            Unassign
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Nurse Assignments Column */}
+              {(subTab === "all" || subTab === "nurses") && (
+                <div className={`space-y-3 ${subTab === "nurses" ? "lg:col-span-2" : ""}`}>
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                        <UserRound className="h-4 w-4" />
+                      </div>
+                      <h3 className="font-heading text-base font-bold text-slate-900">
+                        Nurse Patient Allocations
+                      </h3>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+                        {filteredNurseAssignments.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {filteredNurseAssignments.length === 0 ? (
+                    <EmptyState
+                      icon={UserRound}
+                      title="No Nurse Assignments"
+                      description="No active nurse care assignments match your query."
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredNurseAssignments.map((a) => (
+                        <div
+                          key={a.assignment_id || a.id}
+                          className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-xs flex items-center justify-between gap-3 hover:border-emerald-300 transition"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="success" size="sm">
+                                Nurse: {a.nurse_name}
+                              </Badge>
+                              <span className="text-xs text-slate-400">→</span>
+                              <span className="font-heading font-bold text-slate-900 text-sm truncate">
+                                {a.patient_name}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">
+                              Patient ID: <span className="font-semibold text-slate-700">{a.patient_id}</span>
+                            </p>
+                          </div>
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={Trash2}
+                            loading={removingId === (a.assignment_id || a.id)}
+                            onClick={() => handleRemoveNurseAssignment(a.assignment_id || a.id)}
+                            className="text-slate-400 hover:text-rose-600"
+                            title="Remove Nurse Assignment"
+                          >
+                            Unassign
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: ASSIGN PATIENT TO STAFF */}
+        {activeTab === "assign_new" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in">
+            {/* Assign to Doctor */}
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs">
+              <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-50 text-sky-600">
+                  <Stethoscope className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="font-heading text-lg font-bold text-slate-900">
+                    Assign Patient to Doctor
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Creates an active clinical encounter with the attending physician
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleAssignDoctor} className="mt-5 space-y-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Attending Doctor *
+                  </label>
+                  <select
+                    required
+                    value={doctorAssignmentForm.doctor_id}
+                    onChange={(e) =>
+                      setDoctorAssignmentForm({
+                        ...doctorAssignmentForm,
+                        doctor_id: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                  >
+                    <option value="">Select a Doctor...</option>
+                    {doctors.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.full_name} (@{d.username})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Target Patient *
+                  </label>
+                  <select
+                    required
+                    value={doctorAssignmentForm.patient_id}
+                    onChange={(e) =>
+                      setDoctorAssignmentForm({
+                        ...doctorAssignmentForm,
+                        patient_id: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                  >
+                    <option value="">Select a Patient...</option>
+                    {patients.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.full_name} ({p.patient_id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="pt-2">
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="md"
+                    className="w-full"
+                    loading={assigningDoctor}
+                    icon={CheckCircle2}
+                  >
+                    Assign to Doctor
+                  </Button>
+                </div>
+              </form>
+            </div>
+
+            {/* Assign to Nurse */}
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs">
+              <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                  <UserRound className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="font-heading text-lg font-bold text-slate-900">
+                    Assign Patient to Nurse
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Grants access to medication administration and QR verification
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleAssignNurse} className="mt-5 space-y-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Assigned Nurse *
+                  </label>
+                  <select
+                    required
+                    value={assignmentForm.nurse_id}
+                    onChange={(e) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        nurse_id: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="">Select a Nurse...</option>
+                    {nurses.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.full_name} (@{n.username})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Target Patient *
+                  </label>
+                  <select
+                    required
+                    value={assignmentForm.patient_id}
+                    onChange={(e) =>
+                      setAssignmentForm({
+                        ...assignmentForm,
+                        patient_id: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+                  >
+                    <option value="">Select a Patient...</option>
+                    {patients.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.full_name} ({p.patient_id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="pt-2">
+                  <Button
+                    type="submit"
+                    variant="success"
+                    size="md"
+                    className="w-full"
+                    loading={assigningNurse}
+                    icon={CheckCircle2}
+                  >
+                    Assign to Nurse
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: CREATE STAFF ACCOUNT */}
+        {activeTab === "add_staff" && (
+          <div className="max-w-xl mx-auto rounded-3xl border border-slate-200/90 bg-white p-6 sm:p-8 shadow-xs animate-fade-in">
+            <div className="flex items-center gap-3.5 pb-5 border-b border-slate-100">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-sky-600 to-sky-400 text-white shadow-xs">
+                <UserPlus className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="font-heading text-xl font-extrabold text-slate-900">
+                  Provision Clinical Staff Account
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Create credentials for hospital doctors, nurses, or clinical personnel
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreateStaff} className="mt-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Full Legal Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={staffForm.full_name}
+                  onChange={(e) => setStaffForm({ ...staffForm, full_name: e.target.value })}
+                  placeholder="e.g. Dr. Priya Sharma, Nurse Ananya Sen"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Username *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={staffForm.username}
+                    onChange={(e) => setStaffForm({ ...staffForm, username: e.target.value })}
+                    placeholder="e.g. psharma"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Clinical Role *
+                  </label>
+                  <select
+                    required
+                    value={staffForm.role}
+                    onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                  >
+                    <option value="nurse">Nurse</option>
+                    <option value="doctor">Doctor</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Email Address *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={staffForm.email}
+                  onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })}
+                  placeholder="e.g. priya.sharma@hospital.org"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Temporary Password *
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={staffForm.password}
+                  onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
+                  placeholder="Minimum 6 characters"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="w-full"
+                  loading={savingStaff}
+                  icon={UserPlus}
+                >
+                  Create Clinical Account
+                </Button>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
     </MainLayout>
   )
 }

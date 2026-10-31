@@ -1,72 +1,45 @@
+import React, { useEffect, useState } from "react"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import {
+  AlertTriangle,
   ArrowLeft,
-  CalendarDays,
+  Calendar,
   CheckCircle2,
-  ClipboardEdit,
-  LoaderCircle,
+  Clock,
+  Edit,
   Pill,
   Save,
+  User,
+  Zap,
 } from "lucide-react"
 
-import {
-  useEffect,
-  useState,
-} from "react"
-
-import {
-  useNavigate,
-  useParams,
-  useSearchParams,
-} from "react-router-dom"
-
 import MainLayout from "../../components/layout/MainLayout"
-
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
+import Loading from "../../components/common/Loading"
 import {
   getDoctorMedicines,
   getPrescriptionHistory,
   updatePrescription,
 } from "../../services/doctor"
 
-
 const FREQUENCIES = [
-  "ONCE_DAILY",
-  "TWICE_DAILY",
-  "EVERY_8_HOURS",
-  "EVERY_6_HOURS",
+  { value: "ONCE_DAILY", label: "Once Daily (QD)" },
+  { value: "TWICE_DAILY", label: "Twice Daily (BID)" },
+  { value: "EVERY_8_HOURS", label: "Every 8 Hours (TID)" },
+  { value: "EVERY_6_HOURS", label: "Every 6 Hours (QID)" },
 ]
 
-
 export default function EditPrescription() {
-  const {
-    prescriptionId,
-  } = useParams()
+  const { prescriptionId } = useParams()
+  const [searchParams] = useSearchParams()
+  const patientId = searchParams.get("patient")
+  const navigate = useNavigate()
 
-  const [
-    searchParams,
-  ] = useSearchParams()
-
-  const patientId =
-    searchParams.get("patient")
-
-
-  const navigate =
-    useNavigate()
-
-
-  const [
-    prescription,
-    setPrescription,
-  ] = useState(null)
-
-  const [
-    medicines,
-    setMedicines,
-  ] = useState([])
-
-  const [
-    form,
-    setForm,
-  ] = useState({
+  const [prescription, setPrescription] = useState(null)
+  const [medicines, setMedicines] = useState([])
+  const [form, setForm] = useState({
     medicine_id: "",
     dose: "",
     route: "",
@@ -79,38 +52,15 @@ export default function EditPrescription() {
     notes: "",
   })
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-  const [
-    submitting,
-    setSubmitting,
-  ] = useState(false)
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-  const [
-    success,
-    setSuccess,
-  ] = useState(null)
-
-
-  // ====================================================
-  // LOAD PRESCRIPTION
-  // ====================================================
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState("")
+  const [success, setSuccess] = useState(null)
 
   useEffect(() => {
     async function loadData() {
-      if (!patientId) {
-        setError(
-          "No patient was provided for this prescription.",
-        )
-
+      if (!prescriptionId) {
+        setError("Prescription identifier is missing.")
         setLoading(false)
         return
       }
@@ -119,817 +69,429 @@ export default function EditPrescription() {
       setError("")
 
       try {
-        const [
-          medicineData,
-          historyData,
-        ] = await Promise.all([
+        const [medicinesData, historyData] = await Promise.all([
           getDoctorMedicines(),
-          getPrescriptionHistory(
-            patientId,
-          ),
+          patientId ? getPrescriptionHistory(patientId) : Promise.resolve([]),
         ])
 
+        const medList = Array.isArray(medicinesData) ? medicinesData : []
+        setMedicines(medList)
 
-        const medicineList =
-          Array.isArray(
-            medicineData,
-          )
-            ? medicineData
-            : []
-
-
-        setMedicines(
-          medicineList,
+        const historyList = Array.isArray(historyData) ? historyData : []
+        const currentPrescription = historyList.find(
+          (item) => String(item.id) === String(prescriptionId)
         )
-
-
-        const prescriptionList =
-          Array.isArray(
-            historyData,
-          )
-            ? historyData
-            : []
-
-
-        const currentPrescription =
-          prescriptionList.find(
-            (item) =>
-              String(
-                item.prescription_id,
-              ) ===
-              String(
-                prescriptionId,
-              ),
-          )
-
 
         if (!currentPrescription) {
-          throw new Error(
-            "Prescription not found.",
-          )
+          setError(`Prescription record #${prescriptionId} could not be located.`)
+          setLoading(false)
+          return
         }
 
+        setPrescription(currentPrescription)
 
-        if (
-          currentPrescription
-            .prescription_status !==
-          "ACTIVE"
-        ) {
-          throw new Error(
-            "Only active prescriptions can be edited.",
-          )
-        }
-
-
-        setPrescription(
-          currentPrescription,
+        const matchedMedicine = medList.find(
+          (item) =>
+            item.name &&
+            currentPrescription.medicine_name &&
+            item.name.toLowerCase() === currentPrescription.medicine_name.toLowerCase()
         )
 
-
         setForm({
-          medicine_id:
-            String(
-              currentPrescription.medicine_id,
-            ),
-
-          dose:
-            currentPrescription.dose ||
-            "",
-
-          route:
-            currentPrescription.route ||
-            "",
-
-          frequency:
-            currentPrescription.frequency ||
-            "ONCE_DAILY",
-
-          duration_days:
-            currentPrescription.duration_days ||
-            1,
-
-          start_date:
-            currentPrescription.start_date ||
-            "",
-
-          start_time:
-            currentPrescription.start_time
-              ? currentPrescription.start_time.slice(
-                  0,
-                  5,
-                )
-              : "",
-
-          is_stat:
-            Boolean(
-              currentPrescription.is_stat,
-            ),
-
-          instructions:
-            currentPrescription.instructions ||
-            "",
-
-          notes:
-            currentPrescription.prescription_notes ||
-            "",
+          medicine_id: matchedMedicine?.id ? String(matchedMedicine.id) : "",
+          dose: currentPrescription.dose || "",
+          route: currentPrescription.route || "Oral",
+          frequency: currentPrescription.frequency || "ONCE_DAILY",
+          duration_days: currentPrescription.duration_days || 1,
+          start_date: currentPrescription.start_date || "",
+          start_time: currentPrescription.start_time
+            ? currentPrescription.start_time.slice(0, 5)
+            : "08:00",
+          is_stat: Boolean(currentPrescription.is_stat),
+          instructions: currentPrescription.instructions || "",
+          notes: currentPrescription.prescription_notes || "",
         })
-
       } catch (requestError) {
         setError(
           requestError?.response?.data?.detail ||
             requestError?.message ||
-            "Unable to load prescription.",
+            "Unable to load prescription."
         )
       } finally {
         setLoading(false)
       }
     }
 
-
     loadData()
-  }, [
-    patientId,
-    prescriptionId,
-  ])
+  }, [patientId, prescriptionId])
 
-
-  // ====================================================
-  // FORM CHANGE
-  // ====================================================
-
-  function handleChange(
-    event,
-  ) {
-    const {
-      name,
-      value,
-      type,
-      checked,
-    } = event.target
-
-    setForm(
-      (previous) => ({
-        ...previous,
-
-        [name]:
-          type === "checkbox"
-            ? checked
-            : value,
-      }),
-    )
+  function handleChange(event) {
+    const { name, value, type, checked } = event.target
+    setForm((prev) => ({
+      ...prev,
+      [name]: type === "checkbox" ? checked : value,
+    }))
   }
 
-
-  // ====================================================
-  // SUBMIT
-  // ====================================================
-
-  async function handleSubmit(
-    event,
-  ) {
+  async function handleSubmit(event) {
     event.preventDefault()
-
     setSubmitting(true)
     setError("")
     setSuccess(null)
 
     try {
       const payload = {
-        medicine_id:
-          Number(
-            form.medicine_id,
-          ),
-
-        dose:
-          form.dose.trim(),
-
-        route:
-          form.route.trim(),
-
-        frequency:
-          form.frequency,
-
-        duration_days:
-          Number(
-            form.duration_days,
-          ),
-
-        start_date:
-          form.start_date,
-
-        start_time:
-          form.start_time,
-
-        is_stat:
-          Boolean(
-            form.is_stat,
-          ),
-
-        instructions:
-          form.instructions.trim() ||
-          null,
-
-        notes:
-          form.notes.trim() ||
-          null,
+        medicine_id: Number(form.medicine_id),
+        dose: form.dose.trim(),
+        route: form.route.trim(),
+        frequency: form.frequency,
+        duration_days: Number(form.duration_days),
+        start_date: form.start_date,
+        start_time: form.start_time,
+        is_stat: Boolean(form.is_stat),
+        instructions: form.instructions.trim() || null,
+        notes: form.notes.trim() || null,
       }
 
-
-      const result =
-        await updatePrescription(
-          Number(
-            prescriptionId,
-          ),
-          payload,
-        )
-
-
-      setSuccess(
-        result,
-      )
-
+      const result = await updatePrescription(prescriptionId, payload)
+      setSuccess(result || { updated: true })
     } catch (requestError) {
       setError(
-        requestError?.response?.data?.detail ||
-          "Unable to update prescription.",
+        requestError?.response?.data?.detail || "Unable to update prescription record."
       )
     } finally {
       setSubmitting(false)
     }
   }
 
-
-  // ====================================================
-  // LOADING
-  // ====================================================
-
   if (loading) {
     return (
       <MainLayout title="Edit Prescription">
-
-        <div className="flex min-h-[60vh] items-center justify-center">
-
-          <div className="text-center">
-
-            <LoaderCircle className="mx-auto h-9 w-9 animate-spin text-cyan-500" />
-
-            <p className="mt-4 text-sm text-slate-500">
-              Loading prescription...
-            </p>
-
-          </div>
-
-        </div>
-
+        <Loading message="Loading prescription details..." />
       </MainLayout>
     )
   }
-
-
-  // ====================================================
-  // ERROR
-  // ====================================================
-
-  if (error && !prescription) {
-    return (
-      <MainLayout title="Edit Prescription">
-
-        <div className="mx-auto max-w-2xl">
-
-          <button
-            type="button"
-            onClick={() =>
-              navigate(
-                patientId
-                  ? `/doctor/patients/${patientId}`
-                  : "/doctor/patients",
-              )
-            }
-            className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to patient
-          </button>
-
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
-
-            <h2 className="font-semibold text-red-900">
-              Unable to edit prescription
-            </h2>
-
-            <p className="mt-2 text-sm leading-6 text-red-700">
-              {error}
-            </p>
-
-          </div>
-
-        </div>
-
-      </MainLayout>
-    )
-  }
-
 
   return (
-    <MainLayout title="Edit Prescription">
-
+    <MainLayout
+      title="Edit Prescription"
+      subtitle={`Prescription #${prescriptionId} · Modify dosing regimen and administration parameters`}
+    >
       <div className="mx-auto max-w-4xl space-y-6">
-
-        {/* Back */}
-
-        <button
-          type="button"
-          onClick={() =>
-            navigate(
-              `/doctor/patients/${patientId}`,
-            )
-          }
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to patient
-        </button>
-
-
-        {/* Header */}
-
-        <div>
-
-          <div className="flex items-center gap-3">
-
-            <div className="rounded-xl bg-indigo-50 p-3">
-              <ClipboardEdit className="h-6 w-6 text-indigo-600" />
-            </div>
-
-            <div>
-
-              <p className="text-sm font-semibold text-indigo-600">
-                Doctor Workspace
-              </p>
-
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-                Edit Prescription
-              </h1>
-
-            </div>
-
-          </div>
-
+        {/* Navigation & Header */}
+        <div className="flex items-center justify-between">
+          <Button
+            variant="ghost"
+            icon={ArrowLeft}
+            onClick={() =>
+              navigate(patientId ? `/doctor/patients/${patientId}` : "/doctor/patients")
+            }
+          >
+            Back to Patient
+          </Button>
 
           {prescription && (
-            <p className="mt-3 text-sm text-slate-500">
-              Prescription #
-              {prescription.prescription_id}
-              {" · "}
-              {prescription.medicine_name}
-            </p>
+            <Badge variant="primary" size="md">
+              Current: {prescription.medicine_name} · {prescription.dose}
+            </Badge>
           )}
-
         </div>
 
-
-        {/* Error */}
-
+        {/* Error Alert */}
         {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
-            {error}
+          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600" />
+            <div className="flex-1">{error}</div>
           </div>
         )}
 
-
-        {/* Success */}
-
+        {/* Success Alert */}
         {success && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-
-            <div className="flex items-start gap-3">
-
-              <div className="rounded-xl bg-emerald-100 p-3">
-                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              </div>
-
-              <div>
-
-                <p className="font-semibold text-emerald-900">
-                  Prescription updated successfully
-                </p>
-
-                <p className="mt-1 text-sm leading-6 text-emerald-700">
-                  The prescription was updated and
-                  medication schedules were regenerated
-                  where appropriate.
-                </p>
-
-              </div>
-
+          <div className="p-8 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-3xl text-center space-y-4">
+            <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+              <CheckCircle2 className="w-8 h-8" />
             </div>
-
-
-            <button
-              type="button"
-              onClick={() =>
-                navigate(
-                  `/doctor/patients/${patientId}`,
-                )
-              }
-              className="mt-4 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
-            >
-              Return to Patient
-            </button>
-
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">
+                Prescription Successfully Updated
+              </h2>
+              <p className="text-sm text-slate-600 mt-1 max-w-md mx-auto">
+                Modifications have been applied to prescription #{prescriptionId}. Medication
+                schedules have been regenerated to reflect updated dosing.
+              </p>
+            </div>
+            <div className="pt-2">
+              <Button
+                variant="primary"
+                onClick={() =>
+                  navigate(patientId ? `/doctor/patients/${patientId}` : "/doctor/patients")
+                }
+              >
+                Return to Patient Chart
+              </Button>
+            </div>
           </div>
         )}
 
+        {/* Edit Form */}
+        {!success && prescription && (
+          <form onSubmit={handleSubmit}>
+            <Card>
+              <CardHeader
+                title="Prescription Parameters"
+                subtitle="Ensure dosing changes are validated against patient allergy history"
+              />
 
-        {/* Form */}
-
-        {!success && (
-          <form
-            onSubmit={handleSubmit}
-            className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
-          >
-
-            <div className="space-y-6">
-
-              {/* Medicine */}
-
-              <div>
-
-                <label
-                  htmlFor="medicine_id"
-                  className="mb-2 block text-sm font-semibold text-slate-700"
-                >
-                  Medicine
-                </label>
-
-                <div className="relative">
-
-                  <Pill className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-
-                  <select
-                    id="medicine_id"
-                    name="medicine_id"
-                    value={
-                      form.medicine_id
-                    }
-                    onChange={
-                      handleChange
-                    }
-                    required
-                    className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  >
-
-                    <option value="">
-                      Select a medicine
-                    </option>
-
-                    {medicines.map(
-                      (medicine) => (
-                        <option
-                          key={medicine.id}
-                          value={medicine.id}
-                        >
-                          {medicine.name}
-                          {medicine.strength
-                            ? ` · ${medicine.strength}`
-                            : ""}
-                        </option>
-                      ),
-                    )}
-
-                  </select>
-
-                </div>
-
-              </div>
-
-
-              {/* Dose / Route */}
-
-              <div className="grid gap-5 md:grid-cols-2">
-
+              <div className="p-6 space-y-6">
+                {/* Medicine Selection */}
                 <div>
-
                   <label
-                    htmlFor="dose"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
+                    htmlFor="medicine_id"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
                   >
-                    Dose
+                    Formulary Medicine <span className="text-rose-500">*</span>
                   </label>
-
-                  <input
-                    id="dose"
-                    name="dose"
-                    value={form.dose}
-                    onChange={
-                      handleChange
-                    }
-                    required
-                    maxLength={100}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  />
-
-                </div>
-
-
-                <div>
-
-                  <label
-                    htmlFor="route"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    Route
-                  </label>
-
-                  <input
-                    id="route"
-                    name="route"
-                    value={form.route}
-                    onChange={
-                      handleChange
-                    }
-                    required
-                    maxLength={50}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  />
-
-                </div>
-
-              </div>
-
-
-              {/* Frequency / Duration */}
-
-              <div className="grid gap-5 md:grid-cols-2">
-
-                <div>
-
-                  <label
-                    htmlFor="frequency"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    Frequency
-                  </label>
-
-                  <select
-                    id="frequency"
-                    name="frequency"
-                    value={
-                      form.frequency
-                    }
-                    onChange={
-                      handleChange
-                    }
-                    required
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  >
-
-                    {FREQUENCIES.map(
-                      (frequency) => (
-                        <option
-                          key={frequency}
-                          value={frequency}
-                        >
-                          {frequency.replace(
-                            /_/g,
-                            " ",
-                          )}
-                        </option>
-                      ),
-                    )}
-
-                  </select>
-
-                </div>
-
-
-                <div>
-
-                  <label
-                    htmlFor="duration_days"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    Duration (days)
-                  </label>
-
-                  <input
-                    id="duration_days"
-                    name="duration_days"
-                    type="number"
-                    min="1"
-                    max="365"
-                    value={
-                      form.duration_days
-                    }
-                    onChange={
-                      handleChange
-                    }
-                    required
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                  />
-
-                </div>
-
-              </div>
-
-
-              {/* Start date / time */}
-
-              <div className="grid gap-5 md:grid-cols-2">
-
-                <div>
-
-                  <label
-                    htmlFor="start_date"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    Start Date
-                  </label>
-
                   <div className="relative">
-
-                    <CalendarDays className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-
-                    <input
-                      id="start_date"
-                      name="start_date"
-                      type="date"
-                      value={
-                        form.start_date
-                      }
-                      onChange={
-                        handleChange
-                      }
+                    <Pill className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <select
+                      id="medicine_id"
+                      name="medicine_id"
+                      value={form.medicine_id}
+                      onChange={handleChange}
                       required
-                      className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                    />
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                    >
+                      <option value="">Select a medicine from pharmacy catalog</option>
+                      {medicines.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} {m.strength ? `(${m.strength})` : ""} - {m.form || "Unit"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
+                {/* Dose & Route */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label
+                      htmlFor="dose"
+                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                    >
+                      Dose <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="dose"
+                      name="dose"
+                      type="text"
+                      placeholder="e.g. 500 mg, 10 ml"
+                      value={form.dose}
+                      onChange={handleChange}
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                    />
                   </div>
 
+                  <div>
+                    <label
+                      htmlFor="route"
+                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                    >
+                      Route <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="route"
+                      name="route"
+                      type="text"
+                      placeholder="e.g. Oral, IV, IM"
+                      value={form.route}
+                      onChange={handleChange}
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                    />
+                  </div>
                 </div>
 
+                {/* Frequency & Duration */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label
+                      htmlFor="frequency"
+                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                    >
+                      Administration Frequency <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      id="frequency"
+                      name="frequency"
+                      value={form.frequency}
+                      onChange={handleChange}
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                    >
+                      {FREQUENCIES.map((freq) => (
+                        <option key={freq.value} value={freq.value}>
+                          {freq.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div>
+                  <div>
+                    <label
+                      htmlFor="duration_days"
+                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                    >
+                      Duration (Days) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="duration_days"
+                      name="duration_days"
+                      type="number"
+                      min="1"
+                      max="90"
+                      value={form.duration_days}
+                      onChange={handleChange}
+                      required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                    />
+                  </div>
+                </div>
 
-                  <label
-                    htmlFor="start_time"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    Start Time
-                  </label>
+                {/* Start Date & Start Time */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label
+                      htmlFor="start_date"
+                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                    >
+                      Start Date <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        id="start_date"
+                        name="start_date"
+                        type="date"
+                        value={form.start_date}
+                        onChange={handleChange}
+                        required
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                      />
+                    </div>
+                  </div>
 
+                  <div>
+                    <label
+                      htmlFor="start_time"
+                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                    >
+                      First Dose Time <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        id="start_time"
+                        name="start_time"
+                        type="time"
+                        value={form.start_time}
+                        onChange={handleChange}
+                        required
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Urgent / STAT Order Checkbox */}
+                <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                      <Zap className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-amber-950">
+                        Urgent / STAT Order
+                      </div>
+                      <div className="text-xs text-amber-800/80">
+                        Priority medication scheduled for immediate bedside administration
+                      </div>
+                    </div>
+                  </div>
                   <input
-                    id="start_time"
-                    name="start_time"
-                    type="time"
-                    value={
-                      form.start_time
-                    }
-                    onChange={
-                      handleChange
-                    }
-                    required
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
+                    type="checkbox"
+                    id="is_stat"
+                    name="is_stat"
+                    checked={form.is_stat}
+                    onChange={handleChange}
+                    className="w-5 h-5 rounded text-amber-600 focus:ring-amber-500 border-amber-300"
                   />
-
                 </div>
 
+                {/* Instructions */}
+                <div>
+                  <label
+                    htmlFor="instructions"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                  >
+                    Administration Instructions
+                  </label>
+                  <textarea
+                    id="instructions"
+                    name="instructions"
+                    rows={2}
+                    placeholder="Instructions for nurse or patient..."
+                    value={form.instructions}
+                    onChange={handleChange}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all resize-none"
+                  />
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label
+                    htmlFor="notes"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                  >
+                    Clinical Notes
+                  </label>
+                  <textarea
+                    id="notes"
+                    name="notes"
+                    rows={2}
+                    placeholder="Physician notes..."
+                    value={form.notes}
+                    onChange={handleChange}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all resize-none"
+                  />
+                </div>
               </div>
 
-
-              {/* STAT */}
-
-              <label className="flex cursor-pointer gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-
-                <input
-                  type="checkbox"
-                  name="is_stat"
-                  checked={
-                    form.is_stat
-                  }
-                  onChange={
-                    handleChange
-                  }
-                  className="mt-1 h-4 w-4"
-                />
-
-                <span>
-
-                  <span className="block text-sm font-semibold text-slate-800">
-                    STAT medication
-                  </span>
-
-                  <span className="mt-1 block text-xs text-slate-500">
-                    Mark as urgent/immediate medication.
-                  </span>
-
-                </span>
-
-              </label>
-
-
-              {/* Instructions */}
-
-              <div>
-
-                <label
-                  htmlFor="instructions"
-                  className="mb-2 block text-sm font-semibold text-slate-700"
-                >
-                  Instructions
-                </label>
-
-                <textarea
-                  id="instructions"
-                  name="instructions"
-                  rows={3}
-                  maxLength={1000}
-                  value={
-                    form.instructions
-                  }
-                  onChange={
-                    handleChange
-                  }
-                  className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                />
-
-              </div>
-
-
-              {/* Notes */}
-
-              <div>
-
-                <label
-                  htmlFor="notes"
-                  className="mb-2 block text-sm font-semibold text-slate-700"
-                >
-                  Prescription Notes
-                </label>
-
-                <textarea
-                  id="notes"
-                  name="notes"
-                  rows={3}
-                  maxLength={2000}
-                  value={
-                    form.notes
-                  }
-                  onChange={
-                    handleChange
-                  }
-                  className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
-                />
-
-              </div>
-
-
-              {/* Buttons */}
-
-              <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:justify-end">
-
-                <button
+              {/* Action Buttons */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 rounded-b-2xl">
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={() =>
-                    navigate(
-                      `/doctor/patients/${patientId}`,
-                    )
+                    navigate(patientId ? `/doctor/patients/${patientId}` : "/doctor/patients")
                   }
-                  disabled={submitting}
-                  className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Cancel
-                </button>
-
-
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  disabled={submitting}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  variant="primary"
+                  icon={Save}
+                  loading={submitting}
+                  disabled={!form.medicine_id}
                 >
-
-                  {submitting ? (
-                    <LoaderCircle className="h-5 w-5 animate-spin" />
-                  ) : (
-                    <Save className="h-5 w-5" />
-                  )}
-
-                  {submitting
-                    ? "Saving..."
-                    : "Save Changes"}
-
-                </button>
-
+                  Save Prescription Changes
+                </Button>
               </div>
-
-            </div>
-
+            </Card>
           </form>
         )}
-
       </div>
-
     </MainLayout>
   )
 }

@@ -32,3 +32,8 @@ export async function administerMedication(
 
   return response.data
 }
+
+export async function getNurseMedicationHistory(limit = 50) {
+  const response = await api.get(`/api/nurse/history?limit=${limit}`)
+  return response.data
+}

@@ -1,1739 +1,457 @@
+import React, { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react"
-
-import {
-  useNavigate,
-} from "react-router-dom"
-
-import {
-  CalendarDays,
-  ChevronDown,
-  ChevronRight,
-  Clock3,
+  AlertTriangle,
+  ArrowUpDown,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Eye,
   Filter,
-  LoaderCircle,
   Pill,
+  QrCode,
   RefreshCw,
   Search,
-  UserRound,
+  ShieldAlert,
+  User,
+  Zap,
 } from "lucide-react"
 
 import MainLayout from "../../components/layout/MainLayout"
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
+import Loading from "../../components/common/Loading"
+import EmptyState from "../../components/common/EmptyState"
+import Pagination from "../../components/common/Pagination"
+import { getNurseMedications } from "../../services/medications"
+import { hideTestPatients } from "../../utils/patientFilter"
 
-import {
-  getNurseMedications,
-} from "../../services/medications"
-
-import {
-  hideTestPatients,
-} from "../../utils/patientFilter"
-
-
-// =====================================================
-// HELPERS
-// =====================================================
-
-function formatDate(
-  dateString,
-) {
-  if (!dateString) {
-    return "N/A"
-  }
-
-  const date =
-    new Date(
-      `${dateString}T00:00:00`,
-    )
-
-  if (
-    Number.isNaN(
-      date.getTime(),
-    )
-  ) {
-    return dateString
-  }
-
-  return date.toLocaleDateString(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    },
-  )
+function normalizeStatus(status) {
+  return String(status || "").trim().toUpperCase().replace(/_/g, " ")
 }
 
-
-function formatTime(
-  timeString,
-) {
-  if (!timeString) {
-    return "N/A"
+function getStatusBadgeVariant(status) {
+  switch (normalizeStatus(status)) {
+    case "GIVEN":
+      return "success"
+    case "DELAYED":
+      return "warning"
+    case "HELD":
+      return "neutral"
+    case "REFUSED":
+    case "NOT GIVEN":
+      return "danger"
+    default:
+      return "primary"
   }
-
-  const value =
-    String(timeString).slice(
-      0,
-      5,
-    )
-
-  const [
-    hours,
-    minutes,
-  ] = value
-    .split(":")
-    .map(Number)
-
-  if (
-    Number.isNaN(hours) ||
-    Number.isNaN(minutes)
-  ) {
-    return timeString
-  }
-
-  const date =
-    new Date()
-
-  date.setHours(
-    hours,
-    minutes,
-    0,
-    0,
-  )
-
-  return date.toLocaleTimeString(
-    "en-IN",
-    {
-      hour: "2-digit",
-      minute: "2-digit",
-    },
-  )
 }
 
-
-function normalizeStatus(
-  status,
-) {
-  return String(
-    status || "",
-  )
-    .trim()
-    .toUpperCase()
-    .replace(
-      /_/g,
-      " ",
-    )
+function formatTime(timeString) {
+  if (!timeString) return "—"
+  const [hour, minute] = String(timeString).slice(0, 5).split(":").map(Number)
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return timeString
+  const date = new Date()
+  date.setHours(hour, minute, 0, 0)
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
-
-function statusClasses(
-  status,
-) {
-  const normalizedStatus =
-    normalizeStatus(
-      status,
-    )
-
-  if (
-    normalizedStatus ===
-    "GIVEN"
-  ) {
-    return "bg-green-100 text-green-700 border-green-200"
-  }
-
-  if (
-    normalizedStatus ===
-    "DELAYED"
-  ) {
-    return "bg-orange-100 text-orange-700 border-orange-200"
-  }
-
-  if (
-    normalizedStatus ===
-    "HELD"
-  ) {
-    return "bg-yellow-100 text-yellow-700 border-yellow-200"
-  }
-
-  if (
-    normalizedStatus ===
-      "REFUSED" ||
-    normalizedStatus ===
-      "NOT GIVEN"
-  ) {
-    return "bg-red-100 text-red-700 border-red-200"
-  }
-
-  if (
-    normalizedStatus ===
-    "UPCOMING"
-  ) {
-    return "bg-blue-100 text-blue-700 border-blue-200"
-  }
-
-  return "bg-slate-100 text-slate-700 border-slate-200"
+function formatDate(dateString) {
+  if (!dateString) return "—"
+  const date = new Date(`${dateString}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return dateString
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+  }).format(date)
 }
 
-
-function getMedicationName(
-  medication,
-) {
-  return (
-    medication.medicine_name ??
-    medication.medication_name ??
-    medication.medicine ??
-    medication.drug_name ??
-    medication.name ??
-    `Medication #${
-      medication.prescription_item_id ??
-      medication.id
-    }`
-  )
-}
-
-
-function getFrequency(
-  medication,
-) {
-  return (
-    medication.frequency ??
-    medication.dosage_frequency ??
-    medication.frequency_label ??
-    "Scheduled medication"
-  )
-}
-
-
-function getDosage(
-  medication,
-) {
-  return (
-    medication.dosage ??
-    medication.dose ??
-    medication.dose_amount ??
-    null
-  )
-}
-
-
-function getRoute(
-  medication,
-) {
-  return (
-    medication.route ??
-    medication.administration_route ??
-    null
-  )
-}
-
-
-// =====================================================
-// GROUP DATA
-//
-// Patient
-//   -> Medicine
-//       -> All timings
-// =====================================================
-
-function buildPatientGroups(
-  medications,
-) {
-  const patients =
-    new Map()
-
-  medications.forEach(
-    (medication) => {
-      const patientId =
-        medication.patient_id ??
-        null
-
-      const patientCode =
-        medication.patient_code ??
-        null
-
-      const patientKey =
-        patientCode ||
-        patientId ||
-        medication.patient_name ||
-        "UNKNOWN-PATIENT"
-
-
-      // -------------------------------------------------
-      // Create patient only once
-      // -------------------------------------------------
-
-      if (
-        !patients.has(
-          patientKey,
-        )
-      ) {
-        patients.set(
-          patientKey,
-          {
-            patient_id:
-              patientId,
-
-            patient_name:
-              medication.patient_name ||
-              "Unknown Patient",
-
-            patient_code:
-              patientCode ||
-              "No patient ID",
-
-            medications:
-              new Map(),
-          },
-        )
-      }
-
-
-      const patient =
-        patients.get(
-          patientKey,
-        )
-
-
-      // -------------------------------------------------
-      // One prescription item = one medicine/order
-      // -------------------------------------------------
-
-      const medicineKey =
-        medication.prescription_item_id ??
-        `${getMedicationName(
-          medication,
-        )}-${medication.id}`
-
-
-      if (
-        !patient.medications.has(
-          medicineKey,
-        )
-      ) {
-        patient.medications.set(
-          medicineKey,
-          {
-            medicine_name:
-              getMedicationName(
-                medication,
-              ),
-
-            frequency:
-              getFrequency(
-                medication,
-              ),
-
-            dosage:
-              getDosage(
-                medication,
-              ),
-
-            route:
-              getRoute(
-                medication,
-              ),
-
-            is_stat:
-              Boolean(
-                medication.is_stat,
-              ),
-
-            schedules: [],
-          },
-        )
-      }
-
-
-      const medicine =
-        patient.medications.get(
-          medicineKey,
-        )
-
-
-      // -------------------------------------------------
-      // Keep STAT at medicine level
-      // -------------------------------------------------
-
-      if (
-        Boolean(
-          medication.is_stat,
-        )
-      ) {
-        medicine.is_stat = true
-      }
-
-
-      // -------------------------------------------------
-      // Add timing
-      // -------------------------------------------------
-
-      medicine.schedules.push(
-        medication,
-      )
-    },
-  )
-
-
-  // ---------------------------------------------------
-  // Convert Maps to arrays
-  // ---------------------------------------------------
-
-  return Array.from(
-    patients.values(),
-  ).map(
-    (
-      patient,
-    ) => ({
-      ...patient,
-
-      medications:
-        Array.from(
-          patient.medications.values(),
-        ),
-    }),
-  )
-}
-
-
-// =====================================================
-// MAIN COMPONENT
-// =====================================================
+const ITEMS_PER_PAGE = 10
 
 export default function Medications() {
-  const navigate =
-    useNavigate()
+  const navigate = useNavigate()
 
+  const [medications, setMedications] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
-  const [
-    medications,
-    setMedications,
-  ] = useState([])
-
-
-  const [
-    search,
-    setSearch,
-  ] = useState("")
-
-
-  const [
-    statusFilter,
-    setStatusFilter,
-  ] = useState("ALL")
-
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-
-  // ===================================================
-  // COLLAPSED PATIENTS
-  // ===================================================
-
-  const [
-    collapsedPatients,
-    setCollapsedPatients,
-  ] = useState(
-    new Set(),
-  )
-
-
-  // ===================================================
-  // LOAD MEDICATIONS
-  // ===================================================
+  // Filter & Search & Sort
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("ALL")
+  const [sortBy, setSortBy] = useState("time") // "time", "patient", "status"
+  const [sortOrder, setSortOrder] = useState("asc")
+  const [currentPage, setCurrentPage] = useState(1)
 
   async function loadMedications() {
+    setLoading(true)
+    setError("")
     try {
-      setLoading(true)
-      setError("")
-
-      const data =
-        await getNurseMedications()
-
-
-      const visible =
-        hideTestPatients(
-          Array.isArray(data)
-            ? data
-            : [],
-        )
-
-
-      setMedications(
-        visible,
-      )
-
-
-      // =================================================
-      // COLLAPSE ALL PATIENTS BY DEFAULT
-      // =================================================
-      //
-      // Every patient starts collapsed.
-      // The nurse can expand individual patients.
-      //
-
-      const patientKeys =
-        new Set(
-          visible.map(
-            (item) =>
-              item.patient_code ??
-              item.patient_id ??
-              item.patient_name ??
-              "UNKNOWN-PATIENT",
-          ),
-        )
-
-
-      setCollapsedPatients(
-        patientKeys,
-      )
-
+      const response = await getNurseMedications()
+      const data = Array.isArray(response) ? response : []
+      setMedications(hideTestPatients(data))
     } catch (err) {
-      console.error(
-        "Failed to load medications:",
-        err,
-      )
-
       setError(
-        err?.response?.data
-          ?.detail ||
-          err?.message ||
-          "Failed to load medication data.",
+        err?.response?.data?.detail || "Unable to load medication schedule queue."
       )
-
     } finally {
       setLoading(false)
     }
   }
 
+  useEffect(() => {
+    loadMedications()
+  }, [])
 
-  // ===================================================
-  // INITIAL LOAD
-  // ===================================================
+  // Filter and sort
+  const filteredMedications = useMemo(() => {
+    let result = [...medications]
 
-  useEffect(
-    () => {
-      loadMedications()
-    },
-    [],
-  )
+    // Search term
+    if (search.trim()) {
+      const term = search.toLowerCase()
+      result = result.filter(
+        (m) =>
+          (m.patient_name && m.patient_name.toLowerCase().includes(term)) ||
+          (m.patient_code && m.patient_code.toLowerCase().includes(term)) ||
+          (m.medicine_name && m.medicine_name.toLowerCase().includes(term)) ||
+          (m.dosage && m.dosage.toLowerCase().includes(term))
+      )
+    }
 
+    // Status filter
+    if (statusFilter !== "ALL") {
+      result = result.filter((m) => {
+        const s = normalizeStatus(m.status)
+        if (statusFilter === "UPCOMING") return s === "UPCOMING"
+        if (statusFilter === "GIVEN") return s === "GIVEN"
+        if (statusFilter === "DELAYED") return s === "DELAYED"
+        if (statusFilter === "STAT") return Boolean(m.is_stat)
+        if (statusFilter === "ATTENTION")
+          return s === "DELAYED" || s === "HELD" || s === "REFUSED" || s === "NOT GIVEN"
+        return true
+      })
+    }
 
-  // ===================================================
-  // TOGGLE PATIENT
-  // ===================================================
+    // Sort
+    result.sort((a, b) => {
+      let comparison = 0
+      if (sortBy === "patient") {
+        comparison = (a.patient_name || "").localeCompare(b.patient_name || "")
+      } else if (sortBy === "status") {
+        comparison = (a.status || "").localeCompare(b.status || "")
+      } else {
+        // Default: time
+        const timeA = `${a.scheduled_date || ""} ${a.scheduled_time || ""}`
+        const timeB = `${b.scheduled_date || ""} ${b.scheduled_time || ""}`
+        comparison = timeA.localeCompare(timeB)
+      }
+      return sortOrder === "asc" ? comparison : -comparison
+    })
 
-  function togglePatient(
-    patientKey,
-  ) {
-    setCollapsedPatients(
-      (
-        previous,
-      ) => {
-        const next =
-          new Set(
-            previous,
-          )
+    return result
+  }, [medications, search, statusFilter, sortBy, sortOrder])
 
+  // Pagination
+  const totalPages = Math.ceil(filteredMedications.length / ITEMS_PER_PAGE) || 1
+  const paginatedMedications = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE
+    return filteredMedications.slice(start, start + ITEMS_PER_PAGE)
+  }, [filteredMedications, currentPage])
 
-        if (
-          next.has(
-            patientKey,
-          )
-        ) {
-          next.delete(
-            patientKey,
-          )
-        } else {
-          next.add(
-            patientKey,
-          )
-        }
-
-
-        return next
-      },
-    )
+  function handleSort(key) {
+    if (sortBy === key) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc")
+    } else {
+      setSortBy(key)
+      setSortOrder("asc")
+    }
   }
 
-
-  // ===================================================
-  // FILTERED MEDICATIONS
-  // ===================================================
-
-  const filteredMedications =
-    useMemo(
-      () => {
-        const query =
-          search
-            .trim()
-            .toLowerCase()
-
-
-        return medications.filter(
-          (
-            medication,
-          ) => {
-            const normalizedStatus =
-              normalizeStatus(
-                medication.status,
-              )
-
-
-            const matchesStatus =
-              statusFilter ===
-                "ALL" ||
-              normalizedStatus ===
-                statusFilter
-
-
-            const searchableText =
-              [
-                medication.id,
-                medication.patient_id,
-                medication.patient_name,
-                medication.patient_code,
-                medication.prescription_item_id,
-                medication.status,
-                medication.scheduled_date,
-                medication.scheduled_time,
-                medication.medicine_name,
-                medication.medication_name,
-                medication.medicine,
-                medication.drug_name,
-                medication.frequency,
-                medication.dose,
-                medication.route,
-              ]
-                .join(" ")
-                .toLowerCase()
-
-
-            const matchesSearch =
-              !query ||
-              searchableText.includes(
-                query,
-              )
-
-
-            return (
-              matchesStatus &&
-              matchesSearch
-            )
-          },
-        )
-      },
-      [
-        medications,
-        search,
-        statusFilter,
-      ],
-    )
-
-
-  // ===================================================
-  // GROUP PATIENTS
-  // ===================================================
-
-  const patientGroups =
-    useMemo(
-      () =>
-        buildPatientGroups(
-          filteredMedications,
-        ),
-      [
-        filteredMedications,
-      ],
-    )
-
-
-  // ===================================================
-  // COUNTS
-  // ===================================================
-
-  const counts =
-    useMemo(
-      () => {
-        const uniquePatients =
-          new Set(
-            medications.map(
-              (item) =>
-                item.patient_code ??
-                item.patient_id ??
-                item.patient_name,
-            ),
-          ).size
-
-
-        const statPrescriptionItems =
-          new Set()
-
-
-        medications.forEach(
-          (
-            medication,
-          ) => {
-            if (
-              Boolean(
-                medication.is_stat,
-              ) &&
-              medication.prescription_item_id
-            ) {
-              statPrescriptionItems.add(
-                medication.prescription_item_id,
-              )
-            }
-          },
-        )
-
-
-        return {
-          patients:
-            uniquePatients,
-
-          schedules:
-            medications.length,
-
-          statMedicines:
-            statPrescriptionItems.size,
-
-          upcoming:
-            medications.filter(
-              (item) =>
-                normalizeStatus(
-                  item.status,
-                ) ===
-                "UPCOMING",
-            ).length,
-
-          given:
-            medications.filter(
-              (item) =>
-                normalizeStatus(
-                  item.status,
-                ) ===
-                "GIVEN",
-            ).length,
-
-          delayed:
-            medications.filter(
-              (item) =>
-                normalizeStatus(
-                  item.status,
-                ) ===
-                "DELAYED",
-            ).length,
-
-          held:
-            medications.filter(
-              (item) =>
-                normalizeStatus(
-                  item.status,
-                ) ===
-                "HELD",
-            ).length,
-
-          refused:
-            medications.filter(
-              (item) =>
-                normalizeStatus(
-                  item.status,
-                ) ===
-                "REFUSED",
-            ).length,
-
-          notGiven:
-            medications.filter(
-              (item) =>
-                normalizeStatus(
-                  item.status,
-                ) ===
-                "NOT GIVEN",
-            ).length,
-        }
-      },
-      [
-        medications,
-      ],
-    )
-
-
-  // ===================================================
-  // UI
-  // ===================================================
-
   return (
-    <MainLayout>
-
-      <div className="w-full min-w-0 space-y-6 p-4 md:p-6">
-
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-
-          <div className="min-w-0">
-
-            <p className="text-sm font-semibold text-blue-600">
-              Nurse Portal
-            </p>
-
-
-            <h1 className="mt-1 text-3xl font-bold text-slate-900">
-              Medications
-            </h1>
-
-
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-              Patients are grouped separately.
-              Expand only the patient you are currently
-              working with to view their medication schedules.
-            </p>
-
+    <MainLayout
+      title="Medication Administration Queue"
+      subtitle="Comprehensive roster of inpatient scheduled doses, timing, and administration outcomes"
+    >
+      <div className="space-y-6">
+        {/* Top Action Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <Badge variant="primary" size="md">
+              Total Queue: {medications.length} Doses
+            </Badge>
+            <Badge variant="success" size="md">
+              Given: {medications.filter((m) => normalizeStatus(m.status) === "GIVEN").length}
+            </Badge>
           </div>
 
-
-          <button
-            type="button"
-            onClick={
-              loadMedications
-            }
-            disabled={
-              loading
-            }
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-
-            {loading ? (
-              <LoaderCircle
-                size={18}
-                className="animate-spin"
-              />
-            ) : (
-              <RefreshCw
-                size={18}
-              />
-            )}
-
-            Refresh
-
-          </button>
-
+          <div className="flex items-center gap-3">
+            <Button
+              variant="primary"
+              icon={QrCode}
+              onClick={() => navigate("/nurse/scanner")}
+            >
+              Verify Patient Wristband
+            </Button>
+            <Button
+              variant="outline"
+              icon={RefreshCw}
+              loading={loading}
+              onClick={loadMedications}
+            >
+              Refresh
+            </Button>
+          </div>
         </div>
 
-
-        {/* =================================================
-            ERROR
-        ================================================= */}
-
+        {/* Global Error Banner */}
         {error && (
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-
-            {error}
-
+          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600" />
+            <div className="flex-1 font-medium">{error}</div>
+            <Button size="sm" variant="outline" onClick={loadMedications}>
+              Retry
+            </Button>
           </div>
-
         )}
 
-
-        {/* =================================================
-            SUMMARY
-        ================================================= */}
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-
-
-          {/* PATIENTS */}
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-                <UserRound
-                  size={22}
+        {/* Filter and Search Panel */}
+        <Card>
+          <div className="p-4 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Search */}
+              <div className="relative flex-1 max-w-md">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search by patient, medication name, or ID..."
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value)
+                    setCurrentPage(1)
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
                 />
-              </div>
-
-
-              <div>
-
-                <p className="text-sm text-slate-500">
-                  Patients
-                </p>
-
-                <p className="text-2xl font-bold text-slate-900">
-                  {counts.patients}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-
-          {/* SCHEDULES */}
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
-                <Pill
-                  size={22}
-                />
-              </div>
-
-
-              <div>
-
-                <p className="text-sm text-slate-500">
-                  Schedules
-                </p>
-
-                <p className="text-2xl font-bold text-slate-900">
-                  {counts.schedules}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-
-          {/* UPCOMING */}
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-                <Clock3
-                  size={22}
-                />
-              </div>
-
-
-              <div>
-
-                <p className="text-sm text-slate-500">
-                  Upcoming
-                </p>
-
-                <p className="text-2xl font-bold text-slate-900">
-                  {counts.upcoming}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-
-          {/* GIVEN */}
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-100 text-green-700">
-                <Pill
-                  size={22}
-                />
-              </div>
-
-
-              <div>
-
-                <p className="text-sm text-slate-500">
-                  Given
-                </p>
-
-                <p className="text-2xl font-bold text-slate-900">
-                  {counts.given}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-
-          {/* STAT */}
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-100 text-red-700">
-                <Pill
-                  size={22}
-                />
-              </div>
-
-
-              <div>
-
-                <p className="text-sm text-red-600">
-                  STAT Medicines
-                </p>
-
-                <p className="text-2xl font-bold text-red-800">
-                  {counts.statMedicines}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-
-        {/* =================================================
-            FILTERS
-        ================================================= */}
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-
-          <div className="flex min-w-0 flex-col gap-3 lg:flex-row">
-
-
-            {/* SEARCH */}
-
-            <div className="relative min-w-0 flex-1">
-
-              <Search
-                size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
-
-              <input
-                type="text"
-                value={
-                  search
-                }
-                onChange={(
-                  event,
-                ) =>
-                  setSearch(
-                    event.target.value,
-                  )
-                }
-                placeholder="Search patient, patient ID, medicine, schedule..."
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-              />
-
-            </div>
-
-
-            {/* STATUS */}
-
-            <div className="relative w-full lg:w-[220px]">
-
-              <Filter
-                size={17}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
-
-              <select
-                value={
-                  statusFilter
-                }
-                onChange={(
-                  event,
-                ) =>
-                  setStatusFilter(
-                    event.target.value,
-                  )
-                }
-                className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-10 text-sm font-medium text-slate-700 outline-none focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-              >
-
-                <option value="ALL">
-                  All Status
-                </option>
-
-                <option value="UPCOMING">
-                  Upcoming
-                </option>
-
-                <option value="GIVEN">
-                  Given
-                </option>
-
-                <option value="DELAYED">
-                  Delayed
-                </option>
-
-                <option value="HELD">
-                  Held
-                </option>
-
-                <option value="REFUSED">
-                  Refused
-                </option>
-
-                <option value="NOT GIVEN">
-                  Not Given
-                </option>
-
-              </select>
-
-
-              <ChevronDown
-                size={17}
-                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
-
-            </div>
-
-          </div>
-
-        </div>
-
-
-        {/* =================================================
-            PATIENT RESULTS
-        ================================================= */}
-
-        {loading ? (
-
-          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white">
-
-            <div className="flex items-center gap-3 text-slate-500">
-
-              <LoaderCircle
-                size={22}
-                className="animate-spin"
-              />
-
-              Loading medications...
-
-            </div>
-
-          </div>
-
-        ) : patientGroups.length === 0 ? (
-
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
-
-            <Search
-              size={42}
-              className="mx-auto text-slate-300"
-            />
-
-
-            <h2 className="mt-4 text-lg font-semibold text-slate-800">
-              No matching records
-            </h2>
-
-
-            <p className="mt-2 text-sm text-slate-500">
-              Try changing the search text
-              or status filter.
-            </p>
-
-          </div>
-
-        ) : (
-
-          <div className="space-y-4">
-
-
-            {patientGroups.map(
-              (
-                patient,
-              ) => {
-
-                const patientKey =
-                  patient.patient_code ||
-                  patient.patient_id ||
-                  patient.patient_name ||
-                  "UNKNOWN-PATIENT"
-
-
-                const isCollapsed =
-                  collapsedPatients.has(
-                    patientKey,
-                  )
-
-
-                const totalSchedules =
-                  patient.medications.reduce(
-                    (
-                      total,
-                      medicine,
-                    ) =>
-                      total +
-                      medicine.schedules.length,
-                    0,
-                  )
-
-
-                return (
-
-                  <section
-                    key={
-                      patientKey
-                    }
-                    className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("")
+                      setCurrentPage(1)
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600"
                   >
-
-
-                    {/* =====================================
-                        PATIENT HEADER
-                    ===================================== */}
-
-                    <div className="border-b border-slate-200 bg-slate-50 p-4 sm:p-5">
-
-                      <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-
-
-                        {/* PATIENT INFO */}
-
-                        <div className="flex min-w-0 items-start gap-4">
-
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
-
-                            <UserRound
-                              size={24}
-                            />
-
-                          </div>
-
-
-                          <div className="min-w-0">
-
-                            <h2 className="truncate text-lg font-bold text-slate-900 sm:text-xl">
-                              {
-                                patient.patient_name
-                              }
-                            </h2>
-
-
-                            <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-500">
-
-                              <span>
-                                Patient ID:{" "}
-
-                                <strong className="break-all text-slate-700">
-                                  {
-                                    patient.patient_code
-                                  }
-                                </strong>
-                              </span>
-
-
-                              {patient.patient_id && (
-
-                                <span>
-                                  Database ID:{" "}
-
-                                  <strong className="text-slate-700">
-                                    {
-                                      patient.patient_id
-                                    }
-                                  </strong>
-                                </span>
-
-                              )}
-
-                            </div>
-
-                          </div>
-
-                        </div>
-
-
-                        {/* PATIENT ACTIONS */}
-
-                        <div className="flex flex-wrap items-center gap-3">
-
-
-                          {/* MEDICINES COUNT */}
-
-                          <div className="min-w-[110px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-center">
-
-                            <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                              Medicines
-                            </p>
-
-
-                            <p className="mt-1 text-2xl font-bold text-slate-900">
-                              {
-                                patient.medications.length
-                              }
-                            </p>
-
-                          </div>
-
-
-                          {/* SCHEDULE COUNT */}
-
-                          <div className="min-w-[110px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-center">
-
-                            <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                              Schedules
-                            </p>
-
-
-                            <p className="mt-1 text-2xl font-bold text-slate-900">
-                              {
-                                totalSchedules
-                              }
-                            </p>
-
-                          </div>
-
-
-                          {/* EXPAND / WRAP */}
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              togglePatient(
-                                patientKey,
-                              )
-                            }
-                            aria-expanded={
-                              !isCollapsed
-                            }
-                            className={[
-                              "inline-flex min-w-[120px] items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition",
-                              isCollapsed
-                                ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100",
-                            ].join(" ")}
-                          >
-
-                            {isCollapsed ? (
-                              <>
-                                Expand
-
-                                <ChevronDown
-                                  size={18}
-                                />
-
-                              </>
-                            ) : (
-                              <>
-                                Wrap Up
-
-                                <ChevronRight
-                                  size={18}
-                                />
-
-                              </>
-                            )}
-
-                          </button>
-
-                        </div>
-
-                      </div>
-
-                    </div>
-
-
-                    {/* =====================================
-                        MEDICATION CONTENT
-
-                        Hidden when wrapped up
-                    ===================================== */}
-
-                    {!isCollapsed && (
-
-                      <div className="space-y-5 p-4 sm:p-5">
-
-
-                        {patient.medications.map(
-                          (
-                            medicine,
-                            medicineIndex,
-                          ) => (
-
-                            <div
-                              key={`${patientKey}-${medicine.medicine_name}-${medicineIndex}`}
-                              className="w-full rounded-2xl border border-slate-200 p-4 sm:p-5"
-                            >
-
-
-                              {/* =================================
-                                  MEDICINE HEADER
-                              ================================= */}
-
-                              <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
-
-
-                                <div className="flex min-w-0 items-start gap-3">
-
-                                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
-
-                                    <Pill
-                                      size={20}
-                                    />
-
-                                  </div>
-
-
-                                  <div className="min-w-0">
-
-                                    {/* MEDICINE NAME + STAT */}
-
-                                    <div className="flex flex-wrap items-center gap-2">
-
-                                      <h3 className="break-words text-base font-bold text-slate-900 sm:text-lg">
-                                        {
-                                          medicine.medicine_name
-                                        }
-                                      </h3>
-
-
-                                      {medicine.is_stat && (
-
-                                        <span className="inline-flex rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-red-700">
-                                          STAT
-                                        </span>
-
-                                      )}
-
-                                    </div>
-
-
-                                    {/* MEDICINE DETAILS */}
-
-                                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
-
-                                      <span>
-                                        Frequency:{" "}
-
-                                        <strong className="text-slate-700">
-                                          {
-                                            medicine.frequency
-                                          }
-                                        </strong>
-                                      </span>
-
-
-                                      {medicine.dosage && (
-
-                                        <span>
-                                          Dose:{" "}
-
-                                          <strong className="text-slate-700">
-                                            {
-                                              medicine.dosage
-                                            }
-                                          </strong>
-                                        </span>
-
-                                      )}
-
-
-                                      {medicine.route && (
-
-                                        <span>
-                                          Route:{" "}
-
-                                          <strong className="text-slate-700">
-                                            {
-                                              medicine.route
-                                            }
-                                          </strong>
-                                        </span>
-
-                                      )}
-
-                                    </div>
-
-                                  </div>
-
-                                </div>
-
-
-                                {/* TIMING COUNT */}
-
-                                <span className="self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
-
-                                  {
-                                    medicine.schedules.length
-                                  }{" "}
-
-                                  timing
-
-                                  {
-                                    medicine.schedules.length !==
-                                      1
-                                      ? "s"
-                                      : ""
-                                  }
-
-                                </span>
-
-                              </div>
-
-
-                              {/* =================================
-                                  TIMINGS
-                              ================================= */}
-
-                              <div className="mt-5 overflow-x-auto">
-
-                                <div className="min-w-[700px] overflow-hidden rounded-xl border border-slate-200">
-
-
-                                  {/* TABLE HEADER */}
-
-                                  <div className="grid grid-cols-[110px_160px_130px_1fr_120px] border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-
-                                    <div>
-                                      Time
-                                    </div>
-
-                                    <div>
-                                      Date
-                                    </div>
-
-                                    <div>
-                                      Status
-                                    </div>
-
-                                    <div>
-                                      Details
-                                    </div>
-
-                                    <div className="text-right">
-                                      Action
-                                    </div>
-
-                                  </div>
-
-
-                                  {/* TIMING ROWS */}
-
-                                  <div className="divide-y divide-slate-200">
-
-                                    {medicine.schedules.map(
-                                      (
-                                        schedule,
-                                      ) => (
-
-                                        <div
-                                          key={
-                                            schedule.id
-                                          }
-                                          className="grid grid-cols-[110px_160px_130px_1fr_120px] items-center px-4 py-4"
-                                        >
-
-
-                                          {/* TIME */}
-
-                                          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-
-                                            <Clock3
-                                              size={16}
-                                              className="shrink-0 text-slate-400"
-                                            />
-
-                                            {
-                                              formatTime(
-                                                schedule.scheduled_time,
-                                              )
-                                            }
-
-                                          </div>
-
-
-                                          {/* DATE */}
-
-                                          <div className="flex items-center gap-2 text-sm text-slate-600">
-
-                                            <CalendarDays
-                                              size={16}
-                                              className="shrink-0 text-slate-400"
-                                            />
-
-                                            {
-                                              formatDate(
-                                                schedule.scheduled_date,
-                                              )
-                                            }
-
-                                          </div>
-
-
-                                          {/* STATUS */}
-
-                                          <div>
-
-                                            <span
-                                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClasses(
-                                                schedule.status,
-                                              )}`}
-                                            >
-
-                                              {
-                                                normalizeStatus(
-                                                  schedule.status,
-                                                ) ||
-                                                "UNKNOWN"
-                                              }
-
-                                            </span>
-
-                                          </div>
-
-
-                                          {/* DETAILS */}
-
-                                          <div className="min-w-0 text-sm text-slate-500">
-
-                                            <span>
-                                              Schedule #
-
-                                              {
-                                                schedule.id
-                                              }
-                                            </span>
-
-
-                                            <span className="mx-2">
-                                              •
-                                            </span>
-
-
-                                            <span>
-                                              Prescription Item #
-
-                                              {
-                                                schedule.prescription_item_id
-                                              }
-                                            </span>
-
-
-                                            {schedule.actual_administration_time && (
-
-                                              <span className="ml-2">
-                                                • Administered
-                                              </span>
-
-                                            )}
-
-                                          </div>
-
-
-                                          {/* ACTION */}
-
-                                          <div className="flex justify-end">
-
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                navigate(
-                                                  `/nurse/medications/${schedule.id}`,
-                                                )
-                                              }
-                                              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
-                                            >
-
-                                              View
-
-                                              <ChevronRight
-                                                size={15}
-                                              />
-
-                                            </button>
-
-                                          </div>
-
-                                        </div>
-
-                                      ),
-                                    )}
-
-                                  </div>
-
-                                </div>
-
-                              </div>
-
-                            </div>
-
-                          ),
-                        )}
-
-                      </div>
-
-                    )}
-
-                  </section>
-
-                )
-              },
-            )}
-
-          </div>
-
-        )}
-
-
-        {/* =================================================
-            INFORMATION
-        ================================================= */}
-
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5">
-
-          <div className="flex items-start gap-3">
-
-            <Pill
-              size={21}
-              className="mt-0.5 shrink-0 text-blue-600"
-            />
-
-
-            <div>
-
-              <h3 className="font-semibold text-blue-900">
-                Medication display
-              </h3>
-
-
-              <p className="mt-1 text-sm leading-6 text-blue-800">
-                Patient sections are collapsed by default
-                to keep the dashboard compact. Expand a
-                patient to view their medicines and timings,
-                then use Wrap Up when finished.
-              </p>
-
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter Buttons */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { id: "ALL", label: "All" },
+                  { id: "UPCOMING", label: "Upcoming" },
+                  { id: "STAT", label: "STAT Urgent" },
+                  { id: "ATTENTION", label: "Attention" },
+                  { id: "GIVEN", label: "Administered" },
+                ].map((tab) => {
+                  const active = statusFilter === tab.id
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        setStatusFilter(tab.id)
+                        setCurrentPage(1)
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                        active
+                          ? "bg-sky-600 text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-
           </div>
+        </Card>
 
-        </div>
+        {/* Medication Table */}
+        <Card>
+          {loading ? (
+            <Loading message="Loading medication schedule roster..." />
+          ) : filteredMedications.length === 0 ? (
+            <EmptyState
+              icon={Pill}
+              title="No Medication Schedules Found"
+              description="No active dosing schedules matched your current search or status filter."
+              actionLabel="Reset Filters"
+              onAction={() => {
+                setSearch("")
+                setStatusFilter("ALL")
+              }}
+            />
+          ) : (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      <th
+                        className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none"
+                        onClick={() => handleSort("time")}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Scheduled Time</span>
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none"
+                        onClick={() => handleSort("patient")}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Patient</span>
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                        </div>
+                      </th>
+                      <th className="py-3 px-4">Medication & Dose</th>
+                      <th className="py-3 px-4">Route & Frequency</th>
+                      <th
+                        className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none"
+                        onClick={() => handleSort("status")}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Status</span>
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                        </div>
+                      </th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {paginatedMedications.map((item) => {
+                      const isUpcoming = normalizeStatus(item.status) === "UPCOMING"
+                      return (
+                        <tr
+                          key={item.id}
+                          className="hover:bg-slate-50/80 transition-colors"
+                        >
+                          {/* Scheduled Time */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-sky-600" />
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  {formatTime(item.scheduled_time)}
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  {formatDate(item.scheduled_date)}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
 
+                          {/* Patient */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center text-xs font-bold shrink-0">
+                                <User className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="font-semibold text-slate-900">
+                                  {item.patient_name || "Unknown"}
+                                </div>
+                                <div className="text-[11px] font-mono text-slate-500">
+                                  {item.patient_code || `#${item.patient_id}`}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
 
+                          {/* Medication */}
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center gap-2">
+                              <div>
+                                <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                                  <span>{item.medicine_name || item.name}</span>
+                                  {item.is_stat && (
+                                    <Badge variant="warning" size="sm">
+                                      <Zap className="w-3 h-3 mr-0.5 fill-current" /> STAT
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-500 font-medium">
+                                  {item.dosage || item.dose || "Standard dose"}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Route & Frequency */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="text-xs text-slate-700 font-semibold">
+                              {item.route || "Oral"}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              {item.frequency || "Daily"}
+                            </div>
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <Badge
+                              variant={getStatusBadgeVariant(item.status)}
+                              size="sm"
+                            >
+                              {normalizeStatus(item.status)}
+                            </Badge>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3.5 px-4 whitespace-nowrap text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant={isUpcoming ? "primary" : "outline"}
+                                icon={isUpcoming ? QrCode : Eye}
+                                onClick={() => navigate(`/nurse/medications/${item.id}`)}
+                              >
+                                {isUpcoming ? "Administer" : "Details"}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="p-4 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-xs text-slate-500">
+                    Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} to{" "}
+                    {Math.min(currentPage * ITEMS_PER_PAGE, filteredMedications.length)} of{" "}
+                    {filteredMedications.length} medication schedules
+                  </span>
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPageChange={setCurrentPage}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
       </div>
-
     </MainLayout>
   )
 }

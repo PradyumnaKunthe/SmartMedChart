@@ -1,18 +1,31 @@
-
-import { useState } from "react"
+import React, { useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
   Activity,
   AlertCircle,
-  CalendarClock,
+  Calendar,
   CheckCircle2,
-  ClipboardList,
+  Clock,
+  DollarSign,
+  FileText,
+  Globe,
+  GraduationCap,
+  HeartPulse,
+  Info,
   LoaderCircle,
-  SearchCheck,
+  Phone,
+  Search,
+  Sparkles,
   Stethoscope,
-  UserRound,
+  Thermometer,
+  User,
+  UserCheck,
 } from "lucide-react"
 
 import MainLayout from "../../components/layout/MainLayout"
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
 import api from "../../services/api"
 
 const PROBLEMS = [
@@ -43,14 +56,11 @@ function todayString() {
 }
 
 const emptyForm = () => ({
-  // Basic information
   first_name: "",
   last_name: "",
   date_of_birth: "",
   gender: "",
   weight_kg: "",
-
-  // Contact information
   mobile_number: "",
   email: "",
   address: "",
@@ -58,58 +68,24 @@ const emptyForm = () => ({
   emergency_contact_number: "",
   emergency_contact_relationship: "",
   preferred_language: "",
-
-  // Visit information
   problem_category: "",
   symptom_duration: "",
-  symptom_severity: "",
+  symptom_severity: "MODERATE",
   visit_notes: "",
   medical_history_notes: "",
   current_medication_notes: "",
   allergy_notes: "",
-
-  // Optional clinical observations
   blood_pressure: "",
   pulse: "",
   temperature_c: "",
   spo2_percent: "",
   height_cm: "",
-
-  // Appointment
   appointment_date: todayString(),
-  appointment_time: "",
+  appointment_time: "10:00",
 })
 
-const inputClass =
-  "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100"
-
-function Field({ label, children }) {
-  return (
-    <label className="block text-sm font-semibold text-slate-700">
-      {label}
-      {children}
-    </label>
-  )
-}
-
-function SectionTitle({ number, title, subtitle, icon }) {
-  return (
-    <div className="flex items-start gap-3 border-b border-slate-100 pb-4">
-      <div className="rounded-xl bg-indigo-50 p-2.5 text-indigo-700">
-        {icon}
-      </div>
-      <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-indigo-600">
-          Step {number}
-        </p>
-        <h2 className="mt-1 text-lg font-bold text-slate-900">{title}</h2>
-        <p className="mt-1 text-sm leading-5 text-slate-500">{subtitle}</p>
-      </div>
-    </div>
-  )
-}
-
 export default function CareMatch() {
+  const navigate = useNavigate()
   const [form, setForm] = useState(emptyForm)
   const [recommendations, setRecommendations] = useState([])
   const [selectedDoctorId, setSelectedDoctorId] = useState("")
@@ -121,13 +97,12 @@ export default function CareMatch() {
   const [pendingRegistration, setPendingRegistration] = useState(null)
 
   const selectedDoctor = recommendations.find(
-    (doctor) => String(doctor.doctor_id) === String(selectedDoctorId),
+    (doc) => String(doc.doctor_id) === String(selectedDoctorId)
   )
 
   function updateField(event) {
     const { name, value } = event.target
-
-    setForm((current) => ({ ...current, [name]: value }))
+    setForm((curr) => ({ ...curr, [name]: value }))
     setError("")
     setNotice("")
     setSuccess(null)
@@ -139,23 +114,19 @@ export default function CareMatch() {
   }
 
   function getVisitReason() {
-  return [
-    form.problem_category,
-    form.visit_notes.trim(),
-    form.symptom_duration
-      ? `Symptom duration: ${form.symptom_duration}`
-      : "",
-    form.symptom_severity
-      ? `Reported severity: ${form.symptom_severity}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(". ")
-}
+    return [
+      form.problem_category,
+      form.visit_notes.trim(),
+      form.symptom_duration ? `Symptom duration: ${form.symptom_duration}` : "",
+      form.symptom_severity ? `Reported severity: ${form.symptom_severity}` : "",
+    ]
+      .filter(Boolean)
+      .join(". ")
+  }
 
   async function recommendDoctors() {
     if (!form.problem_category) {
-      setError("Select the patient's main problem first.")
+      setError("Please select the patient's primary medical problem category first.")
       return
     }
 
@@ -167,9 +138,9 @@ export default function CareMatch() {
 
     try {
       const response = await api.post("/api/carematch/recommendations", {
-  visit_reason: getVisitReason(),
-  preferred_language: form.preferred_language.trim(),
-})
+        visit_reason: getVisitReason(),
+        preferred_language: form.preferred_language.trim(),
+      })
 
       const list = Array.isArray(response.data?.recommendations)
         ? response.data.recommendations
@@ -177,21 +148,21 @@ export default function CareMatch() {
 
       setRecommendations(list)
 
-      if (list.length) {
+      if (list.length > 0) {
         setSelectedDoctorId(String(list[0].doctor_id))
         setNotice(
-          "Review the available doctors and choose the appropriate doctor. Suggestions are based on profile keywords, not a diagnosis.",
+          "CareMatch AI identified the following matching specialists based on symptoms, specialty, and language proficiency."
         )
       } else {
         setNotice(
           response.data?.message ||
-          "No matching available doctor profiles were found. Ask an administrator to update doctor profiles.",
+            "No matching active doctor profiles were found for this category. Administrators can configure physician specialties in Doctor Profiles."
         )
       }
     } catch (requestError) {
       setError(
         requestError?.response?.data?.detail ||
-        "Could not find doctor suggestions. Check the backend connection and CareMatch API.",
+          "Could not retrieve CareMatch recommendations. Please verify network connection."
       )
     } finally {
       setSearching(false)
@@ -224,7 +195,9 @@ export default function CareMatch() {
     } catch (requestError) {
       setPendingRegistration(registration)
       setError(
-        `Patient ${registration.patient.patient_id} has already been registered, but the appointment could not be saved. ${requestError?.response?.data?.detail || "Check the backend and MongoDB, then retry."}`,
+        `Patient ${registration.patient.patient_id} was registered, but appointment booking failed. ${
+          requestError?.response?.data?.detail || "Please retry."
+        }`
       )
       return false
     }
@@ -243,131 +216,87 @@ export default function CareMatch() {
     }
 
     if (!form.first_name.trim() || !form.last_name.trim()) {
-      setError("Enter the patient's first and last name.")
+      setError("Please enter the patient's first and last name.")
       return
     }
 
     if (!form.problem_category) {
-      setError("Select the patient's main problem.")
+      setError("Please select the patient's primary medical problem category.")
       return
     }
 
     if (!selectedDoctor) {
-      setError("Select a suggested doctor before registering the patient.")
+      setError("Please run CareMatch and select a recommended physician.")
       return
     }
 
     if (!form.appointment_date || !form.appointment_time) {
-      setError("Choose an appointment date and time.")
+      setError("Please specify the appointment date and consultation time.")
       return
     }
 
     if (form.appointment_date < todayString()) {
-      setError("The appointment date cannot be in the past.")
+      setError("The consultation date cannot be in the past.")
       return
     }
 
     setSubmitting(true)
 
     try {
-            // Prepare optional clinical observations
       const clinicalObservations = {
         blood_pressure: form.blood_pressure.trim() || undefined,
         pulse: form.pulse ? Number(form.pulse) : undefined,
-        temperature_c: form.temperature_c
-          ? Number(form.temperature_c)
-          : undefined,
-        spo2_percent: form.spo2_percent
-          ? Number(form.spo2_percent)
-          : undefined,
-        height_cm: form.height_cm
-          ? Number(form.height_cm)
-          : undefined,
+        temperature_c: form.temperature_c ? Number(form.temperature_c) : undefined,
+        spo2_percent: form.spo2_percent ? Number(form.spo2_percent) : undefined,
+        height_cm: form.height_cm ? Number(form.height_cm) : undefined,
       }
 
-      // Remove empty observation values
       const filteredObservations = Object.fromEntries(
-        Object.entries(clinicalObservations).filter(
-          ([, value]) => value !== undefined
-        )
+        Object.entries(clinicalObservations).filter(([, v]) => v !== undefined)
       )
 
       const patientResponse = await api.post("/api/hospital/patients", {
-        // Basic information
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         date_of_birth: form.date_of_birth || null,
         gender: form.gender || null,
         weight_kg: form.weight_kg ? Number(form.weight_kg) : null,
-
-        // Contact information
         mobile_number: form.mobile_number.trim() || null,
         email: form.email.trim() || null,
         address: form.address.trim() || null,
-
-        // Emergency contact
-        emergency_contact_name:
-          form.emergency_contact_name.trim() || null,
-        emergency_contact_number:
-          form.emergency_contact_number.trim() || null,
+        emergency_contact_name: form.emergency_contact_name.trim() || null,
+        emergency_contact_number: form.emergency_contact_number.trim() || null,
         emergency_contact_relationship:
           form.emergency_contact_relationship.trim() || null,
-
-        // Preferred language
-        preferred_language:
-          form.preferred_language.trim() || null,
-
-        // Patient visit information
-        problem_category: form.problem_category || null,
-        chief_complaint: form.problem_category || null,
+        preferred_language: form.preferred_language.trim() || null,
+        problem_category: form.problem_category,
+        chief_complaint: form.visit_notes.trim() || form.problem_category,
         symptom_duration: form.symptom_duration.trim() || null,
         symptom_severity: form.symptom_severity || null,
         visit_notes: form.visit_notes.trim() || null,
-        medical_history_notes:
-          form.medical_history_notes.trim() || null,
-        current_medication_notes:
-          form.current_medication_notes.trim() || null,
+        medical_history_notes: form.medical_history_notes.trim() || null,
+        current_medication_notes: form.current_medication_notes.trim() || null,
         allergy_notes: form.allergy_notes.trim() || null,
-
-        // Clinical observations (optional)
-        clinical_observations:
-          Object.keys(filteredObservations).length > 0
-            ? filteredObservations
-            : null,
-
-        // Doctor and admission
-        doctor_id: Number(selectedDoctor.doctor_id),
-        is_admitted: false,
-        ward_id: null,
-        bed_id: null,
+        clinical_observations: filteredObservations,
+        doctor_id: selectedDoctor.doctor_id,
+        admit_patient: false,
       })
 
-      const patient = patientResponse.data?.patient
-      const encounter = patientResponse.data?.encounter
-
-      if (!patient?.id || !encounter?.id) {
-        setError(
-          "The patient API did not return both the patient and encounter IDs. Check its response before trying again to avoid duplicate records.",
-        )
-        return
-      }
-
       const registration = {
-        patient,
-        encounter,
-        doctor_id: Number(selectedDoctor.doctor_id),
-        doctor_name: selectedDoctor.full_name,
+        patient: patientResponse.data?.patient,
+        encounter: patientResponse.data?.encounter,
+        doctor_id: selectedDoctor.doctor_id,
+        doctor_name: selectedDoctor.doctor_name,
         visit_reason: getVisitReason(),
         appointment_date: form.appointment_date,
         appointment_time: form.appointment_time,
       }
 
-      setPendingRegistration(registration)
       await saveAppointment(registration)
     } catch (requestError) {
       setError(
         requestError?.response?.data?.detail ||
-        "Patient registration failed. Check the server message before trying again.",
+          "Failed to register patient and schedule appointment. Please check values and retry."
       )
     } finally {
       setSubmitting(false)
@@ -375,533 +304,486 @@ export default function CareMatch() {
   }
 
   return (
-    <MainLayout title="Receptionist Counter">
-      <div className="mx-auto max-w-7xl space-y-6 pb-8">
-
-        <header className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-indigo-950 to-indigo-800 p-6 text-white shadow-lg sm:p-8">
-          <div className="absolute -right-12 -top-20 h-64 w-64 rounded-full border-[35px] border-white/5" />
-          <div className="relative flex flex-col justify-between gap-6 md:flex-row md:items-center">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-indigo-100">
-                <Activity size={14} />
-                SMARTMEDCHART · CAREMATCH
-              </div>
-              <h1 className="mt-4 text-3xl font-bold tracking-tight sm:text-4xl">
-                Receptionist Counter
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-indigo-100">
-                Register a patient, select their main concern, and review available doctors
-                matched against their configured specializations and expertise.
-              </p>
+    <MainLayout
+      title="CareMatch AI Doctor Triage"
+      subtitle="Intelligent physician matchmaking engine aligning patient symptoms with medical specialties"
+    >
+      <div className="max-w-5xl mx-auto space-y-6">
+        {/* Banner */}
+        <div className="relative overflow-hidden bg-gradient-to-r from-sky-600 via-indigo-600 to-purple-800 rounded-3xl p-6 lg:p-8 text-white shadow-xl">
+          <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="relative z-10 max-w-2xl space-y-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/15 backdrop-blur-md rounded-full text-xs font-semibold text-sky-100">
+              <Sparkles className="w-3.5 h-3.5 text-sky-200" />
+              CareMatch AI · Algorithmic Physician Matchmaking
             </div>
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
-              <Stethoscope size={38} />
-            </div>
+            <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight">
+              Doctor Recommendation & Intake Wizard
+            </h1>
+            <p className="text-sky-100/90 text-sm leading-relaxed">
+              Analyze chief complaints, clinical symptom severity, and language
+              preferences to recommend the optimal attending doctor with transparent match
+              scoring.
+            </p>
           </div>
-        </header>
+        </div>
 
+        {/* Global Error Alert */}
         {error && (
-          <div role="alert" className="flex gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-            <AlertCircle size={19} className="mt-0.5 shrink-0" />
-            <span>{error}</span>
+          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm">
+            <AlertCircle className="w-5 h-5 shrink-0 text-rose-600" />
+            <div className="flex-1 font-medium">{error}</div>
           </div>
         )}
 
-        {notice && !error && (
-          <div role="status" className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-900">
-            {notice}
-          </div>
-        )}
-
+        {/* Success Modal / Banner */}
         {success && (
-          <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-700" size={24} />
-              <div>
-                <h2 className="font-bold text-emerald-950">Registration complete</h2>
-                <p className="mt-1 text-sm text-emerald-900">
-                  Patient ID: <strong>{success.patient.patient_id}</strong>
-                </p>
-                <p className="mt-1 text-sm text-emerald-900">
-                  Selected doctor: <strong>{success.doctorName}</strong>
-                </p>
-                {success.appointment && (
-                  <p className="mt-1 text-sm text-emerald-900">
-                    Appointment: {success.appointment.appointment_date} at {success.appointment.appointment_time}
-                  </p>
-                )}
-              </div>
+          <div className="p-8 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-3xl text-center space-y-4 shadow-sm">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+              <CheckCircle2 className="w-10 h-10" />
             </div>
-          </div>
-        )}
-
-        {pendingRegistration && !success && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            Patient <strong>{pendingRegistration.patient.patient_id}</strong> already exists.
-            Retry saving the appointment below; this will not create another patient record.
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-            <SectionTitle
-              number="01"
-              title="Patient information"
-              subtitle="Enter the patient's basic details."
-              icon={<UserRound size={22} />}
-            />
-
-            <div className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-              <Field label="First name *">
-                <input className={inputClass} name="first_name" value={form.first_name} onChange={updateField} required disabled={Boolean(pendingRegistration)} placeholder="Enter first name" />
-              </Field>
-
-              <Field label="Last name *">
-                <input className={inputClass} name="last_name" value={form.last_name} onChange={updateField} required disabled={Boolean(pendingRegistration)} placeholder="Enter last name" />
-              </Field>
-
-              <Field label="Date of birth">
-                <input className={inputClass} type="date" name="date_of_birth" value={form.date_of_birth} onChange={updateField} disabled={Boolean(pendingRegistration)} />
-              </Field>
-
-              <Field label="Gender">
-                <select className={inputClass} name="gender" value={form.gender} onChange={updateField} disabled={Boolean(pendingRegistration)}>
-                  <option value="">Select gender</option>
-                  <option value="Female">Female</option>
-                  <option value="Male">Male</option>
-                  <option value="Other">Other</option>
-                  <option value="Prefer not to say">Prefer not to say</option>
-                </select>
-              </Field>
-
-              <Field label="Weight (kg)">
-                <input className={inputClass} type="number" min="0.1" max="500" step="0.1" name="weight_kg" value={form.weight_kg} onChange={updateField} disabled={Boolean(pendingRegistration)} placeholder="Optional" />
-              </Field>
-            </div>
-                        {/* CONTACT INFORMATION */}
-            <div className="mt-8 border-t border-slate-100 pt-6">
-              <h3 className="mb-4 font-semibold text-slate-900">
-                Contact & Emergency Information
-              </h3>
-
-              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-
-                <Field label="Mobile number">
-                  <input
-                    className={inputClass}
-                    type="tel"
-                    name="mobile_number"
-                    value={form.mobile_number}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={25}
-                    placeholder="Patient mobile number"
-                  />
-                </Field>
-
-                <Field label="Email address">
-                  <input
-                    className={inputClass}
-                    type="email"
-                    name="email"
-                    value={form.email}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={255}
-                    placeholder="patient@example.com"
-                  />
-                </Field>
-
-                <Field label="Preferred language">
-                  <input
-                    className={inputClass}
-                    name="preferred_language"
-                    value={form.preferred_language}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={60}
-                    placeholder="e.g. Marathi, Hindi, English"
-                  />
-                </Field>
-
-                <Field label="Emergency contact name">
-                  <input
-                    className={inputClass}
-                    name="emergency_contact_name"
-                    value={form.emergency_contact_name}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={150}
-                    placeholder="Emergency contact person's name"
-                  />
-                </Field>
-
-                <Field label="Emergency contact number">
-                  <input
-                    className={inputClass}
-                    type="tel"
-                    name="emergency_contact_number"
-                    value={form.emergency_contact_number}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={25}
-                    placeholder="Emergency mobile number"
-                  />
-                </Field>
-
-                <Field label="Relationship with patient">
-                  <input
-                    className={inputClass}
-                    name="emergency_contact_relationship"
-                    value={form.emergency_contact_relationship}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={60}
-                    placeholder="e.g. Father, Mother, Spouse"
-                  />
-                </Field>
-
-                <div className="sm:col-span-2 xl:col-span-3">
-                  <Field label="Residential address">
-                    <textarea
-                      className={inputClass}
-                      name="address"
-                      value={form.address}
-                      onChange={updateField}
-                      disabled={Boolean(pendingRegistration)}
-                      rows={3}
-                      placeholder="Enter patient's complete address"
-                    />
-                  </Field>
-                </div>
-
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-            <SectionTitle
-              number="02"
-              title="Main problem or reason for visit"
-              subtitle="Choose the closest category. This supports doctor matching, not diagnosis."
-              icon={<ClipboardList size={22} />}
-            />
-
-            <div className="mt-6 grid gap-5 md:grid-cols-2">
-              <Field label="Problem category *">
-                <select className={inputClass} name="problem_category" value={form.problem_category} onChange={updateField} required disabled={Boolean(pendingRegistration)}>
-                  <option value="">Select the main problem</option>
-                  {PROBLEMS.map((problem) => (
-                    <option key={problem} value={problem}>{problem}</option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Additional details (optional)">
-                <textarea className={inputClass} name="visit_notes" value={form.visit_notes} onChange={updateField} rows={3} maxLength={1200} disabled={Boolean(pendingRegistration)} placeholder="Briefly record the concern reported by the patient..." />
-              </Field>
-            </div>
-                        {/* SYMPTOMS AND MEDICAL HISTORY */}
-            <div className="mt-8 border-t border-slate-100 pt-6">
-              <h3 className="mb-4 font-semibold text-slate-900">
-                Symptoms & Medical Background
-              </h3>
-
-              <div className="grid gap-5 sm:grid-cols-2">
-
-                <Field label="How long has the patient had these symptoms?">
-                  <input
-                    className={inputClass}
-                    name="symptom_duration"
-                    value={form.symptom_duration}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    maxLength={100}
-                    placeholder="e.g. 3 days, 2 weeks"
-                  />
-                </Field>
-
-                <Field label="Symptom severity">
-                  <select
-                    className={inputClass}
-                    name="symptom_severity"
-                    value={form.symptom_severity}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                  >
-                    <option value="">Not specified</option>
-                    <option value="Mild">Mild</option>
-                    <option value="Moderate">Moderate</option>
-                    <option value="Severe">Severe</option>
-                  </select>
-                </Field>
-
-                <Field label="Previous medical history">
-                  <textarea
-                    className={inputClass}
-                    name="medical_history_notes"
-                    value={form.medical_history_notes}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    rows={3}
-                    placeholder="Previous illnesses, conditions or surgeries..."
-                  />
-                </Field>
-
-                <Field label="Current medications">
-                  <textarea
-                    className={inputClass}
-                    name="current_medication_notes"
-                    value={form.current_medication_notes}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    rows={3}
-                    placeholder="Medicines currently being taken..."
-                  />
-                </Field>
-
-                <div className="sm:col-span-2">
-                  <Field label="Known allergies">
-                    <textarea
-                      className={inputClass}
-                      name="allergy_notes"
-                      value={form.allergy_notes}
-                      onChange={updateField}
-                      disabled={Boolean(pendingRegistration)}
-                      rows={2}
-                      placeholder="Medicine, food or other known allergies. Enter 'Not known' if appropriate."
-                    />
-                  </Field>
-                </div>
-
-              </div>
-            </div>
-
-            {/* OPTIONAL CLINICAL OBSERVATIONS */}
-            <div className="mt-8 border-t border-slate-100 pt-6">
-              <div className="mb-4">
-                <h3 className="font-semibold text-slate-900">
-                  Clinical Observations
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Optional measurements. Leave blank when unavailable.
-                  Enter verified measurements only.
-                </p>
-              </div>
-
-              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-
-                <Field label="Blood pressure (mmHg)">
-                  <input
-                    className={inputClass}
-                    name="blood_pressure"
-                    value={form.blood_pressure}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    placeholder="e.g. 120/80"
-                  />
-                </Field>
-
-                <Field label="Pulse (bpm)">
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="0"
-                    max="300"
-                    name="pulse"
-                    value={form.pulse}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    placeholder="Optional"
-                  />
-                </Field>
-
-                <Field label="Temperature (°C)">
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="25"
-                    max="45"
-                    step="0.1"
-                    name="temperature_c"
-                    value={form.temperature_c}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    placeholder="Optional"
-                  />
-                </Field>
-
-                <Field label="SpO₂ (%)">
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    name="spo2_percent"
-                    value={form.spo2_percent}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    placeholder="Optional"
-                  />
-                </Field>
-
-                <Field label="Height (cm)">
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="30"
-                    max="250"
-                    step="0.1"
-                    name="height_cm"
-                    value={form.height_cm}
-                    onChange={updateField}
-                    disabled={Boolean(pendingRegistration)}
-                    placeholder="Optional"
-                  />
-                </Field>
-
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="max-w-2xl text-xs leading-5 text-slate-600">
-                For severe or emergency symptoms, follow hospital emergency protocol rather than relying on automated suggestions.
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">
+                Patient Registered & Appointment Scheduled!
+              </h2>
+              <p className="text-sm text-slate-600 mt-1 max-w-md mx-auto">
+                Patient #{success.patient?.patient_id} ({success.patient?.first_name}{" "}
+                {success.patient?.last_name}) is registered. Consultation booked with{" "}
+                <strong className="text-slate-900">{success.doctorName}</strong> on{" "}
+                <strong className="text-emerald-700">
+                  {success.appointment?.appointment_date} at{" "}
+                  {success.appointment?.appointment_time}
+                </strong>
+                .
               </p>
-
-              <button type="button" onClick={recommendDoctors} disabled={searching || !form.problem_category || Boolean(pendingRegistration)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">
-                {searching ? <LoaderCircle className="animate-spin" size={18} /> : <SearchCheck size={18} />}
-                {searching ? "Finding doctors..." : "Recommend doctors"}
-              </button>
             </div>
-          </section>
+            <div className="flex items-center justify-center gap-3 pt-3">
+              <Button
+                variant="primary"
+                onClick={() => navigate(`/hospital/patients/${success.patient?.id}`)}
+              >
+                View Patient Chart
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSuccess(null)
+                  setForm(emptyForm())
+                }}
+              >
+                Intake Another Patient
+              </Button>
+            </div>
+          </div>
+        )}
 
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-            <SectionTitle
-              number="03"
-              title="Available doctor suggestions"
-              subtitle="Review each suggestion and select the attending doctor."
-              icon={<Stethoscope size={22} />}
-            />
+        {/* Intake Wizard Form */}
+        {!success && (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Step 1: Patient Identity & Contact */}
+            <Card>
+              <CardHeader
+                title="1. Patient Demographics & Contact"
+                subtitle="Enter personal identification, phone number, and preferred language"
+              />
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      First Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      name="first_name"
+                      type="text"
+                      required
+                      placeholder="e.g. Rahul"
+                      value={form.first_name}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Last Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      name="last_name"
+                      type="text"
+                      required
+                      placeholder="e.g. Sharma"
+                      value={form.last_name}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                </div>
 
-            {!recommendations.length ? (
-              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                <Stethoscope className="mx-auto text-slate-400" size={34} />
-                <p className="mt-3 font-semibold text-slate-800">Doctor suggestions will appear here</p>
-                <p className="mt-1 text-sm text-slate-500">Select a problem category and click “Recommend doctors”.</p>
-              </div>
-            ) : (
-              <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                {recommendations.map((doctor) => {
-                  const isSelected = String(doctor.doctor_id) === String(selectedDoctorId)
-                  const qualifications = Array.isArray(doctor.qualifications)
-                    ? doctor.qualifications.join(" · ")
-                    : doctor.qualifications || "Qualifications not listed"
-                  const expertise = doctor.expertise_keywords || doctor.expertise_areas || []
-                  const experience = doctor.experience_years ?? doctor.years_experience ?? 0
-
-                  return (
-                    <button
-                      type="button"
-                      key={doctor.doctor_id}
-                      disabled={Boolean(pendingRegistration)}
-                      onClick={() => setSelectedDoctorId(String(doctor.doctor_id))}
-                      className={`rounded-2xl border p-5 text-left transition ${
-                        isSelected
-                          ? "border-indigo-400 bg-indigo-50 ring-2 ring-indigo-100"
-                          : "border-slate-200 bg-white hover:border-indigo-200 hover:bg-slate-50"
-                      }`}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Date of Birth
+                    </label>
+                    <input
+                      name="date_of_birth"
+                      type="date"
+                      value={form.date_of_birth}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Gender
+                    </label>
+                    <select
+                      name="gender"
+                      value={form.gender}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3">
-                          <div className="rounded-xl bg-indigo-100 p-3 text-indigo-700">
-                            <Stethoscope size={22} />
+                      <option value="">Select Gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Preferred Language
+                    </label>
+                    <input
+                      name="preferred_language"
+                      type="text"
+                      placeholder="e.g. English, Hindi, Marathi"
+                      value={form.preferred_language}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Mobile Number
+                    </label>
+                    <input
+                      name="mobile_number"
+                      type="tel"
+                      placeholder="e.g. +91 98765 43210"
+                      value={form.mobile_number}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Email Address
+                    </label>
+                    <input
+                      name="email"
+                      type="email"
+                      placeholder="e.g. patient@example.com"
+                      value={form.email}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* Step 2: Clinical Symptoms & Observations */}
+            <Card>
+              <CardHeader
+                title="2. Clinical Symptoms & Chief Complaint"
+                subtitle="Select the primary specialty category and describe current issues"
+              />
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Problem Category <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    name="problem_category"
+                    required
+                    value={form.problem_category}
+                    onChange={updateField}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 font-medium"
+                  >
+                    <option value="">Select Primary Problem Category</option>
+                    {PROBLEMS.map((prob) => (
+                      <option key={prob} value={prob}>
+                        {prob}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Symptom Duration
+                    </label>
+                    <input
+                      name="symptom_duration"
+                      type="text"
+                      placeholder="e.g. 3 days, 2 weeks"
+                      value={form.symptom_duration}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Severity Level
+                    </label>
+                    <select
+                      name="symptom_severity"
+                      value={form.symptom_severity}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    >
+                      <option value="MILD">Mild - Routine consultation</option>
+                      <option value="MODERATE">Moderate - Noticeable discomfort</option>
+                      <option value="SEVERE">Severe - Urgent physician evaluation</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Chief Complaint & Symptom Notes
+                  </label>
+                  <textarea
+                    name="visit_notes"
+                    rows={2}
+                    placeholder="Describe specific symptoms, onset, pain level, or medical concerns..."
+                    value={form.visit_notes}
+                    onChange={updateField}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none"
+                  />
+                </div>
+
+                {/* Trigger CareMatch Doctor Recommendations Button */}
+                <div className="pt-2 flex justify-end">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    icon={Sparkles}
+                    loading={searching}
+                    disabled={!form.problem_category}
+                    onClick={recommendDoctors}
+                    className="px-6 py-2.5 shadow-sm font-bold"
+                  >
+                    Find Matching Doctors with CareMatch AI
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
+            {/* Step 3: CareMatch Doctor Recommendations */}
+            <Card>
+              <CardHeader
+                title="3. Recommended Doctors"
+                subtitle="Specialists matching problem category and language preference"
+              />
+              <div className="p-6 space-y-4">
+                {notice && (
+                  <div className="p-3.5 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-900 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                    <span>{notice}</span>
+                  </div>
+                )}
+
+                {recommendations.length === 0 ? (
+                  <div className="p-8 border border-dashed border-slate-200 rounded-2xl text-center space-y-2 bg-slate-50/50">
+                    <Stethoscope className="w-10 h-10 text-slate-300 mx-auto" />
+                    <h4 className="text-sm font-bold text-slate-700">
+                      No Doctor Selected Yet
+                    </h4>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                      Click the "Find Matching Doctors" button above to generate AI-tailored
+                      physician recommendations.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {recommendations.map((doctor) => {
+                      const isSelected = String(doctor.doctor_id) === String(selectedDoctorId)
+                      const matchPct = Math.round(Number(doctor.match_score || 0.85) * 100)
+
+                      return (
+                        <div
+                          key={doctor.doctor_id}
+                          onClick={() => setSelectedDoctorId(String(doctor.doctor_id))}
+                          className={`p-5 rounded-2xl border transition-all cursor-pointer select-none space-y-3 ${
+                            isSelected
+                              ? "border-sky-500 bg-sky-50/60 ring-2 ring-sky-500/20 shadow-md"
+                              : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-xs"
+                          }`}
+                        >
+                          {/* Doctor Header */}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm shrink-0">
+                                <Stethoscope className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-900">
+                                  {doctor.doctor_name}
+                                </h4>
+                                <p className="text-xs text-slate-500 font-medium">
+                                  {doctor.department || "Clinical Medicine"}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="text-right">
+                              <Badge
+                                variant={
+                                  matchPct >= 80
+                                    ? "success"
+                                    : matchPct >= 60
+                                    ? "primary"
+                                    : "neutral"
+                                }
+                                size="sm"
+                              >
+                                {matchPct}% Match
+                              </Badge>
+                            </div>
                           </div>
-                          <div>
-                            <h3 className="font-bold text-slate-900">{doctor.full_name}</h3>
-                            <p className="mt-1 text-xs text-slate-500">{qualifications}</p>
+
+                          {/* Specialty & Details */}
+                          <div className="space-y-1.5 text-xs text-slate-600 border-t border-slate-100 pt-3">
+                            {doctor.specialization && (
+                              <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                                <GraduationCap className="w-3.5 h-3.5 text-slate-400" />
+                                <span>{doctor.specialization}</span>
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
+                              {doctor.languages_spoken && (
+                                <span className="flex items-center gap-1">
+                                  <Globe className="w-3 h-3 text-slate-400" />
+                                  {doctor.languages_spoken}
+                                </span>
+                              )}
+                              {doctor.consultation_fee && (
+                                <span className="font-bold text-slate-800">
+                                  Fee: ₹{doctor.consultation_fee}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Selected Radio Indicator */}
+                          <div className="pt-2 flex items-center justify-between border-t border-slate-100">
+                            <span className="text-[11px] text-slate-400">
+                              {isSelected ? "Selected Physician" : "Click to select"}
+                            </span>
+                            <div
+                              className={`w-5 h-5 rounded-full border flex items-center justify-center ${
+                                isSelected
+                                  ? "border-sky-600 bg-sky-600 text-white"
+                                  : "border-slate-300 bg-white"
+                              }`}
+                            >
+                              {isSelected && <CheckCircle2 className="w-3.5 h-3.5" />}
+                            </div>
                           </div>
                         </div>
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800">
-                          {doctor.match_score ?? 0}% match
-                        </span>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            {/* Step 4: Appointment Booking & Intake Finalization */}
+            <Card>
+              <CardHeader
+                title="4. Schedule Consultation & Confirm Intake"
+                subtitle="Select appointment date, time, and register patient in hospital database"
+              />
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Consultation Date <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      name="appointment_date"
+                      type="date"
+                      required
+                      min={todayString()}
+                      value={form.appointment_date}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                      Consultation Time Slot <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      name="appointment_time"
+                      type="time"
+                      required
+                      value={form.appointment_time}
+                      onChange={updateField}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Selected Doctor Confirmation Banner */}
+                {selectedDoctor && (
+                  <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                        <CheckCircle2 className="w-5 h-5" />
                       </div>
+                      <div>
+                        <div className="text-xs font-bold text-emerald-950 uppercase tracking-wider">
+                          Ready to Book
+                        </div>
+                        <div className="text-sm font-bold text-slate-900">
+                          {selectedDoctor.doctor_name} ({selectedDoctor.department || "Specialist"})
+                        </div>
+                      </div>
+                    </div>
+                    <Badge variant="success" size="sm">
+                      Confirmed Doctor
+                    </Badge>
+                  </div>
+                )}
 
-                      <p className="mt-4 text-sm font-semibold text-slate-800">
-                        {(doctor.specializations || []).join(", ") || "Specialization not listed"}
-                      </p>
-
-                      {expertise.length > 0 && (
-                        <p className="mt-2 text-sm text-slate-600">
-                          Expertise: {expertise.join(", ")}
-                        </p>
-                      )}
-
-                      <p className="mt-2 text-sm text-slate-600">
-                        Experience: {experience} years
-                        {doctor.consultation_fee != null ? ` · Fee ₹${doctor.consultation_fee}` : ""}
-                      </p>
-                        {doctor.language_match && (
-                        <p className="mt-2 text-sm font-medium text-emerald-700">
-                          ✓ Supports patient's preferred language
-                        </p>
-                      )}
-
-                      {doctor.match_reasons?.length > 0 && (
-                        <p className="mt-3 text-xs text-indigo-700">
-                          Matching terms: {doctor.match_reasons.join(", ")}
-                        </p>
-                      )}
-
-                      <span className={`mt-4 inline-flex rounded-lg px-3 py-2 text-xs font-bold ${
-                        isSelected ? "bg-indigo-600 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
-                      }`}>
-                        {isSelected ? "✓ Selected" : "Select this doctor"}
-                      </span>
-                    </button>
-                  )
-                })}
+                <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => navigate("/hospital/dashboard")}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    icon={CheckCircle2}
+                    loading={submitting}
+                    disabled={!selectedDoctor || !form.first_name || !form.last_name}
+                    className="px-6 py-2.5 font-bold shadow-md"
+                  >
+                    Confirm Intake & Book Appointment
+                  </Button>
+                </div>
               </div>
-            )}
-          </section>
-
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-            <SectionTitle
-              number="04"
-              title="Appointment details"
-              subtitle="Choose a date and time for the selected doctor."
-              icon={<CalendarClock size={22} />}
-            />
-
-            <div className="mt-6 grid gap-5 sm:grid-cols-2">
-              <Field label="Appointment date *">
-                <input className={inputClass} type="date" name="appointment_date" min={todayString()} value={form.appointment_date} onChange={updateField} required />
-              </Field>
-
-              <Field label="Appointment time *">
-                <input className={inputClass} type="time" name="appointment_time" value={form.appointment_time} onChange={updateField} required />
-              </Field>
-            </div>
-
-            {selectedDoctor && (
-              <div className="mt-5 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-950">
-                Selected doctor: <strong>{selectedDoctor.full_name}</strong>
-              </div>
-            )}
-          </section>
-
-          <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs leading-5 text-slate-500">
-              Please verify the information before submitting. Do not create duplicate patient records if an appointment-saving error occurs.
-            </p>
-
-            <button type="submit" disabled={submitting || (!pendingRegistration && !selectedDoctor)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
-              {submitting ? <LoaderCircle className="animate-spin" size={18} /> : pendingRegistration ? <CalendarClock size={18} /> : <CheckCircle2 size={18} />}
-              {submitting ? "Saving..." : pendingRegistration ? "Retry appointment saving" : "Register patient & book"}
-            </button>
-          </div>
-        </form>
+            </Card>
+          </form>
+        )}
       </div>
     </MainLayout>
   )

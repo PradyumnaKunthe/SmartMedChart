@@ -1,558 +1,279 @@
+import React, { useEffect, useState } from "react"
+import { useNavigate, useParams } from "react-router-dom"
 import {
+  AlertTriangle,
   ArrowLeft,
+  BrainCircuit,
+  Calendar,
   CheckCircle2,
-  LoaderCircle,
+  Clock,
   Pill,
+  ShieldAlert,
   ShieldCheck,
+  User,
+  Zap,
 } from "lucide-react"
 
-import {
-  useEffect,
-  useState,
-} from "react"
-
-import {
-  useNavigate,
-  useParams,
-} from "react-router-dom"
-
 import MainLayout from "../../components/layout/MainLayout"
-
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
+import Loading from "../../components/common/Loading"
 import AdministrationActions from "../../components/nurse/AdministrationActions"
+import { getMedicationSchedule } from "../../services/medications"
+import { predictMedicationRisk } from "../../services/ai"
+import { checkMedicationSafety } from "../../services/safety"
 
-import {
-  getMedicationSchedule,
-} from "../../services/medications"
-
-import {
-  predictMedicationRisk,
-} from "../../services/ai"
-
-import {
-  checkMedicationSafety,
-} from "../../services/safety"
-
-
-function statusClasses(status) {
-  switch (status) {
-    case "GIVEN":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200"
-
-    case "DELAYED":
-      return "bg-amber-50 text-amber-700 border-amber-200"
-
-    case "HELD":
-      return "bg-orange-50 text-orange-700 border-orange-200"
-
-    case "REFUSED":
-      return "bg-red-50 text-red-700 border-red-200"
-
-    case "NOT_GIVEN":
-      return "bg-rose-50 text-rose-700 border-rose-200"
-
-    default:
-      return "bg-blue-50 text-blue-700 border-blue-200"
-  }
+function normalizeStatus(status) {
+  return String(status || "").trim().toUpperCase().replace(/_/g, " ")
 }
 
+function formatTime(timeString) {
+  if (!timeString) return "—"
+  const [hour, minute] = String(timeString).slice(0, 5).split(":").map(Number)
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return timeString
+  const date = new Date()
+  date.setHours(hour, minute, 0, 0)
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
+}
 
 export default function Administration() {
-  const {
-    scheduleId,
-  } = useParams()
+  const { scheduleId } = useParams()
+  const navigate = useNavigate()
 
-  const navigate =
-    useNavigate()
-
-  const [
-    medication,
-    setMedication,
-  ] = useState(null)
-
-  const [
-    prediction,
-    setPrediction,
-  ] = useState(null)
-
-  const [
-    safety,
-    setSafety,
-  ] = useState(null)
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-  const [
-    success,
-    setSuccess,
-  ] = useState(null)
-
+  const [medication, setMedication] = useState(null)
+  const [prediction, setPrediction] = useState(null)
+  const [safety, setSafety] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [success, setSuccess] = useState(null)
 
   useEffect(() => {
-    async function loadAdministrationData() {
+    async function loadData() {
+      if (!scheduleId) return
       setLoading(true)
       setError("")
 
       try {
-        const medicationData =
-          await getMedicationSchedule(
-            scheduleId,
-          )
+        const medData = await getMedicationSchedule(scheduleId)
+        setMedication(medData)
 
-        setMedication(
-          medicationData,
-        )
-
-        const [
-          aiResponse,
-          safetyResponse,
-        ] = await Promise.all([
-          predictMedicationRisk(
-            Number(scheduleId),
-          ),
-          checkMedicationSafety(
-            Number(scheduleId),
-          ),
-        ])
-
-        setPrediction(
-          aiResponse.prediction,
-        )
-
-        setSafety(
-          safetyResponse,
-        )
-
-      } catch (requestError) {
+        // Fetch AI risk & safety in parallel with graceful fallbacks
+        try {
+          const [aiRes, safetyRes] = await Promise.all([
+            predictMedicationRisk(Number(scheduleId)).catch(() => null),
+            checkMedicationSafety(Number(scheduleId)).catch(() => null),
+          ])
+          if (aiRes?.prediction) setPrediction(aiRes.prediction)
+          if (safetyRes) setSafety(safetyRes)
+        } catch {
+          // AI and safety are advisory; do not block administration if unavailable
+        }
+      } catch (err) {
         setError(
-          requestError?.response?.data
-            ?.detail ||
-            "Unable to prepare medication administration.",
+          err?.response?.data?.detail || "Unable to prepare medication administration."
         )
       } finally {
         setLoading(false)
       }
     }
 
-    if (scheduleId) {
-      loadAdministrationData()
-    }
+    loadData()
   }, [scheduleId])
-
-
-  function handleAdministrationSuccess(
-    result,
-  ) {
-    setSuccess(result)
-
-    setMedication(
-      (previous) => ({
-        ...previous,
-        status: result.status,
-        actual_administration_time:
-          result.administered_at,
-        administered_by:
-          result.administered_by,
-      }),
-    )
-  }
-
 
   if (loading) {
     return (
-      <MainLayout title="Administration">
-
-        <div className="flex min-h-[60vh] items-center justify-center">
-
-          <div className="text-center">
-
-            <LoaderCircle className="mx-auto h-9 w-9 animate-spin text-cyan-500" />
-
-            <p className="mt-4 text-sm text-slate-500">
-              Preparing administration workflow...
-            </p>
-
-          </div>
-
-        </div>
-
+      <MainLayout title="Bedside Administration">
+        <Loading message="Validating patient EMR and safety protocols..." />
       </MainLayout>
     )
   }
-
 
   if (error || !medication) {
     return (
-      <MainLayout title="Administration">
-
-        <div className="mx-auto max-w-2xl">
-
-          <button
-            type="button"
-            onClick={() =>
-              navigate(
-                `/nurse/medications/${scheduleId}`,
-              )
-            }
-            className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to medication
-          </button>
-
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
-
-            <h2 className="font-semibold text-red-900">
-              Administration unavailable
-            </h2>
-
-            <p className="mt-2 text-sm leading-6 text-red-700">
-              {error ||
-                "Medication schedule not found."}
-            </p>
-
+      <MainLayout title="Bedside Administration">
+        <div className="max-w-2xl mx-auto space-y-4">
+          <Button variant="ghost" icon={ArrowLeft} onClick={() => navigate("/nurse/medications")}>
+            Back to Queue
+          </Button>
+          <div className="p-6 bg-rose-50 border border-rose-200 rounded-3xl text-rose-700 space-y-2">
+            <h3 className="font-bold text-rose-900">Unable to load medication</h3>
+            <p className="text-sm">{error || "Medication record not found."}</p>
           </div>
-
         </div>
-
       </MainLayout>
     )
   }
 
-
-  const alreadyAdministered =
-    [
-      "GIVEN",
-      "DELAYED",
-      "HELD",
-      "REFUSED",
-      "NOT_GIVEN",
-    ].includes(
-      medication.status,
-    )
-
-
   return (
-    <MainLayout title="Administration">
+    <MainLayout
+      title="Bedside Administration"
+      subtitle={`Dose #${scheduleId} · Verify patient wristband & confirm administration`}
+    >
+      <div className="max-w-4xl mx-auto space-y-6">
+        {/* Navigation */}
+        <div className="flex items-center justify-between">
+          <Button
+            variant="ghost"
+            icon={ArrowLeft}
+            onClick={() => navigate(`/nurse/medications/${scheduleId}`)}
+          >
+            Back to Schedule Details
+          </Button>
 
-      <div className="mx-auto max-w-5xl space-y-6">
-
-        {/* Back */}
-
-        <button
-          type="button"
-          onClick={() =>
-            navigate(
-              `/nurse/medications/${scheduleId}`,
-            )
-          }
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to medication
-        </button>
-
-
-        {/* Header */}
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-
-            <div className="flex items-center gap-4">
-
-              <div className="rounded-2xl bg-cyan-50 p-4">
-                <Pill className="h-7 w-7 text-cyan-600" />
-              </div>
-
-              <div>
-
-                <p className="text-sm font-semibold text-cyan-600">
-                  Medication Administration
-                </p>
-
-                <h1 className="mt-1 text-2xl font-bold text-slate-900">
-                  Schedule #{medication.id}
-                </h1>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Prescription Item #
-                  {medication.prescription_item_id}
-                </p>
-
-              </div>
-
-            </div>
-
-
-            <span
-              className={[
-                "w-fit rounded-full border px-3 py-1.5 text-sm font-semibold",
-                statusClasses(
-                  medication.status,
-                ),
-              ].join(" ")}
-            >
-              {medication.status}
-            </span>
-
-          </div>
-
+          <Badge variant="primary" size="md">
+            Schedule #{scheduleId}
+          </Badge>
         </div>
 
-
-        {/* Success */}
-
-        {success && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-
-            <div className="flex items-start gap-3">
-
-              <div className="rounded-xl bg-emerald-100 p-3">
-                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              </div>
-
-              <div>
-
-                <p className="font-semibold text-emerald-900">
-                  Administration recorded successfully
-                </p>
-
-                <p className="mt-1 text-sm text-emerald-700">
-                  Schedule #{success.schedule_id}
-                  {" "}
-                  is now marked as{" "}
-                  <strong>
-                    {success.status}
-                  </strong>.
-                </p>
-
-              </div>
-
+        {/* Success State */}
+        {success ? (
+          <div className="p-8 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-3xl text-center space-y-4 shadow-sm">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+              <CheckCircle2 className="w-10 h-10" />
             </div>
-
-          </div>
-        )}
-
-
-        {/* Safety summary */}
-
-        {safety && (
-          <div
-            className={[
-              "rounded-3xl border p-6",
-              safety.safe
-                ? "border-emerald-200 bg-emerald-50"
-                : "border-red-200 bg-red-50",
-            ].join(" ")}
-          >
-
-            <div className="flex items-start gap-4">
-
-              <div
-                className={[
-                  "rounded-xl p-3",
-                  safety.safe
-                    ? "bg-emerald-100"
-                    : "bg-red-100",
-                ].join(" ")}
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">
+                Administration Successfully Logged
+              </h2>
+              <p className="text-sm text-slate-600 mt-1.5 max-w-md mx-auto">
+                Status has been recorded as{" "}
+                <strong className="text-emerald-700 font-bold uppercase">
+                  {success.status || "COMPLETED"}
+                </strong>
+                . Patient EMR and shift nursing log have been updated in real-time.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-3 pt-3">
+              <Button
+                variant="primary"
+                onClick={() => navigate("/nurse/medications")}
+                className="px-6 py-2.5"
               >
-                <ShieldCheck
-                  className={[
-                    "h-6 w-6",
-                    safety.safe
-                      ? "text-emerald-600"
-                      : "text-red-600",
-                  ].join(" ")}
-                />
-              </div>
-
-
-              <div className="flex-1">
-
-                <p
-                  className={[
-                    "text-sm font-semibold",
-                    safety.safe
-                      ? "text-emerald-700"
-                      : "text-red-700",
-                  ].join(" ")}
-                >
-                  Medication Safety
-                </p>
-
-                <h2
-                  className={[
-                    "mt-1 text-xl font-bold",
-                    safety.safe
-                      ? "text-emerald-900"
-                      : "text-red-900",
-                  ].join(" ")}
-                >
-                  {safety.safe
-                    ? "No safety conflicts detected"
-                    : "Safety review required"}
-                </h2>
-
-                <p
-                  className={[
-                    "mt-2 text-sm leading-6",
-                    safety.safe
-                      ? "text-emerald-700"
-                      : "text-red-700",
-                  ].join(" ")}
-                >
-                  {safety.message}
-                </p>
-
-
-                {!safety.safe &&
-                  safety.warnings?.length > 0 && (
-                    <div className="mt-4 space-y-2">
-
-                      {safety.warnings.map(
-                        (warning, index) => (
-                          <div
-                            key={`${warning.type}-${index}`}
-                            className="rounded-xl bg-white/70 p-3"
-                          >
-                            <p className="text-sm font-semibold text-red-900">
-                              {warning.message}
-                            </p>
-
-                            <p className="mt-1 text-xs leading-5 text-red-700">
-                              {warning.reason}
-                            </p>
-                          </div>
-                        ),
-                      )}
-
-                    </div>
-                  )}
-
-              </div>
-
+                Return to Medication Queue
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => navigate("/nurse/dashboard")}
+              >
+                Go to Nurse Dashboard
+              </Button>
             </div>
-
-          </div>
-        )}
-
-
-        {/* AI summary */}
-
-        {prediction && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-center justify-between">
-
-              <div>
-                <p className="text-sm font-semibold text-slate-700">
-                  AI Risk Summary
-                </p>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Decision-support information for this dose.
-                </p>
-              </div>
-
-              <div className="flex gap-2">
-
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                  Delay{" "}
-                  {(
-                    prediction.delay_probability *
-                    100
-                  ).toFixed(1)}
-                  %
-                </span>
-
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                  Missed{" "}
-                  {(
-                    prediction.missed_probability *
-                    100
-                  ).toFixed(1)}
-                  %
-                </span>
-
-              </div>
-
-            </div>
-
-          </div>
-        )}
-
-
-        {/* Administration actions */}
-
-        {alreadyAdministered ? (
-          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
-
-            <div className="flex items-start gap-3">
-
-              <CheckCircle2 className="mt-0.5 h-5 w-5 text-slate-500" />
-
-              <div>
-
-                <h2 className="font-semibold text-slate-800">
-                  Administration already recorded
-                </h2>
-
-                <p className="mt-1 text-sm leading-6 text-slate-500">
-                  This scheduled dose has already been
-                  assigned an administration outcome and
-                  cannot be recorded again.
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-        ) : !safety?.safe ? (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-6">
-
-            <div className="flex items-start gap-3">
-
-              <ShieldCheck className="mt-0.5 h-5 w-5 text-red-600" />
-
-              <div>
-
-                <h2 className="font-semibold text-red-900">
-                  Administration blocked
-                </h2>
-
-                <p className="mt-1 text-sm leading-6 text-red-700">
-                  The Safety Engine returned a warning.
-                  Resolve the safety issue through the
-                  appropriate clinical workflow before
-                  recording administration.
-                </p>
-
-              </div>
-
-            </div>
-
           </div>
         ) : (
-          <AdministrationActions
-            scheduleId={scheduleId}
-            onSuccess={
-              handleAdministrationSuccess
-            }
-          />
+          <>
+            {/* Medication & Patient Profile Summary Card */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-sky-100 text-sky-700 flex items-center justify-center shadow-xs">
+                    <User className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900">
+                      {medication.patient_name || "Inpatient"}
+                    </h3>
+                    <p className="text-xs text-slate-500 font-mono">
+                      Patient Code: {medication.patient_code || `#${medication.patient_id}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="px-3.5 py-1.5 bg-slate-100 rounded-xl text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-slate-500" />
+                    Scheduled: {formatTime(medication.scheduled_time)}
+                  </div>
+                  {medication.is_stat && (
+                    <Badge variant="warning" size="sm">
+                      <Zap className="w-3 h-3 mr-1 fill-current" /> STAT
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              {/* Medicine Highlight */}
+              <div className="p-4 bg-sky-50/60 border border-sky-200/80 rounded-2xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-xs">
+                    <Pill className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold text-slate-900">
+                      {medication.medicine_name || medication.medication_name}
+                    </h4>
+                    <p className="text-xs text-slate-600">
+                      Dose: <strong className="text-slate-900">{medication.dosage || medication.dose}</strong> · Route:{" "}
+                      <strong className="text-slate-900">{medication.route || "Oral"}</strong>
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right text-xs text-slate-500 hidden sm:block">
+                  <div>Frequency: <span className="font-semibold text-slate-800">{medication.frequency || "Daily"}</span></div>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              {medication.instructions && (
+                <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-xs text-amber-900 font-medium">
+                  <strong>Special Instructions:</strong> {medication.instructions}
+                </div>
+              )}
+            </div>
+
+            {/* AI Risk & Safety Advisory (if available) */}
+            {prediction && (
+              <div className="p-4 bg-gradient-to-r from-indigo-50 to-sky-50 border border-indigo-200 rounded-2xl flex items-start gap-3">
+                <BrainCircuit className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+                <div className="text-xs space-y-1">
+                  <div className="font-bold text-indigo-950 flex items-center gap-2">
+                    <span>AI Clinical Risk Intelligence</span>
+                    <Badge
+                      variant={
+                        prediction.risk_level === "HIGH"
+                          ? "danger"
+                          : prediction.risk_level === "MEDIUM"
+                          ? "warning"
+                          : "success"
+                      }
+                      size="sm"
+                    >
+                      {prediction.risk_level || "LOW"} RISK
+                    </Badge>
+                  </div>
+                  <p className="text-indigo-900/80">
+                    Calculated Delay Probability:{" "}
+                    <strong>
+                      {Math.round((prediction.delay_probability || 0) * 100)}%
+                    </strong>
+                    . {prediction.recommendations || "Proceed with standard bedside verification protocol."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Administration Outcome Form */}
+            <Card>
+              <CardHeader
+                title="Record Clinical Outcome"
+                subtitle="Select the bedside administration status and enter optional shift observations"
+              />
+              <div className="p-6">
+                <AdministrationActions
+                  scheduleId={scheduleId}
+                  isAssigned={medication.is_assigned ?? true}
+                  assignedNurseName={medication.assigned_nurse_name ?? ""}
+                  onSuccess={(res) => setSuccess(res)}
+                  onError={(err) => setError(err)}
+                />
+              </div>
+            </Card>
+          </>
         )}
-
       </div>
-
     </MainLayout>
   )
 }

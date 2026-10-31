@@ -1,6 +1,6 @@
 import {
   Download,
-  LoaderCircle,
+  Printer,
   QrCode,
   RefreshCw,
   Search,
@@ -21,6 +21,13 @@ import {
 } from "qrcode.react"
 
 import MainLayout from "../../components/layout/MainLayout"
+import Badge from "../../components/common/Badge"
+import Button from "../../components/common/Button"
+import EmptyState from "../../components/common/EmptyState"
+import ErrorState from "../../components/common/ErrorState"
+import Loading from "../../components/common/Loading"
+import Modal from "../../components/common/Modal"
+import StatCard from "../../components/dashboard/StatCard"
 
 import {
   getAdminPatients,
@@ -31,552 +38,370 @@ import {
   hideTestPatients,
 } from "../../utils/patientFilter"
 
-
 export default function PatientQR() {
-  const [
-    patients,
-    setPatients,
-  ] = useState([])
-
-  const [
-    search,
-    setSearch,
-  ] = useState("")
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-  const [
-    generatingId,
-    setGeneratingId,
-  ] = useState(null)
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-  const [
-    generatedQR,
-    setGeneratedQR,
-  ] = useState(null)
+  const [patients, setPatients] = useState([])
+  const [search, setSearch] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [generatingId, setGeneratingId] = useState(null)
+  const [error, setError] = useState("")
+  const [generatedQR, setGeneratedQR] = useState(null)
 
   const qrCanvasRef = useRef(null)
 
-
-  async function loadPatients() {
-    setLoading(true)
+  async function loadPatients(isManual = false) {
+    if (isManual) setRefreshing(true)
+    else setLoading(true)
     setError("")
 
     try {
-      const response =
-        await getAdminPatients()
+      const response = await getAdminPatients()
+      const rawPatients = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.patients)
+        ? response.patients
+        : []
 
-      const rawPatients =
-        Array.isArray(response)
-          ? response
-          : Array.isArray(response?.patients)
-            ? response.patients
-            : []
-
-      setPatients(
-        hideTestPatients(rawPatients),
-      )
+      setPatients(hideTestPatients(rawPatients))
     } catch (requestError) {
-      console.error(
-        "Unable to load patients:",
-        requestError,
-      )
-
+      console.error("Unable to load patients:", requestError)
       setError(
         requestError?.response?.data?.detail ||
           requestError?.message ||
-          "Unable to load patients.",
+          "Unable to load patient QR registry.",
       )
-
       setPatients([])
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
-
 
   useEffect(() => {
     loadPatients()
   }, [])
 
+  const filteredPatients = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return patients
 
-  const filteredPatients =
-    useMemo(() => {
-      const query =
-        search.trim().toLowerCase()
+    return patients.filter((patient) => {
+      const fullName =
+        patient.full_name ||
+        `${patient.first_name || ""} ${patient.last_name || ""}`
 
-      if (!query) {
-        return patients
-      }
-
-      return patients.filter(
-        (patient) => {
-          const fullName =
-            patient.full_name ||
-            `${patient.first_name || ""} ${
-              patient.last_name || ""
-            }`
-
-          return (
-            String(fullName)
-              .toLowerCase()
-              .includes(query) ||
-            String(
-              patient.patient_id || "",
-            )
-              .toLowerCase()
-              .includes(query)
-          )
-        },
+      return (
+        String(fullName).toLowerCase().includes(query) ||
+        String(patient.patient_id || "").toLowerCase().includes(query)
       )
-    },
-    [
-      patients,
-      search,
-    ])
+    })
+  }, [patients, search])
 
-
-  async function handleGenerateQR(
-    patient,
-  ) {
+  async function handleGenerateQR(patient) {
     setGeneratingId(patient.id)
     setError("")
     setGeneratedQR(null)
 
     try {
-      const result =
-        await generatePatientQR(
-          patient.id,
-        )
-
+      const result = await generatePatientQR(patient.id)
       setGeneratedQR({
         ...result,
         patient,
       })
     } catch (requestError) {
-      console.error(
-        "QR generation failed:",
-        requestError,
-      )
-
+      console.error("QR generation failed:", requestError)
       setError(
         requestError?.response?.data?.detail ||
           requestError?.message ||
-          "Unable to generate patient QR.",
+          "Unable to generate patient QR badge.",
       )
     } finally {
       setGeneratingId(null)
     }
   }
 
-
   function downloadQR() {
-    const canvas =
-      qrCanvasRef.current
-
+    const canvas = qrCanvasRef.current
     if (!canvas) {
-      setError(
-        "QR image is not available.",
-      )
+      setError("QR image canvas is not available.")
       return
     }
 
-    const image =
-      canvas.toDataURL("image/png")
-
-    const patient =
-      generatedQR?.patient
-
+    const image = canvas.toDataURL("image/png")
+    const patient = generatedQR?.patient
     const patientName =
       patient?.full_name ||
-      `${patient?.first_name || "patient"} ${
-        patient?.last_name || ""
-      }`
+      `${patient?.first_name || "patient"} ${patient?.last_name || ""}`
 
-    const link =
-      document.createElement("a")
-
+    const link = document.createElement("a")
     link.href = image
-
-    link.download =
-      `${patientName
-        .trim()
-        .replace(/\s+/g, "_")
-        .toLowerCase()}_qr.png`
-
+    link.download = `${patientName
+      .trim()
+      .replace(/\s+/g, "_")
+      .toLowerCase()}_patient_qr.png`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
   }
 
-
-  function closeQR() {
-    setGeneratedQR(null)
+  function handlePrint() {
+    window.print()
   }
 
+  if (loading) {
+    return (
+      <MainLayout
+        title="Patient QR System"
+        subtitle="Cryptographically verified wristband QR tokens"
+      >
+        <Loading
+          fullScreen
+          message="Loading Patient QR Registry..."
+          subtext="Preparing wristband tokens and identity verification codes"
+        />
+      </MainLayout>
+    )
+  }
+
+  const activeQRPatientsCount = patients.filter((p) => p.qr_is_active || p.qr_token).length
 
   return (
-    <MainLayout title="Patient QR">
-
-      <div className="mx-auto max-w-7xl space-y-6">
-
-        {/* =====================================================
-            HEADER
-        ===================================================== */}
-
-        <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-white shadow-xl">
-
-          <div className="p-6 sm:p-8">
-
-            <div className="flex items-start gap-4">
-
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cyan-500/10">
-
-                <QrCode className="h-6 w-6 text-cyan-400" />
-
-              </div>
-
-              <div className="min-w-0">
-
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-400">
-                  Patient Security
-                </p>
-
-                <h1 className="mt-1 text-2xl font-bold sm:text-3xl">
-                  Patient QR Management
-                </h1>
-
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-                  Generate and download a secure QR code
-                  for an active patient.
-                </p>
-
-              </div>
-
+    <MainLayout
+      title="Patient QR Wristband System"
+      subtitle="Issue and verify cryptographically secured clinical barcode wristbands for 5-Rights medication safety"
+    >
+      <div className="space-y-6 sm:space-y-8">
+        {/* Top Header & Actions */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Patient Safety & Identification
+              </p>
             </div>
-
+            <h2 className="font-heading text-2xl font-extrabold text-slate-900 mt-1">
+              QR Wristband Generator
+            </h2>
           </div>
 
-        </section>
-
-
-        {/* =====================================================
-            ERROR
-        ===================================================== */}
+          <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              loading={refreshing}
+              onClick={() => loadPatients(true)}
+            >
+              Refresh
+            </Button>
+          </div>
+        </div>
 
         {error && (
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">
-
-            {error}
-
-          </div>
-
+          <ErrorState
+            title="QR Generation Issue"
+            message={error}
+            onRetry={() => loadPatients(true)}
+          />
         )}
 
+        {/* KPI Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <StatCard
+            title="Total Registered Inpatients"
+            value={patients.length}
+            description="Eligible for wristband badge"
+            icon={UserRound}
+            variant="sky"
+          />
+          <StatCard
+            title="Active QR Wristbands"
+            value={activeQRPatientsCount}
+            description="Verified tokens in circulation"
+            icon={QrCode}
+            variant="emerald"
+            badge="Active"
+          />
+          <StatCard
+            title="Verification Protocol"
+            value="5-Rights"
+            description="Patient, Med, Dose, Route, Time"
+            icon={ShieldCheck}
+            variant="indigo"
+          />
+        </div>
 
-        {/* =====================================================
-            SEARCH
-        ===================================================== */}
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-
-          <div className="relative">
-
-            <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-
+        {/* Search Bar */}
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200/90 bg-white p-3 shadow-xs">
+          <div className="relative flex-1">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
               type="text"
               value={search}
-              onChange={(event) =>
-                setSearch(
-                  event.target.value,
-                )
-              }
-              placeholder="Search patient name or patient ID..."
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-12 pr-4 text-sm text-slate-900 outline-none transition focus:border-cyan-500 focus:bg-white focus:ring-4 focus:ring-cyan-500/10"
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search patients by name or ID to generate QR wristband..."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 py-2.5 pl-9 pr-8 text-xs font-medium text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
             />
-
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
-
-        </section>
-
-
-        {/* =====================================================
-            PATIENT LIST
-        ===================================================== */}
-
-        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-          <div className="flex items-center justify-between gap-4 border-b border-slate-200 p-5">
-
-            <div>
-
-              <p className="text-xs font-bold uppercase tracking-[0.15em] text-slate-400">
-                Active Patients
-              </p>
-
-              <h2 className="mt-1 text-lg font-bold text-slate-900">
-                Generate Patient QR
-              </h2>
-
-            </div>
-
-
-            <button
-              type="button"
-              onClick={loadPatients}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-
-              <RefreshCw
-                className={
-                  loading
-                    ? "h-4 w-4 animate-spin"
-                    : "h-4 w-4"
-                }
-              />
-
-              Refresh
-
-            </button>
-
-          </div>
-
-
-          {loading ? (
-
-            <div className="flex min-h-56 items-center justify-center">
-
-              <LoaderCircle className="h-7 w-7 animate-spin text-cyan-600" />
-
-            </div>
-
-          ) : filteredPatients.length === 0 ? (
-
-            <div className="p-12 text-center">
-
-              <UserRound className="mx-auto h-10 w-10 text-slate-300" />
-
-              <p className="mt-4 font-semibold text-slate-700">
-                No patients found
-              </p>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Try a different patient name or patient ID.
-              </p>
-
-            </div>
-
-          ) : (
-
-            <div className="divide-y divide-slate-100">
-
-              {filteredPatients.map(
-                (patient) => {
-
-                  const patientName =
-                    patient.full_name ||
-                    `${patient.first_name || ""} ${
-                      patient.last_name || ""
-                    }`
-
-                  return (
-                    <div
-                      key={patient.id}
-                      className="flex flex-col gap-4 p-5 transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between"
-                    >
-
-                      <div className="flex min-w-0 items-center gap-3">
-
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-cyan-50">
-
-                          <UserRound className="h-5 w-5 text-cyan-600" />
-
-                        </div>
-
-
-                        <div className="min-w-0">
-
-                          <p className="truncate font-bold text-slate-900">
-                            {patientName}
-                          </p>
-
-                          <p className="mt-1 text-sm text-slate-500">
-                            Patient ID:{" "}
-                            {patient.patient_id}
-                          </p>
-
-                        </div>
-
-                      </div>
-
-
-                      <button
-                        type="button"
-                        disabled={
-                          generatingId ===
-                          patient.id
-                        }
-                        onClick={() =>
-                          handleGenerateQR(
-                            patient,
-                          )
-                        }
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-
-                        {generatingId ===
-                        patient.id ? (
-
-                          <LoaderCircle className="h-4 w-4 animate-spin" />
-
-                        ) : (
-
-                          <QrCode className="h-4 w-4" />
-
-                        )}
-
-                        {generatingId ===
-                        patient.id
-                          ? "Generating..."
-                          : "Generate QR"}
-
-                      </button>
-
-                    </div>
-                  )
-                },
-              )}
-
-            </div>
-
-          )}
-
-        </section>
-
-
-        {/* =====================================================
-            QR MODAL
-        ===================================================== */}
-
-        {generatedQR && (
-
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-
-            <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl">
-
-              <div className="flex items-center justify-between border-b border-slate-200 p-5">
-
-                <div className="min-w-0">
-
-                  <p className="text-xs font-bold uppercase tracking-[0.15em] text-cyan-600">
-                    QR Generated
-                  </p>
-
-                  <h3 className="mt-1 truncate text-lg font-bold text-slate-900">
-                    {generatedQR.patient?.full_name ||
-                      `${generatedQR.patient?.first_name || ""} ${
-                        generatedQR.patient?.last_name || ""
-                      }`}
-                  </h3>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Patient ID:{" "}
-                    {generatedQR.patient?.patient_id}
-                  </p>
-
-                </div>
-
-
-                <button
-                  type="button"
-                  onClick={closeQR}
-                  className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                  aria-label="Close QR preview"
+          <span className="text-xs text-slate-400 font-semibold px-2">
+            {filteredPatients.length} found
+          </span>
+        </div>
+
+        {/* Patient Grid */}
+        {filteredPatients.length === 0 ? (
+          <EmptyState
+            icon={QrCode}
+            title="No Patients Found"
+            description={
+              search
+                ? `No patient records match "${search}".`
+                : "No patients are registered in the system."
+            }
+          />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredPatients.map((patient) => {
+              const fullName =
+                patient.full_name ||
+                `${patient.first_name || ""} ${patient.last_name || ""}`.trim() ||
+                "Inpatient"
+
+              const initials = fullName
+                .split(" ")
+                .map((w) => w[0])
+                .join("")
+                .slice(0, 2)
+                .toUpperCase()
+
+              const isGenerating = generatingId === patient.id
+
+              return (
+                <div
+                  key={patient.id}
+                  className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs transition hover:border-sky-300 hover:shadow-md"
                 >
-
-                  <X className="h-5 w-5" />
-
-                </button>
-
-              </div>
-
-
-              <div className="p-6">
-
-                <div className="flex justify-center rounded-2xl border border-slate-200 bg-white p-5">
-
-                  <QRCodeCanvas
-                    ref={qrCanvasRef}
-                    value={
-                      generatedQR.qr_data ||
-                      generatedQR.qr_token
-                    }
-                    size={240}
-                    level="H"
-                    includeMargin
-                  />
-
-                </div>
-
-
-                <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-
-                  <div className="flex items-start gap-3">
-
-                    <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-
-                    <div>
-
-                      <p className="text-sm font-semibold text-emerald-900">
-                        Secure QR created successfully
-                      </p>
-
-                      <p className="mt-1 text-xs leading-5 text-emerald-700">
-                        This QR is linked to the selected
-                        patient and can be used for nurse
-                        patient verification.
-                      </p>
-
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-50 font-bold text-xs text-sky-700 border border-sky-100">
+                        {initials}
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-heading font-bold text-slate-900 text-sm truncate">
+                          {fullName}
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          ID: <span className="font-semibold text-slate-700">{patient.patient_id}</span>
+                        </p>
+                      </div>
                     </div>
 
+                    <Badge
+                      variant={patient.is_active ? "success" : "neutral"}
+                      size="sm"
+                    >
+                      {patient.is_active ? "Active" : "Discharged"}
+                    </Badge>
                   </div>
 
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">
+                      Bed: {patient.bed_id ? `Bed ${patient.bed_id}` : "Unassigned"}
+                    </span>
+
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={QrCode}
+                      loading={isGenerating}
+                      onClick={() => handleGenerateQR(patient)}
+                    >
+                      Generate QR
+                    </Button>
+                  </div>
                 </div>
-
-
-                <button
-                  type="button"
-                  onClick={downloadQR}
-                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
-
-                  <Download className="h-4 w-4" />
-
-                  Download QR
-
-                </button>
-
-              </div>
-
-            </div>
-
+              )
+            })}
           </div>
-
         )}
-
       </div>
 
+      {/* QR Badge Modal */}
+      <Modal
+        open={Boolean(generatedQR)}
+        onClose={() => setGeneratedQR(null)}
+        title="Patient Wristband QR Badge"
+        subtitle="Official hospital identification token for bedside verification"
+        maxWidth="max-w-md"
+      >
+        {generatedQR && (
+          <div className="space-y-5 text-center">
+            {/* ID Card Styled Container */}
+            <div className="rounded-3xl border-2 border-dashed border-sky-300 bg-gradient-to-b from-sky-50/60 to-white p-6 shadow-xs">
+              <div className="flex items-center justify-center gap-2 mb-3">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="text-xs font-extrabold uppercase tracking-widest text-sky-700">
+                  SmartMedChart Hospital System
+                </span>
+              </div>
+
+              {/* QR Code Canvas */}
+              <div className="mx-auto flex h-48 w-48 items-center justify-center rounded-2xl bg-white p-3 shadow-md border border-slate-200">
+                <QRCodeCanvas
+                  ref={qrCanvasRef}
+                  value={generatedQR.qr_token || generatedQR.token || ""}
+                  size={168}
+                  level="H"
+                  includeMargin={false}
+                />
+              </div>
+
+              <div className="mt-4">
+                <h3 className="font-heading text-lg font-extrabold text-slate-900">
+                  {generatedQR.patient?.full_name ||
+                    `${generatedQR.patient?.first_name || ""} ${generatedQR.patient?.last_name || ""}`}
+                </h3>
+                <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                  Patient Code: <span className="text-slate-800">{generatedQR.patient?.patient_id}</span>
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1 font-mono truncate px-4">
+                  Token: {generatedQR.qr_token?.slice(0, 18)}...
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={Printer}
+                onClick={handlePrint}
+              >
+                Print Badge
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Download}
+                onClick={downloadQR}
+              >
+                Download PNG
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </MainLayout>
   )
 }

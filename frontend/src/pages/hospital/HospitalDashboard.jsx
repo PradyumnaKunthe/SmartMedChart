@@ -1,546 +1,452 @@
+import React, { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
   Activity,
-  ArrowLeft,
-  CalendarDays,
-  LoaderCircle,
+  ArrowUpDown,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Eye,
+  Filter,
   Plus,
   RefreshCw,
   Search,
-  UserRound,
+  Sparkles,
+  Stethoscope,
+  User,
+  UserPlus,
   Users,
 } from "lucide-react"
 
-import {
-  useEffect,
-  useState,
-} from "react"
-
-import {
-  useNavigate,
-} from "react-router-dom"
-
 import MainLayout from "../../components/layout/MainLayout"
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
+import Loading from "../../components/common/Loading"
+import EmptyState from "../../components/common/EmptyState"
+import Pagination from "../../components/common/Pagination"
+import StatCard from "../../components/dashboard/StatCard"
 import api from "../../services/api"
-
+import { hideTestPatients } from "../../utils/patientFilter"
 
 function formatDate(value) {
-  if (!value) {
-    return "Not available"
-  }
-
+  if (!value) return "—"
   const parsed = new Date(value)
-
-  if (Number.isNaN(parsed.getTime())) {
-    return "Not available"
-  }
-
-  return new Intl.DateTimeFormat(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    },
-  ).format(parsed)
+  if (Number.isNaN(parsed.getTime())) return "—"
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(parsed)
 }
 
-
-function PatientRow({
-  patient,
-  onView,
-}) {
-  const initials =
-    `${patient.first_name?.charAt(0) || ""}${patient.last_name?.charAt(0) || ""}`
-      .toUpperCase()
-
-  return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-cyan-200 hover:shadow-md sm:flex-row sm:items-center sm:justify-between">
-
-      <div className="flex min-w-0 items-center gap-4">
-
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-sm font-bold text-cyan-700">
-          {initials || "P"}
-        </div>
-
-        <div className="min-w-0">
-
-          <div className="flex flex-wrap items-center gap-2">
-
-            <p className="truncate font-semibold text-slate-900">
-              {patient.first_name}{" "}
-              {patient.last_name}
-            </p>
-
-            {patient.is_active && (
-              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">
-                ACTIVE
-              </span>
-            )}
-
-          </div>
-
-          <p className="mt-1 text-sm text-slate-500">
-            Patient ID:{" "}
-            <span className="font-semibold text-slate-700">
-              {patient.patient_id}
-            </span>
-          </p>
-
-          <p className="mt-1 text-xs text-slate-400">
-            DOB:{" "}
-            {formatDate(
-              patient.date_of_birth,
-            )}
-          </p>
-
-        </div>
-
-      </div>
-
-
-      <button
-        type="button"
-        onClick={() =>
-          onView(patient)
-        }
-        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700"
-      >
-        View Patient
-      </button>
-
-    </div>
-  )
-}
-
+const ITEMS_PER_PAGE = 10
 
 export default function HospitalDashboard() {
+  const navigate = useNavigate()
 
-  const navigate =
-    useNavigate()
+  const [patients, setPatients] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
-  const [
-    patients,
-    setPatients,
-  ] = useState([])
+  // Search & Filter & Sort
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("ALL") // ALL, ACTIVE, DISCHARGED
+  const [sortBy, setSortBy] = useState("name") // name, id, dob
+  const [sortOrder, setSortOrder] = useState("asc")
+  const [currentPage, setCurrentPage] = useState(1)
 
-  const [
-    search,
-    setSearch,
-  ] = useState("")
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-
-  async function loadPatients(
-    searchValue = "",
-  ) {
-
+  async function loadPatients() {
     setLoading(true)
     setError("")
-
     try {
-
-      const response =
-        await api.get(
-          "/api/hospital/patients",
-          {
-            params: {
-              search:
-                searchValue.trim() ||
-                undefined,
-
-              active_only: false,
-
-              limit: 500,
-            },
-          },
-        )
-
-      const loaded =
-        Array.isArray(
-          response.data?.patients,
-        )
-          ? response.data.patients
-          : []
-
-      setPatients(
-        loaded,
-      )
-
-    } catch (requestError) {
-
-      console.error(
-        "Load hospital patients error:",
-        requestError,
-      )
-
+      const response = await api.get("/api/hospital/patients")
+      const list = Array.isArray(response.data?.patients)
+        ? response.data.patients
+        : Array.isArray(response.data)
+        ? response.data
+        : []
+      setPatients(hideTestPatients(list))
+    } catch (err) {
       setError(
-        requestError?.response?.data?.detail ||
-          "Unable to load hospital patients.",
+        err?.response?.data?.detail || "Unable to load hospital patient directory."
       )
-
-      setPatients([])
-
     } finally {
-
       setLoading(false)
-
     }
   }
 
-
   useEffect(() => {
-    loadPatients("")
+    loadPatients()
   }, [])
 
+  // KPI Metrics
+  const metrics = useMemo(() => {
+    const total = patients.length
+    const active = patients.filter((p) => Boolean(p.is_active)).length
+    const discharged = total - active
+    return { total, active, discharged }
+  }, [patients])
 
-  function handleSearch(
-    event,
-  ) {
+  // Filtering & Sorting
+  const filteredPatients = useMemo(() => {
+    let result = [...patients]
 
-    event.preventDefault()
+    if (search.trim()) {
+      const term = search.toLowerCase()
+      result = result.filter(
+        (p) =>
+          (p.first_name && p.first_name.toLowerCase().includes(term)) ||
+          (p.last_name && p.last_name.toLowerCase().includes(term)) ||
+          (p.patient_id && String(p.patient_id).toLowerCase().includes(term)) ||
+          (p.mobile_number && p.mobile_number.includes(term))
+      )
+    }
 
-    loadPatients(search)
+    if (statusFilter === "ACTIVE") {
+      result = result.filter((p) => Boolean(p.is_active))
+    } else if (statusFilter === "DISCHARGED") {
+      result = result.filter((p) => !p.is_active)
+    }
 
+    result.sort((a, b) => {
+      let comp = 0
+      if (sortBy === "name") {
+        const nameA = `${a.first_name || ""} ${a.last_name || ""}`.trim()
+        const nameB = `${b.first_name || ""} ${b.last_name || ""}`.trim()
+        comp = nameA.localeCompare(nameB)
+      } else if (sortBy === "id") {
+        comp = String(a.patient_id || "").localeCompare(String(b.patient_id || ""))
+      } else if (sortBy === "dob") {
+        comp = String(a.date_of_birth || "").localeCompare(String(b.date_of_birth || ""))
+      }
+      return sortOrder === "asc" ? comp : -comp
+    })
+
+    return result
+  }, [patients, search, statusFilter, sortBy, sortOrder])
+
+  const totalPages = Math.ceil(filteredPatients.length / ITEMS_PER_PAGE) || 1
+  const paginatedPatients = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE
+    return filteredPatients.slice(start, start + ITEMS_PER_PAGE)
+  }, [filteredPatients, currentPage])
+
+  function handleSort(field) {
+    if (sortBy === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc")
+    } else {
+      setSortBy(field)
+      setSortOrder("asc")
+    }
   }
-
-
-  function handleViewPatient(
-    patient,
-  ) {
-
-    navigate(
-      `/hospital/patients/${patient.id}`,
-    )
-
-  }
-
-
-  const activeCount =
-    patients.filter(
-      (patient) =>
-        patient.is_active,
-    ).length
-
-  const inactiveCount =
-    patients.filter(
-      (patient) =>
-        !patient.is_active,
-    ).length
-
 
   return (
-    <MainLayout title="Hospital Dashboard">
-
-      <div className="mx-auto max-w-7xl space-y-6">
-
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 p-6 text-white shadow-lg">
-
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-
-            <div>
-
-              <div className="flex items-center gap-3">
-
-                <div className="rounded-2xl bg-cyan-500/10 p-3">
-
-                  <Activity className="h-6 w-6 text-cyan-400" />
-
-                </div>
-
-                <div>
-
-                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-400">
-                    Hospital Data Portal
-                  </p>
-
-                  <h1 className="mt-1 text-2xl font-bold sm:text-3xl">
-                    Hospital Dashboard
-                  </h1>
-
-                </div>
-
+    <MainLayout
+      title="Hospital Reception & Admission"
+      subtitle="Central patient admission registry, CareMatch triage, and inpatient status roster"
+    >
+      <div className="space-y-6">
+        {/* Welcome & Quick Actions Header */}
+        <div className="relative overflow-hidden bg-gradient-to-r from-sky-600 via-sky-700 to-indigo-800 rounded-3xl p-6 lg:p-8 text-white shadow-xl">
+          <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+            <div className="space-y-2 max-w-2xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/15 backdrop-blur-md rounded-full text-xs font-semibold text-sky-100">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                Hospital Intake & Bed Allocation Desk
               </div>
-
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400">
-                Register patients, search patient records,
-                and open the complete information for the
-                specific patient you select.
+              <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight">
+                Patient Management & Triage
+              </h1>
+              <p className="text-sky-100/90 text-sm leading-relaxed">
+                Admit new inpatients, run AI-assisted CareMatch doctor recommendations, and
+                monitor active ward bed occupancy.
               </p>
-
             </div>
 
-
-            <button
-              type="button"
-              onClick={() =>
-                navigate(
-                  "/hospital/patients/new",
-                )
-              }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-cyan-700"
-            >
-
-              <Plus className="h-4 w-4" />
-
-              Register Patient
-
-            </button>
-
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="primary"
+                icon={UserPlus}
+                className="bg-white text-sky-900 hover:bg-sky-50 shadow-md border-0 font-bold"
+                onClick={() => navigate("/hospital/patients/add")}
+              >
+                Admit Patient
+              </Button>
+              <Button
+                variant="outline"
+                icon={Sparkles}
+                className="border-white/30 text-white hover:bg-white/10 backdrop-blur-sm"
+                onClick={() => navigate("/hospital/carematch")}
+              >
+                CareMatch Doctor AI
+              </Button>
+              <Button
+                variant="outline"
+                icon={RefreshCw}
+                className="border-white/30 text-white hover:bg-white/10 backdrop-blur-sm"
+                loading={loading}
+                onClick={loadPatients}
+              >
+                Refresh
+              </Button>
+            </div>
           </div>
+        </div>
 
-        </section>
-
-
-        {/* =================================================
-            ERROR
-        ================================================= */}
-
+        {/* Global Error Alert */}
         {error && (
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-
-            {error}
-
+          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm">
+            <div className="flex-1 font-medium">{error}</div>
+            <Button size="sm" variant="outline" onClick={loadPatients}>
+              Retry
+            </Button>
           </div>
-
         )}
 
+        {/* KPI Metrics */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard
+            title="Total Registered"
+            value={metrics.total}
+            subtitle="Lifetime Hospital Records"
+            icon={Users}
+            color="sky"
+          />
+          <StatCard
+            title="Active Admissions"
+            value={metrics.active}
+            subtitle="Currently in Hospital Care"
+            icon={Activity}
+            color="emerald"
+          />
+          <StatCard
+            title="Discharged Records"
+            value={metrics.discharged}
+            subtitle="Completed Treatments"
+            icon={CheckCircle2}
+            color="slate"
+          />
+        </div>
 
-        {/* =================================================
-            STATS
-        ================================================= */}
-
-        <section className="grid gap-4 sm:grid-cols-3">
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="rounded-xl bg-cyan-50 p-3">
-
-                <Users className="h-5 w-5 text-cyan-600" />
-
-              </div>
-
-              <div>
-
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                  Total Patients
-                </p>
-
-                <p className="mt-1 text-2xl font-bold text-slate-900">
-                  {patients.length}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-              Active
-            </p>
-
-            <p className="mt-1 text-2xl font-bold text-emerald-600">
-              {activeCount}
-            </p>
-
-          </div>
-
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-              Inactive / Discharged
-            </p>
-
-            <p className="mt-1 text-2xl font-bold text-slate-700">
-              {inactiveCount}
-            </p>
-
-          </div>
-
-        </section>
-
-
-        {/* =================================================
-            SEARCH
-        ================================================= */}
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-
-          <form
-            onSubmit={
-              handleSearch
-            }
-            className="flex flex-col gap-3 md:flex-row"
-          >
-
-            <div className="relative flex-1">
-
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-
+        {/* Search & Filter Bar */}
+        <Card>
+          <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            {/* Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
+                type="text"
+                placeholder="Search patient name, ID or mobile..."
                 value={search}
-                onChange={(
-                  event,
-                ) =>
-                  setSearch(
-                    event.target.value,
-                  )
-                }
-                placeholder="Search by patient ID or name..."
-                className="w-full rounded-xl border border-slate-200 py-3 pl-12 pr-4 text-sm outline-none focus:border-cyan-400 focus:ring-4 focus:ring-cyan-400/10"
+                onChange={(e) => {
+                  setSearch(e.target.value)
+                  setCurrentPage(1)
+                }}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
               />
-
-            </div>
-
-
-            <button
-              type="submit"
-              className="rounded-xl bg-slate-950 px-6 py-3 text-sm font-bold text-white transition hover:bg-slate-800"
-            >
-              Search
-            </button>
-
-
-            <button
-              type="button"
-              onClick={() =>
-                loadPatients(search)
-              }
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-
-              <RefreshCw className="h-4 w-4" />
-
-              Refresh
-
-            </button>
-
-          </form>
-
-        </section>
-
-
-        {/* =================================================
-            PATIENT LIST
-        ================================================= */}
-
-        <section>
-
-          <div className="mb-4">
-
-            <p className="text-sm font-semibold text-cyan-600">
-              Patient Records
-            </p>
-
-            <h2 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">
-              Registered Patients
-            </h2>
-
-            <p className="mt-1 text-sm text-slate-500">
-              Click View Patient to open the exact record you selected.
-            </p>
-
-          </div>
-
-
-          {loading ? (
-
-            <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center shadow-sm">
-
-              <LoaderCircle className="mx-auto h-9 w-9 animate-spin text-cyan-600" />
-
-              <p className="mt-4 text-sm font-semibold text-slate-700">
-                Loading patients...
-              </p>
-
-            </div>
-
-          ) : patients.length === 0 ? (
-
-            <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-sm">
-
-              <UserRound className="mx-auto h-10 w-10 text-slate-300" />
-
-              <p className="mt-4 font-semibold text-slate-700">
-                No patients found
-              </p>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Try another search or register a new patient.
-              </p>
-
-            </div>
-
-          ) : (
-
-            <div className="space-y-3">
-
-              {patients.map(
-                (patient) => (
-
-                  <PatientRow
-                    key={
-                      patient.id
-                    }
-                    patient={
-                      patient
-                    }
-                    onView={
-                      handleViewPatient
-                    }
-                  />
-
-                ),
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("")
+                    setCurrentPage(1)
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600"
+                >
+                  Clear
+                </button>
               )}
-
             </div>
 
+            {/* Lifecycle Tabs */}
+            <div className="flex items-center gap-1.5">
+              {[
+                { id: "ALL", label: "All Patients" },
+                { id: "ACTIVE", label: "Active Inpatients" },
+                { id: "DISCHARGED", label: "Discharged" },
+              ].map((tab) => {
+                const active = statusFilter === tab.id
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setStatusFilter(tab.id)
+                      setCurrentPage(1)
+                    }}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      active
+                        ? "bg-sky-600 text-white shadow-xs"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </Card>
+
+        {/* Patient Table */}
+        <Card>
+          {loading ? (
+            <Loading message="Loading patient records from hospital directory..." />
+          ) : filteredPatients.length === 0 ? (
+            <EmptyState
+              icon={Users}
+              title="No Patients Found"
+              description="No registered patients matched your search or status filter."
+              actionLabel={search || statusFilter !== "ALL" ? "Clear Filters" : "Admit New Patient"}
+              onAction={() => {
+                if (search || statusFilter !== "ALL") {
+                  setSearch("")
+                  setStatusFilter("ALL")
+                } else {
+                  navigate("/hospital/patients/add")
+                }
+              }}
+            />
+          ) : (
+            <div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      <th
+                        className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none"
+                        onClick={() => handleSort("name")}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Patient Name</span>
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none"
+                        onClick={() => handleSort("id")}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Patient ID</span>
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                        </div>
+                      </th>
+                      <th
+                        className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none"
+                        onClick={() => handleSort("dob")}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>Date of Birth</span>
+                          <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                        </div>
+                      </th>
+                      <th className="py-3 px-4">Contact Info</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {paginatedPatients.map((patient) => {
+                      const initials = `${patient.first_name?.charAt(0) || ""}${
+                        patient.last_name?.charAt(0) || ""
+                      }`.toUpperCase()
+
+                      return (
+                        <tr
+                          key={patient.id || patient.patient_id}
+                          className="hover:bg-slate-50/80 transition-colors"
+                        >
+                          {/* Name & Avatar */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center text-xs font-bold shrink-0">
+                                {initials || "P"}
+                              </div>
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  {patient.first_name} {patient.last_name}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {patient.gender || "Gender unstated"}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Patient ID */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <span className="font-mono text-xs font-semibold text-sky-700 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200/80">
+                              {patient.patient_id}
+                            </span>
+                          </td>
+
+                          {/* DOB */}
+                          <td className="py-3.5 px-4 whitespace-nowrap text-slate-600 text-xs">
+                            {formatDate(patient.date_of_birth)}
+                          </td>
+
+                          {/* Contact */}
+                          <td className="py-3.5 px-4 whitespace-nowrap text-xs text-slate-600">
+                            <div>{patient.mobile_number || "No phone listed"}</div>
+                            {patient.email && (
+                              <div className="text-slate-400 truncate max-w-xs">
+                                {patient.email}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <Badge
+                              variant={patient.is_active ? "success" : "neutral"}
+                              size="sm"
+                              dot={Boolean(patient.is_active)}
+                            >
+                              {patient.is_active ? "Active Inpatient" : "Discharged"}
+                            </Badge>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3.5 px-4 whitespace-nowrap text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              icon={Eye}
+                              onClick={() =>
+                                navigate(`/hospital/patients/${patient.id || patient.patient_id}`)
+                              }
+                            >
+                              View Profile
+                            </Button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="p-4 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-xs text-slate-500">
+                    Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} to{" "}
+                    {Math.min(currentPage * ITEMS_PER_PAGE, filteredPatients.length)} of{" "}
+                    {filteredPatients.length} patients
+                  </span>
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    onPageChange={setCurrentPage}
+                  />
+                </div>
+              )}
+            </div>
           )}
-
-        </section>
-
-
-        {/* =================================================
-            BACK
-        ================================================= */}
-
-        <button
-          type="button"
-          onClick={() =>
-            navigate("/")
-          }
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-slate-900"
-        >
-
-          <ArrowLeft className="h-4 w-4" />
-
-          Back to Home
-
-        </button>
-
+        </Card>
       </div>
-
     </MainLayout>
   )
 }

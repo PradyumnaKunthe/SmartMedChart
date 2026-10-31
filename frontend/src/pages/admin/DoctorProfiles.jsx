@@ -87,9 +87,9 @@ const EMPTY_FORM = {
 };
 
 const inputClass =
-  "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100";
+  "mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100";
 
-const labelClass = "block text-sm font-semibold text-slate-700";
+const labelClass = "block text-xs font-bold uppercase tracking-wider text-slate-500";
 
 function toList(value) {
   if (Array.isArray(value)) {

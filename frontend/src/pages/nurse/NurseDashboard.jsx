@@ -1,2118 +1,833 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react"
-
+import React, { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock3,
-  LoaderCircle,
+  Clock,
+  Filter,
   Pill,
+  QrCode,
   RefreshCw,
+  Search,
   ShieldAlert,
-  UserRound,
-  XCircle,
+  Sparkles,
+  User,
+  Users,
+  Zap,
 } from "lucide-react"
 
-import {
-  useNavigate,
-} from "react-router-dom"
-
 import MainLayout from "../../components/layout/MainLayout"
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
+import Loading from "../../components/common/Loading"
+import EmptyState from "../../components/common/EmptyState"
+import StatCard from "../../components/dashboard/StatCard"
+import Modal from "../../components/common/Modal"
+import { getNurseMedications, getNurseMedicationHistory } from "../../services/medications"
+import { hideTestPatients } from "../../utils/patientFilter"
+import { Clock3, History, ShieldCheck } from "lucide-react"
 
-import {
-  getNurseMedications,
-} from "../../services/medications"
-
-import {
-  hideTestPatients,
-} from "../../utils/patientFilter"
-
-
-// =========================================================
-// DATE FORMAT
-// =========================================================
-
-function formatDate(
-  dateString,
-) {
-  if (!dateString) {
-    return "—"
-  }
-
-  const date =
-    new Date(
-      `${dateString}T00:00:00`,
-    )
-
-  if (
-    Number.isNaN(
-      date.getTime(),
-    )
-  ) {
-    return dateString
-  }
-
-  return new Intl.DateTimeFormat(
-    "en-IN",
-    {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    },
-  ).format(date)
+function normalizeStatus(status) {
+  return String(status || "").trim().toUpperCase().replace(/_/g, " ")
 }
 
-
-// =========================================================
-// TIME FORMAT
-// =========================================================
-
-function formatTime(
-  timeString,
-) {
-  if (!timeString) {
-    return "—"
-  }
-
-  const [
-    hour,
-    minute,
-  ] =
-    String(timeString)
-      .slice(0, 5)
-      .split(":")
-      .map(Number)
-
-  if (
-    Number.isNaN(hour) ||
-    Number.isNaN(minute)
-  ) {
-    return timeString
-  }
-
-  const date =
-    new Date()
-
-  date.setHours(
-    hour,
-    minute,
-    0,
-    0,
-  )
-
-  return new Intl.DateTimeFormat(
-    "en-IN",
-    {
-      hour: "2-digit",
-      minute: "2-digit",
-    },
-  ).format(date)
-}
-
-
-// =========================================================
-// STATUS
-// =========================================================
-
-function normalizeStatus(
-  status,
-) {
-  return String(
-    status || "",
-  )
-    .trim()
-    .toUpperCase()
-    .replace(
-      /_/g,
-      " ",
-    )
-}
-
-
-function getStatusClasses(
-  status,
-) {
-  switch (
-    normalizeStatus(
-      status,
-    )
-  ) {
+function getStatusBadgeVariant(status) {
+  const norm = String(status || "").toUpperCase().replace(/ /g, "_")
+  switch (norm) {
     case "GIVEN":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700"
-
+    case "GIVEN_ON_TIME":
+      return "success"
+    case "GIVEN_LATE":
     case "DELAYED":
-      return "border-amber-200 bg-amber-50 text-amber-700"
-
+      return "warning"
+    case "DUE":
+      return "primary"
+    case "OVERDUE":
+    case "MISSED":
+      return "danger"
     case "HELD":
-      return "border-orange-200 bg-orange-50 text-orange-700"
-
+      return "neutral"
     case "REFUSED":
-      return "border-red-200 bg-red-50 text-red-700"
-
-    case "NOT GIVEN":
-      return "border-rose-200 bg-rose-50 text-rose-700"
-
+      return "danger"
+    case "NOT_GIVEN":
+      return "neutral"
     case "UPCOMING":
     default:
-      return "border-blue-200 bg-blue-50 text-blue-700"
+      return "neutral"
   }
 }
 
-
-function getStatusIcon(
-  status,
-) {
-  switch (
-    normalizeStatus(
-      status,
-    )
-  ) {
-    case "GIVEN":
-      return CheckCircle2
-
-    case "DELAYED":
-      return Clock3
-
-    case "HELD":
-      return AlertTriangle
-
-    case "REFUSED":
-    case "NOT GIVEN":
-      return XCircle
-
-    case "UPCOMING":
-    default:
-      return CalendarClock
-  }
+function formatTime(timeString) {
+  if (!timeString) return "—"
+  const [hour, minute] = String(timeString).slice(0, 5).split(":").map(Number)
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return timeString
+  const date = new Date()
+  date.setHours(hour, minute, 0, 0)
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
-
-// =========================================================
-// MEDICINE HELPERS
-// =========================================================
-
-function getMedicationName(
-  medication,
-) {
-  return (
-    medication.medicine_name ??
-    medication.medication_name ??
-    medication.medicine ??
-    medication.drug_name ??
-    medication.name ??
-    `Medication #${
-      medication.prescription_item_id ??
-      medication.id
-    }`
-  )
+function formatDate(dateString) {
+  if (!dateString) return "—"
+  const date = new Date(`${dateString}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return dateString
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+  }).format(date)
 }
 
+function buildPatientGroups(medications) {
+  const map = new Map()
 
-function getFrequency(
-  medication,
-) {
-  return (
-    medication.frequency ??
-    medication.dosage_frequency ??
-    medication.frequency_label ??
-    "Scheduled medication"
-  )
+  medications.forEach((med) => {
+    const patientId = med.patient_id ?? null
+    const patientCode = med.patient_code ?? null
+    const patientKey =
+      patientCode || patientId || med.patient_name || "UNKNOWN-PATIENT"
+
+    if (!map.has(patientKey)) {
+      map.set(patientKey, {
+        patient_id: patientId,
+        patient_code: patientCode || "N/A",
+        patient_name: med.patient_name || "Unknown Inpatient",
+        medications: new Map(),
+      })
+    }
+
+    const patient = map.get(patientKey)
+    const medKey =
+      med.prescription_item_id ??
+      `${med.medicine_name || med.medication_name || "Med"}-${med.id}`
+
+    if (!patient.medications.has(medKey)) {
+      patient.medications.set(medKey, {
+        medicine_name:
+          med.medicine_name || med.medication_name || med.drug_name || "Medication",
+        dose: med.dosage || med.dose || "Dose unstated",
+        route: med.route || "Oral",
+        frequency: med.frequency || "Daily",
+        is_stat: Boolean(med.is_stat),
+        schedules: [],
+      })
+    }
+
+    const medicine = patient.medications.get(medKey)
+    if (Boolean(med.is_stat)) {
+      medicine.is_stat = true
+    }
+    medicine.schedules.push(med)
+  })
+
+  return Array.from(map.values()).map((p) => ({
+    ...p,
+    medications: Array.from(p.medications.values()),
+  }))
 }
-
-
-function getDosage(
-  medication,
-) {
-  return (
-    medication.dosage ??
-    medication.dose ??
-    medication.dose_amount ??
-    null
-  )
-}
-
-
-function getRoute(
-  medication,
-) {
-  return (
-    medication.route ??
-    medication.administration_route ??
-    null
-  )
-}
-
-
-// =========================================================
-// GROUP MEDICATIONS BY PATIENT
-//
-// Patient
-//   -> Medicine
-//       -> Schedule timings
-// =========================================================
-
-function buildPatientGroups(
-  medications,
-) {
-  const patients =
-    new Map()
-
-
-  medications.forEach(
-    (
-      medication,
-    ) => {
-      const patientId =
-        medication.patient_id ??
-        null
-
-      const patientCode =
-        medication.patient_code ??
-        null
-
-      const patientKey =
-        patientCode ||
-        patientId ||
-        medication.patient_name ||
-        "UNKNOWN-PATIENT"
-
-
-      // ---------------------------------------------------
-      // Create patient
-      // ---------------------------------------------------
-
-      if (
-        !patients.has(
-          patientKey,
-        )
-      ) {
-        patients.set(
-          patientKey,
-          {
-            patient_id:
-              patientId,
-
-            patient_code:
-              patientCode ||
-              "No patient ID",
-
-            patient_name:
-              medication.patient_name ||
-              "Unknown Patient",
-
-            medications:
-              new Map(),
-          },
-        )
-      }
-
-
-      const patient =
-        patients.get(
-          patientKey,
-        )
-
-
-      // ---------------------------------------------------
-      // Medicine key
-      // ---------------------------------------------------
-
-      const medicineKey =
-        medication.prescription_item_id ??
-        `${getMedicationName(
-          medication,
-        )}-${medication.id}`
-
-
-      // ---------------------------------------------------
-      // Create medicine
-      // ---------------------------------------------------
-
-      if (
-        !patient.medications.has(
-          medicineKey,
-        )
-      ) {
-        patient.medications.set(
-          medicineKey,
-          {
-            medicine_name:
-              getMedicationName(
-                medication,
-              ),
-
-            frequency:
-              getFrequency(
-                medication,
-              ),
-
-            dosage:
-              getDosage(
-                medication,
-              ),
-
-            route:
-              getRoute(
-                medication,
-              ),
-
-            is_stat:
-              Boolean(
-                medication.is_stat,
-              ),
-
-            schedules: [],
-          },
-        )
-      }
-
-
-      const medicine =
-        patient.medications.get(
-          medicineKey,
-        )
-
-
-      // ---------------------------------------------------
-      // STAT at medicine level
-      // ---------------------------------------------------
-
-      if (
-        Boolean(
-          medication.is_stat,
-        )
-      ) {
-        medicine.is_stat = true
-      }
-
-
-      // ---------------------------------------------------
-      // Add schedule
-      // ---------------------------------------------------
-
-      medicine.schedules.push(
-        medication,
-      )
-    },
-  )
-
-
-  return Array.from(
-    patients.values(),
-  ).map(
-    (
-      patient,
-    ) => ({
-      ...patient,
-
-      medications:
-        Array.from(
-          patient.medications.values(),
-        ),
-    }),
-  )
-}
-
-
-// =========================================================
-// STAT CARD
-// =========================================================
-
-function StatCard({
-  title,
-  value,
-  description,
-  icon: Icon,
-  iconClasses =
-    "bg-slate-100 text-slate-600",
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-
-      <div className="flex items-start justify-between gap-3">
-
-        <div className="min-w-0">
-
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 sm:text-sm sm:normal-case sm:tracking-normal sm:text-slate-500">
-            {title}
-          </p>
-
-          <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-            {value}
-          </p>
-
-          <p className="mt-2 text-xs leading-5 text-slate-500 sm:text-sm">
-            {description}
-          </p>
-
-        </div>
-
-
-        <div
-          className={[
-            "shrink-0 rounded-xl p-2.5 sm:p-3",
-            iconClasses,
-          ].join(" ")}
-        >
-          <Icon className="h-5 w-5" />
-        </div>
-
-      </div>
-
-    </div>
-  )
-}
-
-
-// =========================================================
-// SCHEDULE ROW
-// =========================================================
-
-function ScheduleRow({
-  schedule,
-  onOpen,
-}) {
-  const StatusIcon =
-    getStatusIcon(
-      schedule.status,
-    )
-
-  const status =
-    normalizeStatus(
-      schedule.status,
-    )
-
-  const hasAdministration =
-    Boolean(
-      schedule.actual_administration_time,
-    )
-
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-
-
-        {/* =================================================
-            SCHEDULE INFORMATION
-        ================================================= */}
-
-        <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center lg:gap-x-7 lg:gap-y-2">
-
-          {/* TIME */}
-
-          <div>
-
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              Time
-            </p>
-
-            <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-slate-800">
-
-              <Clock3
-                className="h-4 w-4 text-slate-400"
-              />
-
-              {formatTime(
-                schedule.scheduled_time,
-              )}
-
-            </div>
-
-          </div>
-
-
-          {/* DATE */}
-
-          <div>
-
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              Date
-            </p>
-
-            <div className="mt-1 flex items-center gap-2 text-sm font-medium text-slate-700">
-
-              <CalendarClock
-                className="h-4 w-4 text-slate-400"
-              />
-
-              {formatDate(
-                schedule.scheduled_date,
-              )}
-
-            </div>
-
-          </div>
-
-
-          {/* STATUS */}
-
-          <div>
-
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              Status
-            </p>
-
-            <span
-              className={[
-                "mt-1 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold",
-                getStatusClasses(
-                  schedule.status,
-                ),
-              ].join(" ")}
-            >
-
-              <StatusIcon className="h-3.5 w-3.5" />
-
-              {
-                status ||
-                "UNKNOWN"
-              }
-
-            </span>
-
-          </div>
-
-
-          {/* SCHEDULE ID */}
-
-          <div>
-
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              Schedule
-            </p>
-
-            <p className="mt-1 text-sm font-semibold text-slate-700">
-              #{schedule.id}
-            </p>
-
-          </div>
-
-
-          {/* PRESCRIPTION ITEM */}
-
-          <div>
-
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              Prescription Item
-            </p>
-
-            <p className="mt-1 text-sm font-semibold text-slate-700">
-              #{schedule.prescription_item_id}
-            </p>
-
-          </div>
-
-        </div>
-
-
-        {/* =================================================
-            ADMINISTRATION / ACTION
-        ================================================= */}
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:shrink-0">
-
-          {hasAdministration && (
-
-            <div className="rounded-xl bg-emerald-50 px-3 py-2">
-
-              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                Administered
-              </p>
-
-              <p className="mt-1 text-xs font-semibold text-emerald-800">
-                {new Date(
-                  schedule.actual_administration_time,
-                ).toLocaleString(
-                  "en-IN",
-                  {
-                    dateStyle:
-                      "medium",
-                    timeStyle:
-                      "short",
-                  },
-                )}
-              </p>
-
-            </div>
-
-          )}
-
-
-          <button
-            type="button"
-            onClick={() =>
-              onOpen(
-                schedule.id,
-              )
-            }
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 sm:w-auto"
-          >
-
-            Open
-
-            <ChevronRight
-              className="h-4 w-4"
-            />
-
-          </button>
-
-        </div>
-
-      </div>
-
-
-      {/* =================================================
-          STATUS MESSAGE
-      ================================================= */}
-
-      <div className="mt-3">
-
-        {status === "UPCOMING" && (
-
-          <span className="inline-flex rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">
-            Ready for medication workflow
-          </span>
-
-        )}
-
-        {status === "GIVEN" && (
-
-          <span className="inline-flex rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700">
-            Administration recorded
-          </span>
-
-        )}
-
-        {status === "DELAYED" && (
-
-          <span className="inline-flex rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700">
-            Attention required
-          </span>
-
-        )}
-
-        {(status === "REFUSED" ||
-          status === "NOT GIVEN") && (
-
-          <span className="inline-flex rounded-lg bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700">
-            Medication outcome requires review
-          </span>
-
-        )}
-
-      </div>
-
-    </div>
-  )
-}
-
-
-// =========================================================
-// MEDICINE CARD
-// =========================================================
-
-function MedicineCard({
-  medicine,
-  onOpen,
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
-
-      {/* =================================================
-          MEDICINE HEADER
-      ================================================= */}
-
-      <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
-
-        <div className="flex min-w-0 items-start gap-3">
-
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-700">
-
-            <Pill
-              className="h-5 w-5"
-            />
-
-          </div>
-
-
-          <div className="min-w-0">
-
-            <div className="flex flex-wrap items-center gap-2">
-
-              <h3 className="break-words text-base font-bold text-slate-900 sm:text-lg">
-                {
-                  medicine.medicine_name
-                }
-              </h3>
-
-
-              {medicine.is_stat && (
-
-                <span className="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-red-700">
-                  STAT
-                </span>
-
-              )}
-
-            </div>
-
-
-            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
-
-              <span>
-                Frequency:{" "}
-
-                <strong className="text-slate-700">
-                  {
-                    medicine.frequency
-                  }
-                </strong>
-              </span>
-
-
-              {medicine.dosage && (
-
-                <span>
-                  Dose:{" "}
-
-                  <strong className="text-slate-700">
-                    {
-                      medicine.dosage
-                    }
-                  </strong>
-                </span>
-
-              )}
-
-
-              {medicine.route && (
-
-                <span>
-                  Route:{" "}
-
-                  <strong className="text-slate-700">
-                    {
-                      medicine.route
-                    }
-                  </strong>
-                </span>
-
-              )}
-
-            </div>
-
-          </div>
-
-        </div>
-
-
-        <span className="self-start rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
-
-          {medicine.schedules.length}{" "}
-          {medicine.schedules.length === 1
-            ? "timing"
-            : "timings"}
-
-        </span>
-
-      </div>
-
-
-      {/* =================================================
-          SCHEDULES
-      ================================================= */}
-
-      <div className="mt-4 space-y-3">
-
-        {medicine.schedules.map(
-          (
-            schedule,
-          ) => (
-
-            <ScheduleRow
-              key={
-                schedule.id
-              }
-              schedule={
-                schedule
-              }
-              onOpen={
-                onOpen
-              }
-            />
-
-          ),
-        )}
-
-      </div>
-
-    </div>
-  )
-}
-
-
-// =========================================================
-// MAIN DASHBOARD
-// =========================================================
 
 export default function NurseDashboard() {
-  const navigate =
-    useNavigate()
+  const navigate = useNavigate()
 
-
-  const [
-    medications,
-    setMedications,
-  ] = useState([])
-
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(true)
-
-
-  const [
-    error,
-    setError,
-  ] = useState("")
-
-
-  // =======================================================
-  // PATIENT COLLAPSE STATE
-  // =======================================================
-
-  const [
-    collapsedPatients,
-    setCollapsedPatients,
-  ] = useState(
-    new Set(),
-  )
-
-
-  // =======================================================
-  // LOAD DATA
-  // =======================================================
+  const [medications, setMedications] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [search, setSearch] = useState("")
+  const [filterTab, setFilterTab] = useState("ALL") // ALL, DUE, OVERDUE, UPCOMING, STAT, ATTENTION, GIVEN
+  const [expandedPatients, setExpandedPatients] = useState(new Set())
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [historyList, setHistoryList] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   async function loadMedications() {
     setLoading(true)
     setError("")
-
     try {
-      const data =
-        await getNurseMedications()
+      const response = await getNurseMedications()
+      const data = Array.isArray(response) ? response : []
+      const filtered = hideTestPatients(data)
+      setMedications(filtered)
 
-
-      const visible =
-        hideTestPatients(
-          Array.isArray(data)
-            ? data
-            : [],
-        )
-
-
-      setMedications(
-        visible,
-      )
-
-
-      // ===================================================
-      // COLLAPSE ALL PATIENTS BY DEFAULT
-      // ===================================================
-
-      const patientKeys =
-        new Set(
-          visible.map(
-            (item) =>
-              item.patient_code ??
-              item.patient_id ??
-              item.patient_name ??
-              "UNKNOWN-PATIENT",
-          ),
-        )
-
-
-      setCollapsedPatients(
-        patientKeys,
-      )
-
-    } catch (
-      requestError
-    ) {
-      console.error(
-        "Failed to load nurse dashboard:",
-        requestError,
-      )
-
+      // Auto-expand the first 2 patients for nurse convenience
+      const groups = buildPatientGroups(filtered)
+      if (groups.length > 0) {
+        setExpandedPatients(new Set(groups.slice(0, 2).map((g) => g.patient_code)))
+      }
+    } catch (err) {
       setError(
-        requestError?.response
-          ?.data?.detail ||
-          requestError?.message ||
-          "Unable to load medication schedules.",
+        err?.response?.data?.detail || "Unable to retrieve nurse medication queue."
       )
-
-      setMedications([])
-
     } finally {
       setLoading(false)
     }
   }
 
-
-  // =======================================================
-  // INITIAL LOAD
-  // =======================================================
-
-  useEffect(
-    () => {
-      loadMedications()
-    },
-    [],
-  )
-
-
-  // =======================================================
-  // TOGGLE PATIENT
-  // =======================================================
-
-  function togglePatient(
-    patientKey,
-  ) {
-    setCollapsedPatients(
-      (
-        previous,
-      ) => {
-        const next =
-          new Set(
-            previous,
-          )
-
-
-        if (
-          next.has(
-            patientKey,
-          )
-        ) {
-          next.delete(
-            patientKey,
-          )
-        } else {
-          next.add(
-            patientKey,
-          )
-        }
-
-
-        return next
-      },
-    )
+  async function loadHistory() {
+    setHistoryLoading(true)
+    try {
+      const data = await getNurseMedicationHistory(50)
+      setHistoryList(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error("Failed to load history:", err)
+    } finally {
+      setHistoryLoading(false)
+    }
   }
 
+  useEffect(() => {
+    loadMedications()
+  }, [])
 
-  // =======================================================
-  // PATIENT GROUPS
-  // =======================================================
-
-  const patientGroups =
-    useMemo(
-      () =>
-        buildPatientGroups(
-          medications,
-        ),
-      [
-        medications,
-      ],
-    )
-
-
-  // =======================================================
-  // METRICS
-  // =======================================================
-
-  const metrics =
-    useMemo(
-      () => {
-        const total =
-          medications.length
-
-
-        const given =
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "GIVEN",
-          ).length
-
-
-        const delayed =
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "DELAYED",
-          ).length
-
-
-        const upcoming =
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "UPCOMING",
-          ).length
-
-
-        const held =
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "HELD",
-          ).length
-
-
-        const refused =
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "REFUSED",
-          ).length
-
-
-        const notGiven =
-          medications.filter(
-            (item) =>
-              normalizeStatus(
-                item.status,
-              ) === "NOT GIVEN",
-          ).length
-
-
-        const uniquePatients =
-          new Set(
-            medications.map(
-              (item) =>
-                item.patient_code ??
-                item.patient_id ??
-                item.patient_name,
-            ),
-          ).size
-
-
-        return {
-          total,
-          given,
-          delayed,
-          upcoming,
-          held,
-          refused,
-          notGiven,
-          uniquePatients,
-        }
-      },
-      [
-        medications,
-      ],
-    )
-
-
-  // =======================================================
-  // OPEN MEDICATION
-  // =======================================================
-
-  function openMedication(
-    scheduleId,
-  ) {
-    navigate(
-      `/nurse/medications/${scheduleId}`,
-    )
+  function togglePatient(key) {
+    setExpandedPatients((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   }
 
+  function expandAll() {
+    setExpandedPatients(new Set(filteredGroups.map((g) => g.patient_code)))
+  }
 
-  // =======================================================
-  // RETURN
-  // =======================================================
+  function collapseAll() {
+    setExpandedPatients(new Set())
+  }
+
+  // Aggregate Metrics
+  const metrics = useMemo(() => {
+    const total = medications.length
+    const given = medications.filter((m) => {
+      const s = String(m.monitoring_status || m.status || "").toUpperCase()
+      return s === "GIVEN" || s === "GIVEN_ON_TIME" || s === "GIVEN_LATE"
+    }).length
+    const due = medications.filter(
+      (m) => String(m.monitoring_status || "").toUpperCase() === "DUE"
+    ).length
+    const overdue = medications.filter((m) => {
+      const s = String(m.monitoring_status || "").toUpperCase()
+      return s === "OVERDUE" || s === "MISSED"
+    }).length
+    const upcoming = medications.filter((m) => {
+      const s = String(m.monitoring_status || m.status || "").toUpperCase()
+      return s === "UPCOMING"
+    }).length
+    const attention = medications.filter((m) => {
+      const s = String(m.monitoring_status || m.status || "").toUpperCase()
+      return (
+        s === "DELAYED" ||
+        s === "HELD" ||
+        s === "REFUSED" ||
+        s === "NOT_GIVEN" ||
+        s === "NOT GIVEN" ||
+        s === "OVERDUE" ||
+        s === "MISSED"
+      )
+    }).length
+    const statDoses = medications.filter((m) => Boolean(m.is_stat)).length
+    const uniquePatients = new Set(
+      medications.map((m) => m.patient_code || m.patient_id || m.patient_name)
+    ).size
+
+    return { total, given, due, overdue, upcoming, attention, statDoses, uniquePatients }
+  }, [medications])
+
+  // Filter and Search
+  const filteredGroups = useMemo(() => {
+    let result = buildPatientGroups(medications)
+
+    // Search filter
+    if (search.trim()) {
+      const term = search.toLowerCase()
+      result = result
+        .map((patient) => {
+          const matchPatient =
+            patient.patient_name.toLowerCase().includes(term) ||
+            patient.patient_code.toLowerCase().includes(term)
+
+          const matchedMeds = patient.medications.filter((m) =>
+            m.medicine_name.toLowerCase().includes(term)
+          )
+
+          if (matchPatient) return patient
+          if (matchedMeds.length > 0) {
+            return { ...patient, medications: matchedMeds }
+          }
+          return null
+        })
+        .filter(Boolean)
+    }
+
+    // Status Tab Filter
+    if (filterTab !== "ALL") {
+      result = result
+        .map((patient) => {
+          const matchedMeds = patient.medications
+            .map((med) => {
+              const matchedSchedules = med.schedules.filter((s) => {
+                const mon = String(s.monitoring_status || "").toUpperCase()
+                const st = normalizeStatus(s.status)
+                if (filterTab === "DUE") return mon === "DUE"
+                if (filterTab === "OVERDUE") return mon === "OVERDUE" || mon === "MISSED"
+                if (filterTab === "UPCOMING") return mon === "UPCOMING" || st === "UPCOMING"
+                if (filterTab === "STAT") return Boolean(s.is_stat)
+                if (filterTab === "GIVEN") return mon.startsWith("GIVEN") || st === "GIVEN"
+                if (filterTab === "ATTENTION")
+                  return (
+                    mon === "OVERDUE" ||
+                    mon === "MISSED" ||
+                    mon === "HELD" ||
+                    mon === "REFUSED" ||
+                    mon === "NOT_GIVEN" ||
+                    st === "DELAYED" ||
+                    st === "HELD" ||
+                    st === "REFUSED" ||
+                    st === "NOT GIVEN"
+                  )
+                return true
+              })
+
+              return matchedSchedules.length > 0
+                ? { ...med, schedules: matchedSchedules }
+                : null
+            })
+            .filter(Boolean)
+
+          return matchedMeds.length > 0 ? { ...patient, medications: matchedMeds } : null
+        })
+        .filter(Boolean)
+    }
+
+    return result
+  }, [medications, search, filterTab])
 
   return (
-    <MainLayout title="Nurse Dashboard">
-
-      <div className="w-full min-w-0 space-y-6 sm:space-y-8">
-
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-
-          <div className="flex min-w-0 flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-
-            <div className="min-w-0">
-
-              <p className="text-sm font-semibold text-cyan-600">
-                Medication Operations
-              </p>
-
-
-              <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-                Nurse Dashboard
+    <MainLayout
+      title="Nurse Station"
+      subtitle="Bedside medication administration rounds and patient safety tracking"
+    >
+      <div className="space-y-6">
+        {/* Welcome & Quick Action Banner */}
+        <div className="relative overflow-hidden bg-gradient-to-r from-sky-600 via-sky-700 to-indigo-800 rounded-3xl p-6 lg:p-8 text-white shadow-xl">
+          <div className="absolute top-0 right-0 -mt-10 -mr-10 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+            <div className="space-y-2 max-w-2xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/15 backdrop-blur-md rounded-full text-xs font-semibold text-sky-100">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                Active Shift · Ward Inpatient Medication Administration
+              </div>
+              <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight">
+                Bedside Clinical Administration
               </h1>
-
-
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-                Monitor medication schedules by patient.
-                Patient records are collapsed by default so
-                you can quickly locate the patient you need.
+              <p className="text-sky-100/90 text-sm leading-relaxed">
+                Scan patient wristbands with QR verification, enforce Five-Rights safety
+                checks, and record timely medication administration.
               </p>
-
             </div>
 
-
-            <button
-              type="button"
-              onClick={
-                loadMedications
-              }
-              disabled={
-                loading
-              }
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-            >
-
-              <RefreshCw
-                className={[
-                  "h-4 w-4",
-                  loading
-                    ? "animate-spin"
-                    : "",
-                ].join(" ")}
-              />
-
-              Refresh
-
-            </button>
-
-          </div>
-
-        </section>
-
-
-        {/* =================================================
-            ERROR
-        ================================================= */}
-
-        {error && (
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-
-            <div className="flex items-start gap-3">
-
-              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
-
-
-              <div className="min-w-0">
-
-                <p className="text-sm font-semibold text-red-900">
-                  Unable to load medication schedules
-                </p>
-
-
-                <p className="mt-1 text-sm leading-6 text-red-700">
-                  {error}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        )}
-
-
-        {/* =================================================
-            STATISTICS
-        ================================================= */}
-
-        <section>
-
-          <div className="mb-4">
-
-            <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">
-              Medication Overview
-            </h2>
-
-
-            <p className="mt-1 text-sm text-slate-500">
-              Current medication schedule status
-            </p>
-
-          </div>
-
-
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
-
-
-            <StatCard
-              title="Patients"
-              value={
-                metrics.uniquePatients
-              }
-              description="Patients in your queue"
-              icon={
-                UserRound
-              }
-              iconClasses="bg-blue-50 text-blue-600"
-            />
-
-
-            <StatCard
-              title="Schedules"
-              value={
-                metrics.total
-              }
-              description="Medication schedules"
-              icon={
-                Pill
-              }
-              iconClasses="bg-cyan-50 text-cyan-600"
-            />
-
-
-            <StatCard
-              title="Upcoming"
-              value={
-                metrics.upcoming
-              }
-              description="Awaiting administration"
-              icon={
-                CalendarClock
-              }
-              iconClasses="bg-blue-50 text-blue-600"
-            />
-
-
-            <StatCard
-              title="Given"
-              value={
-                metrics.given
-              }
-              description="Administration recorded"
-              icon={
-                CheckCircle2
-              }
-              iconClasses="bg-emerald-50 text-emerald-600"
-            />
-
-
-            <StatCard
-              title="Attention"
-              value={
-                metrics.delayed +
-                metrics.held +
-                metrics.refused +
-                metrics.notGiven
-              }
-              description="Delayed, held or refused"
-              icon={
-                ShieldAlert
-              }
-              iconClasses="bg-amber-50 text-amber-600"
-            />
-
-          </div>
-
-        </section>
-
-
-        {/* =================================================
-            PATIENT QUEUE
-        ================================================= */}
-
-        <section>
-
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-
-            <div>
-
-              <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">
-                Patient Queue
-              </h2>
-
-
-              <p className="mt-1 text-sm leading-6 text-slate-500">
-                Patients are collapsed by default.
-                Expand a patient to view medicines and
-                scheduled doses.
-              </p>
-
-            </div>
-
-
-            {!loading &&
-              patientGroups.length >
-                0 && (
-
-              <span className="w-fit rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
-
-                {
-                  patientGroups.length
-                }{" "}
-
-                {patientGroups.length ===
-                1
-                  ? "patient"
-                  : "patients"}
-
-              </span>
-
-            )}
-
-          </div>
-
-
-          {/* =================================================
-              LOADING
-          ================================================= */}
-
-          {loading ? (
-
-            <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm sm:p-14">
-
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-50">
-
-                <LoaderCircle className="h-7 w-7 animate-spin text-cyan-600" />
-
-              </div>
-
-
-              <p className="mt-4 text-sm font-semibold text-slate-800">
-                Loading medication schedules...
-              </p>
-
-
-              <p className="mt-1 text-xs text-slate-500">
-                Fetching the latest clinical medication queue.
-              </p>
-
-            </div>
-
-          ) : patientGroups.length ===
-            0 ? (
-
-            <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center shadow-sm sm:p-14">
-
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100">
-
-                <Pill className="h-7 w-7 text-slate-300" />
-
-              </div>
-
-
-              <h3 className="mt-4 font-semibold text-slate-800">
-                No medication schedules found
-              </h3>
-
-
-              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
-                There are currently no medication schedules
-                available for this nurse.
-              </p>
-
-            </div>
-
-          ) : (
-
-            <div className="space-y-3">
-
-
-              {patientGroups.map(
-                (
-                  patient,
-                ) => {
-
-                  const patientKey =
-                    patient.patient_code ||
-                    patient.patient_id ||
-                    patient.patient_name ||
-                    "UNKNOWN-PATIENT"
-
-
-                  const isCollapsed =
-                    collapsedPatients.has(
-                      patientKey,
-                    )
-
-
-                  const totalSchedules =
-                    patient.medications.reduce(
-                      (
-                        total,
-                        medicine,
-                      ) =>
-                        total +
-                        medicine.schedules
-                          .length,
-                      0,
-                    )
-
-
-                  const patientStatuses =
-                    patient.medications.flatMap(
-                      (
-                        medicine,
-                      ) =>
-                        medicine.schedules.map(
-                          (
-                            schedule,
-                          ) =>
-                            normalizeStatus(
-                              schedule.status,
-                            ),
-                        ),
-                    )
-
-
-                  const attentionCount =
-                    patientStatuses.filter(
-                      (
-                        status,
-                      ) =>
-                        status ===
-                          "DELAYED" ||
-                        status ===
-                          "HELD" ||
-                        status ===
-                          "REFUSED" ||
-                        status ===
-                          "NOT GIVEN",
-                    ).length
-
-
-                  const givenCount =
-                    patientStatuses.filter(
-                      (
-                        status,
-                      ) =>
-                        status ===
-                        "GIVEN",
-                    ).length
-
-
-                  return (
-
-                    <section
-                      key={
-                        patientKey
-                      }
-                      className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
-                    >
-
-
-                      {/* =================================================
-                          PATIENT HEADER
-                      ================================================= */}
-
-                      <div className="bg-slate-50 p-4 sm:p-5">
-
-                        <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-
-
-                          {/* PATIENT INFO */}
-
-                          <div className="flex min-w-0 items-center gap-4">
-
-                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
-
-                              <UserRound
-                                size={24}
-                              />
-
-                            </div>
-
-
-                            <div className="min-w-0">
-
-                              <h2 className="truncate text-lg font-bold text-slate-900 sm:text-xl">
-                                {
-                                  patient.patient_name
-                                }
-                              </h2>
-
-
-                              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
-
-                                <span>
-                                  Patient ID:{" "}
-
-                                  <strong className="text-slate-700">
-                                    {
-                                      patient.patient_code
-                                    }
-                                  </strong>
-                                </span>
-
-
-                                {patient.patient_id && (
-
-                                  <span>
-                                    Record ID:{" "}
-
-                                    <strong className="text-slate-700">
-                                      #
-                                      {
-                                        patient.patient_id
-                                      }
-                                    </strong>
-                                  </span>
-
-                                )}
-
-                              </div>
-
-                            </div>
-
-                          </div>
-
-
-                          {/* PATIENT CONTROLS */}
-
-                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-
-
-                            {/* MEDICINES */}
-
-                            <div className="min-w-[95px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-center">
-
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                Medicines
-                              </p>
-
-
-                              <p className="mt-1 text-xl font-bold text-slate-900">
-                                {
-                                  patient.medications.length
-                                }
-                              </p>
-
-                            </div>
-
-
-                            {/* SCHEDULES */}
-
-                            <div className="min-w-[95px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-center">
-
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                Schedules
-                              </p>
-
-
-                              <p className="mt-1 text-xl font-bold text-slate-900">
-                                {
-                                  totalSchedules
-                                }
-                              </p>
-
-                            </div>
-
-
-                            {/* GIVEN */}
-
-                            <div className="min-w-[80px] rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-center">
-
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                                Given
-                              </p>
-
-
-                              <p className="mt-1 text-xl font-bold text-emerald-700">
-                                {
-                                  givenCount
-                                }
-                              </p>
-
-                            </div>
-
-
-                            {/* ATTENTION */}
-
-                            {attentionCount >
-                              0 && (
-
-                              <div className="min-w-[90px] rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-center">
-
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-amber-600">
-                                  Attention
-                                </p>
-
-
-                                <p className="mt-1 text-xl font-bold text-amber-700">
-                                  {
-                                    attentionCount
-                                  }
-                                </p>
-
-                              </div>
-
-                            )}
-
-
-                            {/* EXPAND / WRAP */}
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                togglePatient(
-                                  patientKey,
-                                )
-                              }
-                              aria-expanded={
-                                !isCollapsed
-                              }
-                              className={[
-                                "inline-flex min-w-[120px] items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition",
-                                isCollapsed
-                                  ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100",
-                              ].join(" ")}
-                            >
-
-                              {isCollapsed ? (
-                                <>
-                                  Expand
-
-                                  <ChevronDown
-                                    size={
-                                      18
-                                    }
-                                  />
-
-                                </>
-                              ) : (
-                                <>
-                                  Wrap Up
-
-                                  <ChevronRight
-                                    size={
-                                      18
-                                    }
-                                  />
-
-                                </>
-                              )}
-
-                            </button>
-
-                          </div>
-
-                        </div>
-
-                      </div>
-
-
-                      {/* =================================================
-                          PATIENT CONTENT
-                      ================================================= */}
-
-                      {!isCollapsed && (
-
-                        <div className="border-t border-slate-200 bg-white p-4 sm:p-5">
-
-                          <div className="space-y-4">
-
-                            {patient.medications.map(
-                              (
-                                medicine,
-                                index,
-                              ) => (
-
-                                <MedicineCard
-                                  key={`${patientKey}-${medicine.medicine_name}-${index}`}
-                                  medicine={
-                                    medicine
-                                  }
-                                  onOpen={
-                                    openMedication
-                                  }
-                                />
-
-                              ),
-                            )}
-
-                          </div>
-
-                        </div>
-
-                      )}
-
-                    </section>
-
-                  )
-                },
-              )}
-
-            </div>
-
-          )}
-
-        </section>
-
-
-        {/* =================================================
-            ADMINISTRATION SUMMARY
-        ================================================= */}
-
-        <section className="grid gap-5 lg:grid-cols-2">
-
-
-          {/* =================================================
-              ADMINISTRATION SUMMARY
-          ================================================= */}
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-
-            <div>
-
-              <h2 className="text-lg font-semibold text-slate-900">
-                Administration Summary
-              </h2>
-
-
-              <p className="mt-1 text-sm text-slate-500">
-                Current medication status distribution
-              </p>
-
-            </div>
-
-
-            <div className="mt-6 space-y-4">
-
-              {[
-                {
-                  label:
-                    "Given",
-                  value:
-                    metrics.given,
-                  className:
-                    "bg-emerald-500",
-                },
-
-                {
-                  label:
-                    "Upcoming",
-                  value:
-                    metrics.upcoming,
-                  className:
-                    "bg-blue-500",
-                },
-
-                {
-                  label:
-                    "Delayed",
-                  value:
-                    metrics.delayed,
-                  className:
-                    "bg-amber-500",
-                },
-
-                {
-                  label:
-                    "Held",
-                  value:
-                    metrics.held,
-                  className:
-                    "bg-orange-500",
-                },
-
-                {
-                  label:
-                    "Refused",
-                  value:
-                    metrics.refused,
-                  className:
-                    "bg-red-500",
-                },
-
-                {
-                  label:
-                    "Not Given",
-                  value:
-                    metrics.notGiven,
-                  className:
-                    "bg-rose-500",
-                },
-              ].map(
-                (
-                  item,
-                ) => {
-
-                  const percentage =
-                    metrics.total >
-                    0
-                      ? (
-                          (
-                            item.value /
-                            metrics.total
-                          ) *
-                          100
-                        )
-                      : 0
-
-
-                  return (
-
-                    <div
-                      key={
-                        item.label
-                      }
-                    >
-
-                      <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
-
-                        <span className="font-medium text-slate-700">
-                          {
-                            item.label
-                          }
-                        </span>
-
-
-                        <span className="shrink-0 font-semibold text-slate-500">
-
-                          {
-                            item.value
-                          }
-
-                          {" · "}
-
-                          {
-                            percentage.toFixed(
-                              0,
-                            )
-                          }
-                          %
-
-                        </span>
-
-                      </div>
-
-
-                      <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
-
-                        <div
-                          className={[
-                            "h-full rounded-full transition-all duration-500",
-                            item.className,
-                          ].join(" ")}
-                          style={{
-                            width: `${percentage}%`,
-                          }}
-                        />
-
-                      </div>
-
-                    </div>
-
-                  )
-                },
-              )}
-
-            </div>
-
-          </div>
-
-
-          {/* =================================================
-              QUICK ACTIONS
-          ================================================= */}
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-
-            <div>
-
-              <h2 className="text-lg font-semibold text-slate-900">
-                Quick Actions
-              </h2>
-
-
-              <p className="mt-1 text-sm text-slate-500">
-                Continue the medication workflow
-              </p>
-
-            </div>
-
-
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-
-
-              {/* MEDICATIONS */}
-
-              <button
-                type="button"
-                onClick={() =>
-                  navigate(
-                    "/nurse/medications",
-                  )
-                }
-                className="rounded-2xl border border-slate-200 p-4 text-left transition hover:border-cyan-300 hover:bg-cyan-50"
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="primary"
+                icon={QrCode}
+                className="bg-white text-sky-900 hover:bg-sky-50 shadow-md border-0 font-bold"
+                onClick={() => navigate("/nurse/scanner")}
               >
-
-                <Pill className="h-5 w-5 text-cyan-600" />
-
-
-                <p className="mt-3 font-semibold text-slate-800">
-                  View medications
-                </p>
-
-
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Open the full medication queue and details.
-                </p>
-
-              </button>
-
-
-              {/* QR */}
-
-              <button
-                type="button"
-                onClick={() =>
-                  navigate(
-                    "/nurse/qr",
-                  )
-                }
-                className="rounded-2xl border border-slate-200 p-4 text-left transition hover:border-violet-300 hover:bg-violet-50"
+                Scan Wristband QR
+              </Button>
+              <Button
+                variant="outline"
+                icon={History}
+                className="border-white/30 text-white hover:bg-white/10 backdrop-blur-sm"
+                onClick={() => {
+                  setShowHistoryModal(true)
+                  loadHistory()
+                }}
               >
-
-                <CalendarClock className="h-5 w-5 text-violet-600" />
-
-
-                <p className="mt-3 font-semibold text-slate-800">
-                  QR verification
-                </p>
-
-
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Verify patient and medication before administration.
-                </p>
-
-              </button>
-
-
-              {/* AI */}
-
-              <button
-                type="button"
-                onClick={() =>
-                  navigate(
-                    "/nurse/ai",
-                  )
-                }
-                className="rounded-2xl border border-slate-200 p-4 text-left transition hover:border-indigo-300 hover:bg-indigo-50"
+                Administration History
+              </Button>
+              <Button
+                variant="outline"
+                icon={RefreshCw}
+                className="border-white/30 text-white hover:bg-white/10 backdrop-blur-sm"
+                loading={loading}
+                onClick={loadMedications}
               >
-
-                <ShieldAlert className="h-5 w-5 text-indigo-600" />
-
-
-                <p className="mt-3 font-semibold text-slate-800">
-                  AI Risk
-                </p>
-
-
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Review medication risk predictions.
-                </p>
-
-              </button>
-
-
-              {/* REFRESH */}
-
-              <button
-                type="button"
-                onClick={
-                  loadMedications
-                }
-                disabled={
-                  loading
-                }
-                className="rounded-2xl border border-slate-200 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-
-                <RefreshCw
-                  className={[
-                    "h-5 w-5 text-emerald-600",
-                    loading
-                      ? "animate-spin"
-                      : "",
-                  ].join(" ")}
-                />
-
-
-                <p className="mt-3 font-semibold text-slate-800">
-                  Refresh data
-                </p>
-
-
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Fetch the latest medication schedules.
-                </p>
-
-              </button>
-
+                Refresh Queue
+              </Button>
             </div>
-
           </div>
-
-        </section>
-
-
-        {/* =================================================
-            INFORMATION
-        ================================================= */}
-
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5">
-
-          <div className="flex items-start gap-3">
-
-            <UserRound
-              size={21}
-              className="mt-0.5 shrink-0 text-blue-600"
-            />
-
-
-            <div>
-
-              <h3 className="font-semibold text-blue-900">
-                Patient-focused dashboard
-              </h3>
-
-
-              <p className="mt-1 text-sm leading-6 text-blue-800">
-                Patients are collapsed by default to keep the
-                dashboard compact. Expand only the patient
-                you are currently handling, then use Wrap Up
-                when finished.
-              </p>
-
-            </div>
-
-          </div>
-
         </div>
 
+        {/* Global Error Banner */}
+        {error && (
+          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600" />
+            <div className="flex-1 font-medium">{error}</div>
+            <Button size="sm" variant="outline" onClick={loadMedications}>
+              Retry
+            </Button>
+          </div>
+        )}
 
+        {/* Overdue Notification Banner */}
+        {metrics.overdue > 0 && (
+          <div className="p-4 bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border-l-4 border-rose-600 rounded-r-2xl flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shadow-sm">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  {metrics.overdue} Overdue / Missed Medication Dose(s) Alert
+                </h4>
+                <p className="text-xs text-slate-600">
+                  Scheduled administration window has elapsed. Please administer or document clinical rationale.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => setFilterTab("OVERDUE")}
+            >
+              View Overdue Doses
+            </Button>
+          </div>
+        )}
+
+        {/* STAT Urgency Alert Banner (if any) */}
+        {metrics.statDoses > 0 && (
+          <div className="p-4 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-l-4 border-amber-500 rounded-r-2xl flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-sm">
+                <Zap className="w-5 h-5 fill-current" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  {metrics.statDoses} Priority / STAT Doses Pending
+                </h4>
+                <p className="text-xs text-slate-600">
+                  Urgent physician orders requiring immediate administration.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-amber-300 text-amber-900 hover:bg-amber-100/50"
+              onClick={() => setFilterTab("STAT")}
+            >
+              Filter STAT Doses
+            </Button>
+          </div>
+        )}
+
+        {/* KPI Metrics Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          <StatCard
+            title="Assigned Patients"
+            value={metrics.uniquePatients}
+            subtitle="Active Inpatients"
+            icon={Users}
+            color="sky"
+          />
+          <StatCard
+            title="Scheduled Doses"
+            value={metrics.total}
+            subtitle="Total doses today"
+            icon={Pill}
+            color="indigo"
+          />
+          <StatCard
+            title="Due Now"
+            value={metrics.due}
+            subtitle="Active window"
+            icon={Clock3}
+            color={metrics.due > 0 ? "sky" : "slate"}
+          />
+          <StatCard
+            title="Overdue Doses"
+            value={metrics.overdue}
+            subtitle="Past grace window"
+            icon={AlertTriangle}
+            color={metrics.overdue > 0 ? "rose" : "slate"}
+          />
+          <StatCard
+            title="Administered"
+            value={metrics.given}
+            subtitle="Completed doses"
+            icon={CheckCircle2}
+            color="emerald"
+          />
+          <StatCard
+            title="Action Needed"
+            value={metrics.attention}
+            subtitle="Delayed / Held / Refused"
+            icon={ShieldAlert}
+            color={metrics.attention > 0 ? "amber" : "slate"}
+          />
+        </div>
+
+        {/* Patient Queue Controls */}
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            {/* Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search by patient name, ID, or medicine..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Quick Expand/Collapse */}
+            <div className="flex items-center gap-2 shrink-0">
+              <Button size="sm" variant="ghost" onClick={expandAll}>
+                Expand All
+              </Button>
+              <span className="text-slate-200">|</span>
+              <Button size="sm" variant="ghost" onClick={collapseAll}>
+                Collapse All
+              </Button>
+            </div>
+          </div>
+
+          {/* Status Tabs */}
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+            <span className="text-xs font-semibold text-slate-400 mr-1 flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5" /> Rounds Filter:
+            </span>
+            {[
+              { id: "ALL", label: "All Schedules", count: metrics.total },
+              { id: "DUE", label: "Due Now", count: metrics.due },
+              { id: "OVERDUE", label: "Overdue / Missed", count: metrics.overdue },
+              { id: "UPCOMING", label: "Upcoming", count: metrics.upcoming },
+              { id: "STAT", label: "STAT Urgent", count: metrics.statDoses },
+              { id: "ATTENTION", label: "Attention Needed", count: metrics.attention },
+              { id: "GIVEN", label: "Administered", count: metrics.given },
+            ].map((tab) => {
+              const active = filterTab === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setFilterTab(tab.id)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    active
+                      ? "bg-sky-600 text-white shadow-sm"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                      active ? "bg-white/20 text-white" : "bg-white text-slate-700"
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Medication Patient Queue List */}
+        {loading ? (
+          <Loading message="Loading assigned patient schedules and verification orders..." />
+        ) : filteredGroups.length === 0 ? (
+          <EmptyState
+            icon={Pill}
+            title="No Medication Schedules Found"
+            description={
+              search || filterTab !== "ALL"
+                ? "No patients match your current search and filter criteria."
+                : "No active medication administration schedules are currently queued for your shift."
+            }
+            actionLabel={search || filterTab !== "ALL" ? "Clear Filters" : "Refresh Queue"}
+            onAction={() => {
+              setSearch("")
+              setFilterTab("ALL")
+              loadMedications()
+            }}
+          />
+        ) : (
+          <div className="space-y-4">
+            {filteredGroups.map((patient) => {
+              const isExpanded = expandedPatients.has(patient.patient_code)
+              const totalDoses = patient.medications.reduce(
+                (acc, m) => acc + m.schedules.length,
+                0
+              )
+              const hasStat = patient.medications.some((m) => m.is_stat)
+
+              return (
+                <div
+                  key={patient.patient_code}
+                  className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-sm transition-all hover:border-slate-300"
+                >
+                  {/* Patient Accordion Header */}
+                  <div
+                    onClick={() => togglePatient(patient.patient_code)}
+                    className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer select-none bg-slate-50/60 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-2xl bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+                        <User className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-bold text-slate-900">
+                            {patient.patient_name}
+                          </h3>
+                          {hasStat && (
+                            <Badge variant="warning" size="sm">
+                              STAT ORDER
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
+                          <span>
+                            ID:{" "}
+                            <strong className="text-slate-700 font-mono">
+                              {patient.patient_code}
+                            </strong>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            <strong>{patient.medications.length}</strong> Prescribed Drug(s)
+                          </span>
+                          <span>•</span>
+                          <span>
+                            <strong>{totalDoses}</strong> Scheduled Dose(s)
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={QrCode}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          navigate(`/nurse/scanner?patient=${patient.patient_id}`)
+                        }}
+                      >
+                        Verify Wristband
+                      </Button>
+
+                      <div className="w-8 h-8 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-500">
+                        <ChevronDown
+                          className={`w-4 h-4 transition-transform duration-200 ${
+                            isExpanded ? "rotate-180" : ""
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Expanded Medication List */}
+                  {isExpanded && (
+                    <div className="p-5 border-t border-slate-100 space-y-4 bg-white">
+                      {patient.medications.map((med, idx) => (
+                        <div
+                          key={idx}
+                          className="rounded-2xl border border-slate-200/80 bg-slate-50/30 p-4 space-y-3"
+                        >
+                          {/* Medicine Header */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center">
+                                <Pill className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-900">
+                                  {med.medicine_name}
+                                </h4>
+                                <p className="text-xs text-slate-500">
+                                  {med.dose} · {med.route} · {med.frequency}
+                                </p>
+                              </div>
+                            </div>
+
+                            {med.is_stat && (
+                              <Badge variant="warning" size="sm">
+                                <Zap className="w-3 h-3 mr-1 fill-current" /> STAT
+                              </Badge>
+                            )}
+                          </div>
+
+                          {/* Dosing Schedule Items */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+                            {med.schedules.map((schedule) => (
+                              <div
+                                key={schedule.id}
+                                className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs flex items-center justify-between gap-3 hover:border-sky-300 transition-all"
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                                    <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                    <span className="font-bold text-slate-900">
+                                      {formatTime(schedule.scheduled_time)}
+                                    </span>
+                                    <span className="text-slate-400">·</span>
+                                    <span>{formatDate(schedule.scheduled_date)}</span>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <Badge
+                                      variant={getStatusBadgeVariant(
+                                        schedule.monitoring_status || schedule.status,
+                                      )}
+                                      size="sm"
+                                    >
+                                      {normalizeStatus(
+                                        schedule.monitoring_status || schedule.status,
+                                      )}
+                                    </Badge>
+                                    {schedule.delay_minutes > 0 &&
+                                      (schedule.monitoring_status === "GIVEN_LATE" ||
+                                        schedule.monitoring_status === "OVERDUE" ||
+                                        schedule.monitoring_status === "MISSED") && (
+                                        <span className="text-[10px] font-bold text-rose-600">
+                                          +{schedule.delay_minutes}m late
+                                        </span>
+                                      )}
+                                    {schedule.is_assigned === false && (
+                                      <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                                        Covering RN
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <Button
+                                  size="sm"
+                                  variant={
+                                    schedule.monitoring_status === "DUE" ||
+                                    schedule.monitoring_status === "OVERDUE" ||
+                                    normalizeStatus(schedule.status) === "UPCOMING"
+                                      ? "primary"
+                                      : "outline"
+                                  }
+                                  onClick={() =>
+                                    navigate(`/nurse/medications/${schedule.id}`)
+                                  }
+                                >
+                                  {schedule.monitoring_status === "DUE" ||
+                                  schedule.monitoring_status === "OVERDUE" ||
+                                  normalizeStatus(schedule.status) === "UPCOMING"
+                                    ? "Administer"
+                                    : "View"}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* MODAL: Shift Medication Administration History */}
+        <Modal
+          open={showHistoryModal}
+          onClose={() => setShowHistoryModal(false)}
+          title="Shift Medication Administration History"
+          subtitle="Recent bedside administrations recorded during your current active session"
+          maxWidth="max-w-4xl"
+        >
+          {historyLoading ? (
+            <div className="p-8">
+              <Loading message="Fetching recent shift administrations..." />
+            </div>
+          ) : historyList.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-sm">
+              No medication administrations recorded yet in this shift.
+            </div>
+          ) : (
+            <div className="overflow-x-auto text-xs">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase">
+                    <th className="p-3">Time</th>
+                    <th className="p-3">Patient</th>
+                    <th className="p-3">Medication</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3">Accountability</th>
+                    <th className="p-3">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {historyList.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="p-3 font-semibold text-slate-700 whitespace-nowrap">
+                        {item.administered_at
+                          ? new Date(item.administered_at).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "—"}
+                      </td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">
+                          {item.patient_name || `#${item.patient_id}`}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {item.patient_code}
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">{item.medicine_name}</div>
+                        <div className="text-[10px] text-slate-500">{item.dosage}</div>
+                      </td>
+                      <td className="p-3">
+                        <Badge variant={getStatusBadgeVariant(item.status)} size="sm">
+                          {item.status}
+                        </Badge>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-medium text-slate-800">{item.nurse_name}</div>
+                        {item.is_override && (
+                          <span className="inline-block mt-0.5 text-[9px] font-bold bg-amber-100 text-amber-800 px-1 py-0.2 rounded">
+                            OVERRIDE: {item.override_reason || "Covering Nurse"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-slate-600 max-w-xs truncate">
+                        {item.notes || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
       </div>
-
     </MainLayout>
   )
 }

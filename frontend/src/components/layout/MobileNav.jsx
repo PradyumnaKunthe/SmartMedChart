@@ -1,43 +1,38 @@
 import {
+  Activity,
   BrainCircuit,
   Building2,
+  CalendarCheck,
   ClipboardList,
+  HeartPulse,
   LayoutDashboard,
+  LogOut,
   QrCode,
+  Stethoscope,
   UserPlus,
   UserRound,
+  Users,
+  UsersRound,
   X,
 } from "lucide-react"
-
 import { NavLink } from "react-router-dom"
-
 import { useAuth } from "../../context/AuthContext"
 
-
-export default function MobileNav({
-  open,
-  onClose,
-}) {
-  const { user } = useAuth()
+export default function MobileNav({ open, onClose }) {
+  const { user, logout } = useAuth()
 
   const role =
     typeof user?.role === "string"
-      ? user.role
-          .trim()
-          .toLowerCase()
+      ? user.role.trim().toLowerCase()
       : ""
 
   let navigation = []
 
-
-  // =====================================================
   // NURSE
-  // =====================================================
-
   if (role === "nurse") {
     navigation = [
       {
-        label: "Dashboard",
+        label: "Nurse Dashboard",
         icon: LayoutDashboard,
         path: "/nurse/dashboard",
       },
@@ -52,27 +47,23 @@ export default function MobileNav({
         path: "/nurse/qr",
       },
       {
-        label: "AI Risk",
+        label: "AI Risk Monitor",
         icon: BrainCircuit,
         path: "/nurse/ai",
       },
     ]
   }
 
-
-  // =====================================================
   // DOCTOR
-  // =====================================================
-
   if (role === "doctor") {
     navigation = [
       {
-        label: "Dashboard",
+        label: "Clinical Dashboard",
         icon: LayoutDashboard,
         path: "/doctor/dashboard",
       },
       {
-        label: "Patients",
+        label: "Patients Directory",
         icon: UserRound,
         path: "/doctor/patients",
       },
@@ -82,43 +73,59 @@ export default function MobileNav({
         path: "/doctor/prescriptions",
       },
       {
-        label: "AI Risk",
+        label: "AI Clinical Insights",
         icon: BrainCircuit,
         path: "/doctor/ai",
       },
     ]
   }
 
-
-  // =====================================================
   // ADMIN
-  // =====================================================
+  if (role === "admin" || role === "administrator") {
+    navigation = [
+      {
+        label: "Executive Dashboard",
+        icon: LayoutDashboard,
+        path: "/admin/dashboard",
+      },
+      {
+        label: "Staff & Workload",
+        icon: Users,
+        path: "/admin/staff",
+      },
+      {
+        label: "CareMatch Doctors",
+        icon: Stethoscope,
+        path: "/admin/doctor-profiles",
+      },
+      {
+        label: "Patient Management",
+        icon: UsersRound,
+        path: "/admin/patients",
+      },
+      {
+        label: "Ward & Bed Ops",
+        icon: Building2,
+        path: "/admin/ward-bed-management",
+      },
+      {
+        label: "Patient QR Generator",
+        icon: QrCode,
+        path: "/admin/qr",
+      },
+      {
+        label: "Hospital Portal",
+        icon: HeartPulse,
+        path: "/hospital/dashboard",
+      },
+    ]
+  }
 
-if (
-  role === "admin" ||
-  role === "administrator"
-) {
-  navigation = [
-    {
-      label: "Dashboard",
-      icon: LayoutDashboard,
-      path: "/admin/dashboard",
-    },
-    {
-      label: "Hospital Portal",
-      icon: Building2,
-      path: "/hospital/dashboard",
-    },
-  ]
-}
-
-  // =====================================================
-  // HOSPITAL STAFF
-  // =====================================================
-
+  // HOSPITAL STAFF / RECEPTIONIST
   if (
     role === "hospital" ||
-    role === "hospital_staff"
+    role === "hospital_staff" ||
+    role === "receptionist"
   ) {
     navigation = [
       {
@@ -127,124 +134,97 @@ if (
         path: "/hospital/dashboard",
       },
       {
-        label: "Register Patient",
+        label: "Admit / Register",
         icon: UserPlus,
         path: "/hospital/patients/new",
+      },
+      {
+        label: "CareMatch Counter",
+        icon: CalendarCheck,
+        path: "/receptionist/counter",
       },
     ]
   }
 
+  const displayName = user?.full_name || user?.username || "Staff Member"
+  const initials = displayName
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "SM"
 
   return (
     <>
-      {/* =================================================
-          BACKDROP
-      ================================================= */}
-
+      {/* Backdrop */}
       {open && (
         <button
           type="button"
-          aria-label="Close navigation"
+          aria-label="Close navigation overlay"
           onClick={onClose}
-          className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden transition-opacity"
         />
       )}
 
-
-      {/* =================================================
-          MOBILE DRAWER
-      ================================================= */}
-
+      {/* Drawer */}
       <aside
         className={[
-          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-800 bg-slate-950 shadow-2xl transition-transform duration-300 lg:hidden",
-          open
-            ? "translate-x-0"
-            : "-translate-x-full",
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-200 bg-white shadow-2xl transition-transform duration-300 lg:hidden",
+          open ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
       >
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <div className="flex h-20 items-center justify-between border-b border-slate-800 px-5">
-
+        {/* Header */}
+        <div className="flex h-20 items-center justify-between border-b border-slate-100 px-5">
           <div className="flex items-center gap-3">
-
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/10">
-
-              <LayoutDashboard className="h-5 w-5 text-cyan-400" />
-
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-sky-600 to-sky-400 text-white shadow-sm">
+              <Activity className="h-5 w-5" />
             </div>
-
             <div>
-
-              <h1 className="font-bold text-white">
-                SmartMedChart
+              <h1 className="font-heading font-extrabold text-slate-900 text-sm tracking-tight">
+                SmartMed<span className="text-sky-600">Chart</span>
               </h1>
-
-              <p className="text-xs text-slate-500">
-                Clinical Intelligence
+              <p className="text-[10px] font-medium text-slate-400">
+                Hospital System
               </p>
-
             </div>
-
           </div>
-
 
           <button
             type="button"
             onClick={onClose}
             aria-label="Close menu"
-            className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white"
+            className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-800 transition"
           >
-
             <X className="h-5 w-5" />
-
           </button>
-
         </div>
 
-
-        {/* =================================================
-            USER INFO
-        ================================================= */}
-
-        <div className="border-b border-slate-800 p-4">
-
-          <div className="rounded-2xl bg-slate-900 p-4">
-
-            <p className="truncate text-sm font-semibold text-white">
-              {user?.full_name || user?.username}
-            </p>
-
-            <p className="mt-1 text-xs capitalize text-slate-500">
-              {role}
-            </p>
-
+        {/* User Card */}
+        <div className="border-b border-slate-100 p-4 bg-slate-50/50">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200/80 bg-white p-3 shadow-xs">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-sky-600 to-sky-400 text-xs font-bold text-white shadow-xs">
+              {initials}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold text-slate-800">
+                {displayName}
+              </p>
+              <p className="text-[11px] font-medium capitalize text-slate-400">
+                {role}
+              </p>
+            </div>
           </div>
-
         </div>
 
-
-        {/* =================================================
-            NAVIGATION
-        ================================================= */}
-
-        <div className="flex-1 overflow-y-auto px-4 py-6">
-
-          <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Navigation
+        {/* Navigation */}
+        <div className="flex-1 overflow-y-auto px-3.5 py-4">
+          <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Navigation Menu
           </p>
 
-
           <nav className="space-y-1">
-
             {navigation.map((item) => {
-
               const Icon = item.icon
-
               return (
                 <NavLink
                   key={item.path}
@@ -252,51 +232,35 @@ if (
                   onClick={onClose}
                   className={({ isActive }) =>
                     [
-                      "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition",
+                      "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition",
                       isActive
-                        ? "bg-cyan-500/10 text-cyan-400"
-                        : "text-slate-300 hover:bg-slate-800 hover:text-white",
+                        ? "bg-sky-50 text-sky-700 font-bold"
+                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
                     ].join(" ")
                   }
                 >
-
-                  <Icon className="h-5 w-5" />
-
-                  <span>
-                    {item.label}
-                  </span>
-
+                  <Icon className="h-4.5 w-4.5 text-sky-600" />
+                  <span className="truncate">{item.label}</span>
                 </NavLink>
               )
-
             })}
-
           </nav>
-
         </div>
 
-
-        {/* =================================================
-            FOOTER
-        ================================================= */}
-
-        <div className="border-t border-slate-800 p-4">
-
-          <div className="rounded-xl border border-cyan-500/10 bg-cyan-500/5 p-3">
-
-            <p className="text-xs font-semibold text-cyan-400">
-              SmartMedChart
-            </p>
-
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              Secure clinical medication management
-              and hospital data coordination.
-            </p>
-
-          </div>
-
+        {/* Logout */}
+        <div className="border-t border-slate-100 p-4">
+          <button
+            type="button"
+            onClick={() => {
+              onClose()
+              logout()
+            }}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 transition"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Sign Out</span>
+          </button>
         </div>
-
       </aside>
     </>
   )

@@ -1,17 +1,32 @@
 import { useEffect, useState } from "react"
-import { Link } from "react-router-dom"
 import {
+  AlertCircle,
   ArrowLeft,
   BedDouble,
   Building2,
   CheckCircle2,
+  ChevronRight,
+  Layers,
   Loader2,
+  Percent,
   Plus,
   RefreshCw,
   Trash2,
+  UserCheck,
+  UserRound,
   Users,
   X,
 } from "lucide-react"
+
+import MainLayout from "../../components/layout/MainLayout"
+import Badge from "../../components/common/Badge"
+import Button from "../../components/common/Button"
+import Card, { CardHeader } from "../../components/common/Card"
+import EmptyState from "../../components/common/EmptyState"
+import ErrorState from "../../components/common/ErrorState"
+import Loading from "../../components/common/Loading"
+import Modal from "../../components/common/Modal"
+import StatCard from "../../components/dashboard/StatCard"
 
 import {
   createBed,
@@ -21,283 +36,55 @@ import {
   getWards,
 } from "../../services/admin"
 
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-slate-400">
-            {label}
-          </p>
-
-          <p className="mt-2 text-3xl font-bold text-white">
-            {value}
-          </p>
-        </div>
-
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-500/10">
-          <Icon className="h-5 w-5 text-cyan-400" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
-function WardCard({
-  ward,
-  onOpen,
-}) {
-  const occupancyPercentage =
-    ward.total_beds > 0
-      ? Math.round(
-          (ward.occupied_beds /
-            ward.total_beds) *
-            100,
-        )
-      : 0
-
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(ward)}
-      className="group rounded-2xl border border-slate-800 bg-slate-900 p-5 text-left transition hover:-translate-y-0.5 hover:border-cyan-500/40 hover:bg-slate-900/90"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-500/10">
-            <Building2 className="h-5 w-5 text-cyan-400" />
-          </div>
-
-          <div>
-            <h3 className="font-semibold text-white">
-              {ward.name}
-            </h3>
-
-            <p className="mt-1 text-xs text-slate-500">
-              {ward.code}
-            </p>
-          </div>
-        </div>
-
-        <span className="text-xs text-slate-500 group-hover:text-cyan-400">
-          Open →
-        </span>
-      </div>
-
-      {ward.description && (
-        <p className="mt-4 line-clamp-2 text-sm text-slate-400">
-          {ward.description}
-        </p>
-      )}
-
-      <div className="mt-5 grid grid-cols-3 gap-2">
-        <div className="rounded-xl bg-slate-950 p-3">
-          <p className="text-xs text-slate-500">
-            Total
-          </p>
-
-          <p className="mt-1 font-semibold text-white">
-            {ward.total_beds}
-          </p>
-        </div>
-
-        <div className="rounded-xl bg-slate-950 p-3">
-          <p className="text-xs text-slate-500">
-            Available
-          </p>
-
-          <p className="mt-1 font-semibold text-emerald-400">
-            {ward.available_beds}
-          </p>
-        </div>
-
-        <div className="rounded-xl bg-slate-950 p-3">
-          <p className="text-xs text-slate-500">
-            Occupied
-          </p>
-
-          <p className="mt-1 font-semibold text-amber-400">
-            {ward.occupied_beds}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800">
-        <div
-          className="h-full rounded-full bg-cyan-500 transition-all"
-          style={{
-            width: `${occupancyPercentage}%`,
-          }}
-        />
-      </div>
-
-      <p className="mt-2 text-xs text-slate-500">
-        {occupancyPercentage}% occupied
-      </p>
-    </button>
-  )
-}
-
-
-function BedCard({
-  bed,
-  onDeactivate,
-}) {
-  const occupied = bed.is_occupied
-
-  return (
-    <div
-      className={[
-        "group relative rounded-2xl border p-4 transition",
-        occupied
-          ? "border-amber-500/30 bg-amber-500/5"
-          : "border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-400/40",
-      ].join(" ")}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div
-          className={[
-            "flex h-12 w-12 items-center justify-center rounded-xl",
-            occupied
-              ? "bg-amber-500/10"
-              : "bg-emerald-500/10",
-          ].join(" ")}
-        >
-          <BedDouble
-            className={[
-              "h-6 w-6",
-              occupied
-                ? "text-amber-400"
-                : "text-emerald-400",
-            ].join(" ")}
-          />
-        </div>
-
-        <span
-          className={[
-            "rounded-full border px-2.5 py-1 text-xs font-semibold",
-            occupied
-              ? "border-amber-500/20 bg-amber-500/10 text-amber-400"
-              : "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
-          ].join(" ")}
-        >
-          {occupied
-            ? "OCCUPIED"
-            : "AVAILABLE"}
-        </span>
-      </div>
-
-      <p className="mt-4 text-lg font-bold text-white">
-        {bed.bed_number}
-      </p>
-
-      {occupied && bed.patient ? (
-        <div className="mt-3 rounded-xl bg-slate-950 p-3">
-          <p className="text-xs uppercase tracking-wide text-slate-500">
-            Patient
-          </p>
-
-          <p className="mt-1 font-medium text-white">
-            {bed.patient.full_name}
-          </p>
-
-          <p className="mt-1 text-xs text-slate-400">
-            {bed.patient.patient_id}
-          </p>
-        </div>
-      ) : (
-        <p className="mt-3 text-sm text-slate-500">
-          This bed is currently available.
-        </p>
-      )}
-
-      {!occupied && (
-        <button
-          type="button"
-          onClick={() => onDeactivate(bed)}
-          className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-slate-500 transition hover:text-red-400"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Deactivate bed
-        </button>
-      )}
-    </div>
-  )
-}
-
-
 export default function WardBedManagement() {
   const [wards, setWards] = useState([])
-  const [selectedWard, setSelectedWard] =
-    useState(null)
-
-  const [wardBeds, setWardBeds] =
-    useState(null)
+  const [selectedWard, setSelectedWard] = useState(null)
+  const [wardBeds, setWardBeds] = useState(null)
 
   const [loading, setLoading] = useState(true)
-  const [bedsLoading, setBedsLoading] =
-    useState(false)
-
+  const [bedsLoading, setBedsLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState("")
 
-  const [showAddWard, setShowAddWard] =
-    useState(false)
+  // Modals
+  const [showAddWard, setShowAddWard] = useState(false)
+  const [showAddBed, setShowAddBed] = useState(false)
 
-  const [showAddBed, setShowAddBed] =
-    useState(false)
+  // Forms
+  const [wardForm, setWardForm] = useState({
+    name: "",
+    code: "",
+    description: "",
+  })
+  const [bedNumber, setBedNumber] = useState("")
+  const [savingWard, setSavingWard] = useState(false)
+  const [savingBed, setSavingBed] = useState(false)
 
-  const [wardForm, setWardForm] =
-    useState({
-      name: "",
-      code: "",
-      description: "",
-    })
-
-  const [bedNumber, setBedNumber] =
-    useState("")
-
-  const [savingWard, setSavingWard] =
-    useState(false)
-
-  const [savingBed, setSavingBed] =
-    useState(false)
-
-
-  async function loadWards() {
-    setLoading(true)
+  async function loadWards(isManual = false) {
+    if (isManual) setRefreshing(true)
+    else setLoading(true)
     setError("")
 
     try {
       const result = await getWards()
+      const list = result.wards || []
+      setWards(list)
 
-      setWards(result.wards || [])
-
-      if (
-        selectedWard &&
-        !(result.wards || []).some(
-          (ward) =>
-            ward.id === selectedWard.id,
-        )
-      ) {
-        setSelectedWard(null)
-        setWardBeds(null)
+      if (selectedWard) {
+        const updated = list.find((w) => w.id === selectedWard.id)
+        if (updated) setSelectedWard(updated)
+        else {
+          setSelectedWard(null)
+          setWardBeds(null)
+        }
       }
     } catch (err) {
-      setError(
-        err?.response?.data?.detail ||
-          "Unable to load wards.",
-      )
+      setError(err?.response?.data?.detail || "Unable to load hospital wards.")
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
-
 
   async function openWard(ward) {
     setSelectedWard(ward)
@@ -305,31 +92,19 @@ export default function WardBedManagement() {
     setError("")
 
     try {
-      const result =
-        await getWardBeds(ward.id)
-
+      const result = await getWardBeds(ward.id)
       setWardBeds(result)
     } catch (err) {
-      setError(
-        err?.response?.data?.detail ||
-          "Unable to load beds.",
-      )
+      setError(err?.response?.data?.detail || "Unable to load ward beds.")
     } finally {
       setBedsLoading(false)
     }
   }
 
-
-  async function handleCreateWard(event) {
-    event.preventDefault()
-
-    if (!wardForm.name.trim()) {
-      setError("Ward name is required.")
-      return
-    }
-
-    if (!wardForm.code.trim()) {
-      setError("Ward code is required.")
+  async function handleCreateWard(e) {
+    e.preventDefault()
+    if (!wardForm.name.trim() || !wardForm.code.trim()) {
+      setError("Ward name and code are required.")
       return
     }
 
@@ -340,685 +115,552 @@ export default function WardBedManagement() {
       await createWard(
         wardForm.name.trim(),
         wardForm.code.trim(),
-        wardForm.description.trim() ||
-          null,
+        wardForm.description.trim() || null,
       )
-
-      setWardForm({
-        name: "",
-        code: "",
-        description: "",
-      })
-
+      setWardForm({ name: "", code: "", description: "" })
       setShowAddWard(false)
-
-      await loadWards()
+      await loadWards(true)
     } catch (err) {
-      setError(
-        err?.response?.data?.detail ||
-          "Unable to create ward.",
-      )
+      setError(err?.response?.data?.detail || "Unable to create ward.")
     } finally {
       setSavingWard(false)
     }
   }
 
-
-  async function handleCreateBed(event) {
-    event.preventDefault()
-
-    if (!selectedWard) {
-      return
-    }
-
-    if (!bedNumber.trim()) {
-      setError("Bed number is required.")
-      return
-    }
+  async function handleCreateBed(e) {
+    e.preventDefault()
+    if (!selectedWard || !bedNumber.trim()) return
 
     setSavingBed(true)
     setError("")
 
     try {
-      await createBed(
-        selectedWard.id,
-        bedNumber.trim(),
-      )
-
+      await createBed(selectedWard.id, bedNumber.trim())
       setBedNumber("")
       setShowAddBed(false)
-
       await openWard(selectedWard)
-      await loadWards()
+      await loadWards(true)
     } catch (err) {
-      setError(
-        err?.response?.data?.detail ||
-          "Unable to create bed.",
-      )
+      setError(err?.response?.data?.detail || "Unable to add bed.")
     } finally {
       setSavingBed(false)
     }
   }
 
-
-  async function handleDeactivateBed(
-    bed,
-  ) {
-    if (!selectedWard) {
-      return
-    }
-
-    const confirmed =
-      window.confirm(
-        `Deactivate bed ${bed.bed_number}?`,
-      )
-
-    if (!confirmed) {
+  async function handleDeactivateBed(bed) {
+    if (!selectedWard) return
+    if (!window.confirm(`Deactivate bed ${bed.bed_number}? This bed will no longer be available for patient admission.`)) {
       return
     }
 
     try {
-      await deactivateBed(
-        selectedWard.id,
-        bed.id,
-      )
-
+      await deactivateBed(selectedWard.id, bed.id)
       await openWard(selectedWard)
-      await loadWards()
+      await loadWards(true)
     } catch (err) {
-      setError(
-        err?.response?.data?.detail ||
-          "Unable to deactivate bed.",
-      )
+      alert(err?.response?.data?.detail || "Unable to deactivate bed.")
     }
   }
-
 
   useEffect(() => {
     loadWards()
   }, [])
 
+  // Aggregated Stats
+  const totalBeds = wards.reduce((sum, w) => sum + Number(w.total_beds || 0), 0)
+  const availableBeds = wards.reduce((sum, w) => sum + Number(w.available_beds || 0), 0)
+  const occupiedBeds = wards.reduce((sum, w) => sum + Number(w.occupied_beds || 0), 0)
+  const overallOccupancyRate = totalBeds > 0 ? Math.round((occupiedBeds / totalBeds) * 100) : 0
 
-  const totalBeds = wards.reduce(
-    (sum, ward) =>
-      sum + Number(ward.total_beds || 0),
-    0,
-  )
-
-  const availableBeds = wards.reduce(
-    (sum, ward) =>
-      sum +
-      Number(
-        ward.available_beds || 0,
-      ),
-    0,
-  )
-
-  const occupiedBeds = wards.reduce(
-    (sum, ward) =>
-      sum +
-      Number(
-        ward.occupied_beds || 0,
-      ),
-    0,
-  )
-
+  if (loading) {
+    return (
+      <MainLayout
+        title="Ward & Bed Management"
+        subtitle="Real-time inpatient occupancy, bed allocation & ward operations"
+      >
+        <Loading
+          fullScreen
+          message="Loading Hospital Wards & Facilities..."
+          subtext="Fetching bed occupancy, departments, and active patient admissions"
+        />
+      </MainLayout>
+    )
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 px-6 py-8 text-white">
-      <div className="mx-auto max-w-7xl">
-        
-<div className="mb-5">
-  <Link
-    to="/admin/dashboard"
-    className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:border-cyan-500 hover:bg-slate-800 hover:text-white"
-  >
-    <ArrowLeft className="h-4 w-4" />
-    Back to Admin Dashboard
-  </Link>
-</div>
-
-
-        {/* =================================================
-            Header
-        ================================================= */}
-
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-
+    <MainLayout
+      title="Ward & Bed Management"
+      subtitle="Real-time inpatient occupancy, bed allocation & department capacity planning"
+    >
+      <div className="space-y-6 sm:space-y-8">
+        {/* Top Header Controls */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-500/10">
-                <Building2 className="h-6 w-6 text-cyan-400" />
-              </div>
-
-              <div>
-                <h1 className="text-3xl font-bold tracking-tight">
-                  Ward & Bed Management
-                </h1>
-
-                <p className="mt-1 text-sm text-slate-400">
-                  Configure hospital wards and manage
-                  their beds.
-                </p>
-              </div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Facility Status: Operational
+              </p>
             </div>
+            <h2 className="font-heading text-2xl font-extrabold text-slate-900 mt-1">
+              Hospital Wards & Bed Capacity
+            </h2>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setShowAddWard(true)}
-              className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+          <div className="flex items-center gap-2.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              loading={refreshing}
+              onClick={() => loadWards(true)}
             >
-              <Plus className="h-4 w-4" />
-              Add Ward
-            </button>
-
-            <button
-              type="button"
-              onClick={loadWards}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-slate-800 disabled:opacity-50"
-            >
-              <RefreshCw
-                className={[
-                  "h-4 w-4",
-                  loading
-                    ? "animate-spin"
-                    : "",
-                ].join(" ")}
-              />
               Refresh
-            </button>
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={Plus}
+              onClick={() => setShowAddWard(true)}
+            >
+              Add New Ward
+            </Button>
           </div>
         </div>
-
-
-        {/* =================================================
-            Stats
-        ================================================= */}
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            label="Active Wards"
-            value={wards.length}
-            icon={Building2}
-          />
-
-          <StatCard
-            label="Total Beds"
-            value={totalBeds}
-            icon={BedDouble}
-          />
-
-          <StatCard
-            label="Available Beds"
-            value={availableBeds}
-            icon={CheckCircle2}
-          />
-
-          <StatCard
-            label="Occupied Beds"
-            value={occupiedBeds}
-            icon={Users}
-          />
-        </div>
-
-
-        {/* =================================================
-            Error
-        ================================================= */}
 
         {error && (
-          <div className="mt-6 flex items-start justify-between gap-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            <span>{error}</span>
-
-            <button
-              type="button"
-              onClick={() => setError("")}
-              className="text-red-300/70 hover:text-red-200"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          <ErrorState
+            title="Ward Management Error"
+            message={error}
+            onRetry={() => loadWards(true)}
+          />
         )}
 
+        {/* Aggregate KPI Stat Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            title="Total Wards"
+            value={wards.length}
+            description="Active clinical departments"
+            icon={Building2}
+            variant="sky"
+          />
+          <StatCard
+            title="Total Beds"
+            value={totalBeds}
+            description="Overall licensed bed inventory"
+            icon={BedDouble}
+            variant="indigo"
+          />
+          <StatCard
+            title="Available Beds"
+            value={availableBeds}
+            description="Ready for patient admission"
+            icon={CheckCircle2}
+            variant="emerald"
+            badge="Ready"
+          />
+          <StatCard
+            title="Hospital Occupancy"
+            value={`${overallOccupancyRate}%`}
+            description={`${occupiedBeds} occupied of ${totalBeds} total`}
+            icon={Percent}
+            variant={overallOccupancyRate > 85 ? "rose" : "amber"}
+            progress={overallOccupancyRate}
+          />
+        </div>
 
-        {/* =================================================
-            Ward view
-        ================================================= */}
-
-        {!selectedWard ? (
-          <>
-            <div className="mt-8">
-              <div className="mb-4">
-                <h2 className="text-xl font-bold text-white">
-                  Hospital Wards
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Select a ward to view and manage its beds.
-                </p>
-              </div>
-
-              {loading ? (
-                <div className="flex min-h-72 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900">
-                  <div className="flex items-center gap-3 text-slate-400">
-                    <Loader2 className="h-5 w-5 animate-spin text-cyan-400" />
-                    Loading wards...
-                  </div>
-                </div>
-              ) : wards.length === 0 ? (
-                <div className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900 px-6 text-center">
-                  <Building2 className="h-12 w-12 text-slate-700" />
-
-                  <h3 className="mt-4 text-lg font-semibold text-white">
-                    No wards configured
-                  </h3>
-
-                  <p className="mt-2 max-w-md text-sm text-slate-500">
-                    Add your hospital's real wards to begin
-                    configuring beds.
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setShowAddWard(true)
-                    }
-                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add First Ward
-                  </button>
-                </div>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {wards.map((ward) => (
-                    <WardCard
-                      key={ward.id}
-                      ward={ward}
-                      onOpen={openWard}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            {/* =================================================
-                Selected ward header
-            ================================================= */}
-
-            <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedWard(null)
-                      setWardBeds(null)
-                      setError("")
-                    }}
-                    className="rounded-xl border border-slate-700 p-2 text-slate-300 transition hover:bg-slate-800 hover:text-white"
-                  >
-                    <ArrowLeft className="h-5 w-5" />
-                  </button>
-
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-slate-500">
-                      Ward
-                    </p>
-
-                    <h2 className="text-2xl font-bold text-white">
-                      {selectedWard.name}
-                    </h2>
-
-                    <p className="mt-1 text-sm text-slate-500">
-                      {selectedWard.code}
-                    </p>
-                  </div>
-                </div>
-
+        {/* Selected Ward Inspection Banner / Details */}
+        {selectedWard ? (
+          <div className="rounded-3xl border border-sky-200/80 bg-white p-5 sm:p-7 shadow-sm space-y-6 animate-fade-in">
+            {/* Selected Ward Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-5 border-b border-slate-100">
+              <div className="flex items-center gap-4">
                 <button
                   type="button"
-                  onClick={() =>
-                    setShowAddBed(true)
-                  }
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+                  onClick={() => {
+                    setSelectedWard(null)
+                    setWardBeds(null)
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
+                  title="Back to all wards"
                 >
-                  <Plus className="h-4 w-4" />
-                  Add Bed
+                  <ArrowLeft className="h-5 w-5" />
                 </button>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-sky-600">
+                      Ward Code: {selectedWard.code}
+                    </span>
+                    <Badge variant="primary" size="sm">
+                      {selectedWard.total_beds} Total Beds
+                    </Badge>
+                  </div>
+                  <h3 className="font-heading text-2xl font-extrabold text-slate-900 mt-0.5">
+                    {selectedWard.name}
+                  </h3>
+                  {selectedWard.description && (
+                    <p className="text-xs text-slate-500 mt-1 max-w-xl">
+                      {selectedWard.description}
+                    </p>
+                  )}
+                </div>
               </div>
 
-
-              {wardBeds?.counts && (
-                <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-xl bg-slate-950 p-4">
-                    <p className="text-xs text-slate-500">
-                      Total Beds
-                    </p>
-
-                    <p className="mt-1 text-xl font-bold text-white">
-                      {wardBeds.counts.total}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-slate-950 p-4">
-                    <p className="text-xs text-slate-500">
-                      Available
-                    </p>
-
-                    <p className="mt-1 text-xl font-bold text-emerald-400">
-                      {wardBeds.counts.available}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-slate-950 p-4">
-                    <p className="text-xs text-slate-500">
-                      Occupied
-                    </p>
-
-                    <p className="mt-1 text-xl font-bold text-amber-400">
-                      {wardBeds.counts.occupied}
-                    </p>
-                  </div>
-                </div>
-              )}
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={Plus}
+                  onClick={() => setShowAddBed(true)}
+                >
+                  Add Bed to {selectedWard.code}
+                </Button>
+              </div>
             </div>
 
-
-            {/* =================================================
-                Bed layout
-            ================================================= */}
-
-            <div className="mt-6">
-              {bedsLoading ? (
-                <div className="flex min-h-72 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900">
-                  <div className="flex items-center gap-3 text-slate-400">
-                    <Loader2 className="h-5 w-5 animate-spin text-cyan-400" />
-                    Loading beds...
+            {/* Beds Grid */}
+            {bedsLoading ? (
+              <div className="py-12">
+                <Loading
+                  message="Loading Ward Beds..."
+                  subtext={`Fetching bed occupancy details for ${selectedWard.name}`}
+                />
+              </div>
+            ) : !wardBeds?.beds?.length ? (
+              <EmptyState
+                icon={BedDouble}
+                title="No Beds Configured"
+                description={`This ward has no active beds registered yet. Click "Add Bed" to provision beds.`}
+                actionLabel="Add First Bed"
+                actionIcon={Plus}
+                onAction={() => setShowAddBed(true)}
+              />
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-4 text-xs font-semibold">
+                    <span className="flex items-center gap-1.5 text-slate-700">
+                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                      Available ({wardBeds.beds.filter((b) => !b.is_occupied).length})
+                    </span>
+                    <span className="flex items-center gap-1.5 text-slate-700">
+                      <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+                      Occupied ({wardBeds.beds.filter((b) => b.is_occupied).length})
+                    </span>
                   </div>
+                  <span className="text-xs text-slate-400 font-medium">
+                    {wardBeds.beds.length} Total Units
+                  </span>
                 </div>
-              ) : !wardBeds ||
-                wardBeds.beds.length === 0 ? (
-                <div className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900 px-6 text-center">
-                  <BedDouble className="h-12 w-12 text-slate-700" />
 
-                  <h3 className="mt-4 text-lg font-semibold text-white">
-                    No beds configured
-                  </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {wardBeds.beds.map((bed) => {
+                    const occupied = bed.is_occupied
+                    return (
+                      <div
+                        key={bed.id}
+                        className={`rounded-2xl border p-4.5 transition-all duration-200 ${
+                          occupied
+                            ? "border-amber-200 bg-amber-50/40 shadow-xs"
+                            : "border-emerald-200/90 bg-emerald-50/30 hover:border-emerald-400 hover:shadow-sm"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div
+                            className={`flex h-10 w-10 items-center justify-center rounded-xl font-bold text-xs ${
+                              occupied
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-emerald-100 text-emerald-700"
+                            }`}
+                          >
+                            <BedDouble className="h-5 w-5" />
+                          </div>
 
-                  <p className="mt-2 text-sm text-slate-500">
-                    Add the actual beds present in this ward.
-                  </p>
+                          <Badge
+                            variant={occupied ? "warning" : "success"}
+                            size="sm"
+                            dot
+                          >
+                            {occupied ? "Occupied" : "Available"}
+                          </Badge>
+                        </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setShowAddBed(true)
-                    }
-                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add First Bed
-                  </button>
+                        <div className="mt-3">
+                          <p className="text-xs text-slate-400 uppercase font-semibold">
+                            Bed Identifier
+                          </p>
+                          <h4 className="font-heading font-extrabold text-slate-900 text-lg">
+                            {bed.bed_number}
+                          </h4>
+                        </div>
+
+                        {occupied && bed.patient ? (
+                          <div className="mt-3 pt-3 border-t border-amber-200/60 text-xs">
+                            <span className="text-[10px] uppercase font-bold text-amber-800/80 block">
+                              Inpatient Admitted:
+                            </span>
+                            <p className="font-bold text-slate-900 truncate mt-0.5">
+                              {bed.patient.full_name}
+                            </p>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              ID: {bed.patient.patient_id}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                            <span className="text-[11px] text-slate-400">
+                              Vacant & Ready
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeactivateBed(bed)}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-rose-600 transition"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
-              ) : (
-                <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-lg font-bold text-white">
-                        Bed Layout
-                      </h3>
-
-                      <p className="mt-1 text-sm text-slate-500">
-                        Available beds can later be selected for
-                        patient admission.
-                      </p>
-                    </div>
-
-                    <div className="flex gap-3 text-xs">
-                      <span className="flex items-center gap-2 text-emerald-400">
-                        <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
-                        Available
-                      </span>
-
-                      <span className="flex items-center gap-2 text-amber-400">
-                        <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-                        Occupied
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {wardBeds.beds.map(
-                      (bed) => (
-                        <BedCard
-                          key={bed.id}
-                          bed={bed}
-                          onDeactivate={
-                            handleDeactivateBed
-                          }
-                        />
-                      ),
-                    )}
-                  </div>
-                </div>
-              )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Wards Grid */
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading text-lg font-bold text-slate-900">
+                Hospital Ward Departments ({wards.length})
+              </h3>
+              <p className="text-xs text-slate-500">
+                Click any ward to inspect beds and admissions
+              </p>
             </div>
-          </>
+
+            {wards.length === 0 ? (
+              <EmptyState
+                icon={Building2}
+                title="No Wards Configured"
+                description="There are currently no hospital wards registered. Click below to add the first department."
+                actionLabel="Create New Ward"
+                actionIcon={Plus}
+                onAction={() => setShowAddWard(true)}
+              />
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {wards.map((ward) => {
+                  const occupancy =
+                    ward.total_beds > 0
+                      ? Math.round((ward.occupied_beds / ward.total_beds) * 100)
+                      : 0
+
+                  return (
+                    <div
+                      key={ward.id}
+                      onClick={() => openWard(ward)}
+                      className="group cursor-pointer rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs transition-all duration-200 hover:-translate-y-1 hover:border-sky-300 hover:shadow-md"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 group-hover:bg-sky-600 group-hover:text-white transition-colors duration-200 shadow-xs">
+                            <Building2 className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-600">
+                              {ward.code}
+                            </span>
+                            <h4 className="font-heading font-extrabold text-slate-900 text-base group-hover:text-sky-700 transition-colors">
+                              {ward.name}
+                            </h4>
+                          </div>
+                        </div>
+
+                        <span className="text-slate-300 group-hover:text-sky-600 group-hover:translate-x-1 transition-all">
+                          <ChevronRight className="h-5 w-5" />
+                        </span>
+                      </div>
+
+                      {ward.description && (
+                        <p className="mt-3 text-xs text-slate-500 line-clamp-2 leading-relaxed">
+                          {ward.description}
+                        </p>
+                      )}
+
+                      <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl bg-slate-50 p-2">
+                          <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                            Total
+                          </span>
+                          <span className="font-heading font-bold text-slate-800 text-sm">
+                            {ward.total_beds}
+                          </span>
+                        </div>
+                        <div className="rounded-xl bg-emerald-50/70 p-2 border border-emerald-100/60">
+                          <span className="text-[10px] font-bold uppercase text-emerald-700 block">
+                            Available
+                          </span>
+                          <span className="font-heading font-bold text-emerald-800 text-sm">
+                            {ward.available_beds}
+                          </span>
+                        </div>
+                        <div className="rounded-xl bg-amber-50/70 p-2 border border-amber-100/60">
+                          <span className="text-[10px] font-bold uppercase text-amber-700 block">
+                            Occupied
+                          </span>
+                          <span className="font-heading font-bold text-amber-800 text-sm">
+                            {ward.occupied_beds}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3.5">
+                        <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 mb-1">
+                          <span>Occupancy</span>
+                          <span className={occupancy > 85 ? "text-rose-600 font-bold" : "text-slate-700"}>
+                            {occupancy}%
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              occupancy > 85
+                                ? "bg-rose-500"
+                                : occupancy > 50
+                                ? "bg-amber-500"
+                                : "bg-sky-500"
+                            }`}
+                            style={{ width: `${occupancy}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
-
-      {/* =====================================================
-          ADD WARD MODAL
-      ===================================================== */}
-
-      {showAddWard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
-
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <div>
-                <h2 className="text-xl font-bold text-white">
-                  Add Ward
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Enter the real ward details.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setShowAddWard(false)
-                }
-                className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-
-            <form
-              onSubmit={handleCreateWard}
-              className="space-y-4 p-6"
-            >
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-300">
-                  Ward Name
-                </span>
-
-                <input
-                  value={wardForm.name}
-                  onChange={(event) =>
-                    setWardForm((current) => ({
-                      ...current,
-                      name: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. General Ward"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-                />
-              </label>
-
-
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-300">
-                  Ward Code
-                </span>
-
-                <input
-                  value={wardForm.code}
-                  onChange={(event) =>
-                    setWardForm((current) => ({
-                      ...current,
-                      code: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. GW-01"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-                />
-              </label>
-
-
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-300">
-                  Description
-                </span>
-
-                <textarea
-                  value={wardForm.description}
-                  onChange={(event) =>
-                    setWardForm((current) => ({
-                      ...current,
-                      description:
-                        event.target.value,
-                    }))
-                  }
-                  rows={3}
-                  placeholder="Optional description"
-                  className="w-full resize-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-                />
-              </label>
-
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowAddWard(false)
-                  }
-                  className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={savingWard}
-                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 disabled:opacity-50"
-                >
-                  {savingWard && (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  )}
-
-                  Create Ward
-                </button>
-              </div>
-            </form>
+      {/* Add Ward Modal */}
+      <Modal
+        open={showAddWard}
+        onClose={() => setShowAddWard(false)}
+        title="Add New Hospital Ward"
+        subtitle="Provision a clinical department or inpatient care wing"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleCreateWard} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+              Ward Name *
+            </label>
+            <input
+              type="text"
+              required
+              value={wardForm.name}
+              onChange={(e) => setWardForm({ ...wardForm, name: e.target.value })}
+              placeholder="e.g. Intensive Care Unit, Pediatric Ward"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+            />
           </div>
-        </div>
-      )}
 
-
-      {/* =====================================================
-          ADD BED MODAL
-      ===================================================== */}
-
-      {showAddBed && selectedWard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
-
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <div>
-                <h2 className="text-xl font-bold text-white">
-                  Add Bed
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Adding bed to {selectedWard.name}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setShowAddBed(false)
-                }
-                className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-
-            <form
-              onSubmit={handleCreateBed}
-              className="space-y-4 p-6"
-            >
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-300">
-                  Bed Number
-                </span>
-
-                <input
-                  value={bedNumber}
-                  onChange={(event) =>
-                    setBedNumber(
-                      event.target.value,
-                    )
-                  }
-                  placeholder="e.g. B-101"
-                  autoFocus
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-                />
-              </label>
-
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowAddBed(false)
-                  }
-                  className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={savingBed}
-                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-slate-950 disabled:opacity-50"
-                >
-                  {savingBed && (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  )}
-
-                  Add Bed
-                </button>
-              </div>
-            </form>
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+              Ward Code *
+            </label>
+            <input
+              type="text"
+              required
+              value={wardForm.code}
+              onChange={(e) => setWardForm({ ...wardForm, code: e.target.value.toUpperCase() })}
+              placeholder="e.g. ICU-A, PED-01, GEN-M"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 uppercase outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+            />
           </div>
-        </div>
-      )}
-    </div>
+
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+              Description (Optional)
+            </label>
+            <textarea
+              rows={3}
+              value={wardForm.description}
+              onChange={(e) => setWardForm({ ...wardForm, description: e.target.value })}
+              placeholder="Brief notes on equipment, specialized nursing or target patient demographic..."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-medium text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowAddWard(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              loading={savingWard}
+            >
+              Create Ward
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Add Bed Modal */}
+      <Modal
+        open={showAddBed}
+        onClose={() => setShowAddBed(false)}
+        title={`Add Bed to ${selectedWard?.name}`}
+        subtitle={`Provision a new patient bed identifier in Ward ${selectedWard?.code}`}
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleCreateBed} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+              Bed Number / Identifier *
+            </label>
+            <input
+              type="text"
+              required
+              value={bedNumber}
+              onChange={(e) => setBedNumber(e.target.value)}
+              placeholder="e.g. Bed-101, B-12"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Must be unique within this ward.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowAddBed(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              loading={savingBed}
+            >
+              Add Bed
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </MainLayout>
   )
 }

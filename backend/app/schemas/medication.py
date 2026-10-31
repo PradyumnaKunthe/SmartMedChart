@@ -1,5 +1,4 @@
 from datetime import date, time, datetime
-
 from pydantic import BaseModel, ConfigDict
 
 
@@ -11,7 +10,6 @@ class MedicationScheduleResponse(BaseModel):
     # -----------------------------------------------------
     # Schedule information
     # -----------------------------------------------------
-
     id: int
     prescription_item_id: int
 
@@ -19,6 +17,8 @@ class MedicationScheduleResponse(BaseModel):
     scheduled_time: time
 
     status: str
+    monitoring_status: str | None = None
+    delay_minutes: float | None = None
 
     actual_administration_time: datetime | None = None
     administered_by: int | None = None
@@ -27,7 +27,6 @@ class MedicationScheduleResponse(BaseModel):
     # -----------------------------------------------------
     # Patient information
     # -----------------------------------------------------
-
     patient_id: int | None = None
     patient_name: str | None = None
     patient_code: str | None = None
@@ -35,7 +34,6 @@ class MedicationScheduleResponse(BaseModel):
     # -----------------------------------------------------
     # Medicine / prescription information
     # -----------------------------------------------------
-
     medicine_id: int | None = None
     medicine_name: str | None = None
     generic_name: str | None = None
@@ -48,5 +46,13 @@ class MedicationScheduleResponse(BaseModel):
     duration_days: int | None = None
 
     is_stat: bool = False
-
     instructions: str | None = None
+
+    # -----------------------------------------------------
+    # Assignment & Accountability
+    # -----------------------------------------------------
+    is_assigned: bool = True
+    assigned_nurse_id: int | None = None
+    assigned_nurse_name: str | None = None
+    is_override: bool = False
+    override_reason: str | None = None

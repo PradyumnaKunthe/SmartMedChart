@@ -1,713 +1,660 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   BriefcaseBusiness,
+  Building2,
+  Calendar,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock3,
-  Pill,
+  Filter,
+  RefreshCw,
+  Search,
+  ShieldCheck,
   Stethoscope,
+  TrendingUp,
+  UserCheck,
   UserRound,
+  Users,
+  X,
 } from "lucide-react"
-
 import { useEffect, useMemo, useState } from "react"
-
 import MainLayout from "../../components/layout/MainLayout"
-
+import StatCard from "../../components/dashboard/StatCard"
+import Badge from "../../components/common/Badge"
+import Button from "../../components/common/Button"
+import Card, { CardHeader } from "../../components/common/Card"
+import EmptyState from "../../components/common/EmptyState"
+import ErrorState from "../../components/common/ErrorState"
+import Loading from "../../components/common/Loading"
 import {
   getDoctorWorkload,
   getNurseWorkload,
 } from "../../services/admin"
-
 
 // =========================================================
 // HELPERS
 // =========================================================
 
 function formatDate(value) {
-  if (!value) {
-    return "—"
-  }
-
+  if (!value) return "—"
   const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) {
-    return "—"
-  }
-
-  return date.toLocaleString()
+  if (Number.isNaN(date.getTime())) return "—"
+  return new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
+function getWorkloadStatus(count) {
+  if (count === 0) return { label: "Idle / Available", variant: "neutral" }
+  if (count <= 3) return { label: "Balanced", variant: "success" }
+  if (count <= 6) return { label: "Moderate", variant: "warning" }
+  return { label: "Heavy Workload", variant: "danger" }
+}
 
 // =========================================================
 // STAFF CARD
 // =========================================================
 
-function StaffCard({
-  person,
-  type,
-  onClick,
-}) {
+function StaffCard({ person, type, isSelected, onClick }) {
   const isNurse = type === "nurse"
+  const patientCount = Number(person.patient_count || 0)
+  const status = getWorkloadStatus(patientCount)
+
+  const initials = (person.full_name || person.username || "U")
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase()
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md"
+      className={`group w-full rounded-2xl border p-4.5 text-left transition-all duration-200 ${
+        isSelected
+          ? "border-sky-500 bg-sky-50/60 shadow-md ring-2 ring-sky-200/60"
+          : "border-slate-200/90 bg-white hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md"
+      }`}
     >
-
-      <div className="flex items-center gap-4">
-
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-cyan-50">
-
-          {isNurse ? (
-            <UserRound className="h-6 w-6 text-cyan-600" />
-          ) : (
-            <Stethoscope className="h-6 w-6 text-cyan-600" />
-          )}
-
-        </div>
-
-        <div className="min-w-0 flex-1">
-
-          <div className="flex flex-wrap items-center gap-2">
-
-            <h3 className="font-bold text-slate-900">
-              {person.full_name}
-            </h3>
-
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold uppercase text-emerald-700">
-              Active
-            </span>
-
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl font-bold text-xs ${
+              isNurse
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                : "bg-sky-50 text-sky-700 border border-sky-100"
+            }`}
+          >
+            {initials}
           </div>
 
-          <p className="mt-1 text-xs text-slate-500">
-            {isNurse ? "Nurse" : "Doctor"} ID: {person.id}
-          </p>
-
+          <div className="min-w-0">
+            <h4 className="font-heading font-bold text-slate-900 text-sm truncate group-hover:text-sky-700 transition-colors">
+              {person.full_name}
+            </h4>
+            <p className="text-xs text-slate-400 truncate mt-0.5">
+              ID: <span className="font-medium text-slate-600">{person.id}</span> · @{person.username}
+            </p>
+          </div>
         </div>
 
-        <ArrowRight className="h-5 w-5 shrink-0 text-slate-400" />
-
+        <Badge variant={status.variant} size="sm">
+          {status.label}
+        </Badge>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3">
-
-        <div className="rounded-xl bg-slate-50 p-3">
-
-          <p className="text-xs text-slate-500">
-            Patients
-          </p>
-
-          <p className="mt-1 text-2xl font-bold text-slate-900">
-            {person.patient_count || 0}
-          </p>
-
+      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
+          <UserRound className="h-3.5 w-3.5 text-slate-400" />
+          <span>Assigned Patients:</span>
+          <span className="font-heading font-extrabold text-slate-900 text-sm">
+            {patientCount}
+          </span>
         </div>
 
-        <div className="rounded-xl bg-slate-50 p-3">
-
-          <p className="text-xs text-slate-500">
-            Username
-          </p>
-
-          <p className="mt-1 truncate text-sm font-semibold text-slate-800">
-            {person.username}
-          </p>
-
-        </div>
-
+        <span className="inline-flex items-center gap-1 font-semibold text-sky-600 group-hover:translate-x-0.5 transition-transform text-xs">
+          View Patients
+          <ArrowRight className="h-3.5 w-3.5" />
+        </span>
       </div>
-
     </button>
   )
 }
 
-
 // =========================================================
-// PATIENT LIST
+// PATIENT LIST DRILLDOWN
 // =========================================================
 
-
-function PatientList({ person, type }) {
+function PatientList({ person, type, onClose }) {
   const [openPatient, setOpenPatient] = useState(null)
-
-  const patients = Array.isArray(person?.patients)
-    ? person.patients
-    : []
+  const patients = Array.isArray(person?.patients) ? person.patients : []
+  const isNurse = type === "nurse"
 
   return (
-    <div className="mt-6">
-      <div className="mb-4">
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-          Assigned Patients
-        </p>
+    <div className="rounded-3xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-sm animate-fade-in">
+      <div className="flex items-start justify-between gap-3 pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div
+            className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+              isNurse ? "bg-emerald-50 text-emerald-600" : "bg-sky-50 text-sky-600"
+            }`}
+          >
+            {isNurse ? <UserRound className="h-6 w-6" /> : <Stethoscope className="h-6 w-6" />}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-sky-600">
+                {isNurse ? "Nurse Workload Roster" : "Attending Doctor Workload"}
+              </span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-700">
+                {patients.length} {patients.length === 1 ? "Patient" : "Patients"}
+              </span>
+            </div>
+            <h3 className="font-heading text-xl font-extrabold text-slate-900 mt-0.5">
+              {person.full_name}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Staff ID: <span className="font-semibold text-slate-700">{person.id}</span> · Username: @{person.username}
+            </p>
+          </div>
+        </div>
 
-        <h3 className="mt-1 text-lg font-bold text-slate-900">
-          {patients.length} patient
-          {patients.length === 1 ? "" : "s"}
-        </h3>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700 transition"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {patients.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-          <UserRound className="mx-auto h-8 w-8 text-slate-300" />
-          <p className="mt-3 font-semibold text-slate-700">
-            No active patients assigned
-          </p>
-          <p className="mt-1 text-sm text-slate-500">
-            No current patient workload is recorded for this {type}.
-          </p>
+        <div className="py-10">
+          <EmptyState
+            icon={UserCheck}
+            title="No Active Patients Assigned"
+            description={`Currently, there are no active patient encounters or medication schedules assigned to this ${type}.`}
+          />
         </div>
       ) : (
-        <div className="space-y-3">
-          {patients.map((patient, index) => {
-            // Support both current and older API field names.
-            const patientName =
-              patient.full_name ||
-              patient.patient_name ||
-              `${patient.first_name || ""} ${patient.last_name || ""}`.trim() ||
-              "Unnamed patient"
+        <div className="mt-5 space-y-3">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+            Active Assigned Inpatients ({patients.length})
+          </p>
 
-            const patientCode =
-              patient.patient_id ||
-              patient.patient_code ||
-              "No patient ID"
+          <div className="grid gap-3 max-h-[500px] overflow-y-auto pr-1">
+            {patients.map((patient, index) => {
+              const patientName =
+                patient.full_name ||
+                patient.patient_name ||
+                `${patient.first_name || ""} ${patient.last_name || ""}`.trim() ||
+                "Patient"
 
-            const patientKey =
-              patient.assignment_id ??
-              patient.encounter_id ??
-              patient.id ??
-              patientCode ??
-              index
+              const patientCode =
+                patient.patient_id || patient.patient_code || "Unknown ID"
 
-            const patientDate =
-              patient.assigned_at ||
-              patient.admitted_at ||
-              patient.encounter_created_at ||
-              patient.created_at
+              const patientKey =
+                patient.assignment_id ??
+                patient.encounter_id ??
+                patient.id ??
+                patientCode ??
+                index
 
-            const isOpen = openPatient === patientKey
+              const patientDate =
+                patient.assigned_at ||
+                patient.admitted_at ||
+                patient.encounter_created_at ||
+                patient.created_at
 
-            return (
-              <div
-                key={patientKey}
-                className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    setOpenPatient(isOpen ? null : patientKey)
-                  }
-                  className="flex w-full items-center gap-4 p-4 text-left"
+              const isOpen = openPatient === patientKey
+
+              return (
+                <div
+                  key={patientKey}
+                  className="rounded-2xl border border-slate-200/90 bg-white transition hover:border-slate-300"
                 >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100">
-                    <UserRound className="h-5 w-5 text-slate-600" />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpenPatient(isOpen ? null : patientKey)}
+                    className="flex w-full items-center justify-between p-4 text-left"
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 font-bold text-xs">
+                        {patientName.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-heading font-bold text-slate-900 text-sm truncate">
+                          {patientName}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Patient Code: <span className="font-semibold text-slate-700">{patientCode}</span>
+                        </p>
+                      </div>
+                    </div>
 
-                  <div className="min-w-0 flex-1">
-                    <p className="font-bold text-slate-900">
-                      {patientName}
-                    </p>
+                    <div className="flex items-center gap-2.5">
+                      <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700 border border-sky-100">
+                        {patient.encounter_type || "Inpatient"}
+                      </span>
+                      {isOpen ? (
+                        <ChevronUp className="h-4 w-4 text-slate-400" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                      )}
+                    </div>
+                  </button>
 
-                    <p className="mt-1 text-xs text-slate-500">
-                      {patientCode}
-                    </p>
-                  </div>
-
-                  {isOpen ? (
-                    <ChevronUp className="h-5 w-5 text-slate-400" />
-                  ) : (
-                    <ChevronDown className="h-5 w-5 text-slate-400" />
+                  {isOpen && (
+                    <div className="border-t border-slate-100 bg-slate-50/70 p-4 rounded-b-2xl grid gap-3 sm:grid-cols-3 text-xs">
+                      <div className="rounded-xl bg-white p-3 border border-slate-100">
+                        <span className="text-slate-400 uppercase font-semibold text-[10px] block">
+                          Patient ID
+                        </span>
+                        <span className="font-bold text-slate-800 text-sm mt-0.5 block">
+                          {patientCode}
+                        </span>
+                      </div>
+                      <div className="rounded-xl bg-white p-3 border border-slate-100">
+                        <span className="text-slate-400 uppercase font-semibold text-[10px] block">
+                          {isNurse ? "Assigned Since" : "Encounter Registered"}
+                        </span>
+                        <span className="font-bold text-slate-800 text-sm mt-0.5 block">
+                          {formatDate(patientDate)}
+                        </span>
+                      </div>
+                      <div className="rounded-xl bg-white p-3 border border-slate-100">
+                        <span className="text-slate-400 uppercase font-semibold text-[10px] block">
+                          Status
+                        </span>
+                        <span className="font-bold text-emerald-700 text-sm mt-0.5 block">
+                          Active Care
+                        </span>
+                      </div>
+                    </div>
                   )}
-                </button>
-
-                {isOpen && (
-                  <div className="grid gap-3 border-t border-slate-100 bg-slate-50 p-4 md:grid-cols-3">
-                    <div className="rounded-xl bg-white p-3">
-                      <p className="text-xs text-slate-400">
-                        Patient ID
-                      </p>
-                      <p className="mt-1 font-semibold text-slate-900">
-                        {patientCode}
-                      </p>
-                    </div>
-
-                    <div className="rounded-xl bg-white p-3">
-                      <p className="text-xs text-slate-400">
-                        {type === "nurse" ? "Assigned" : "Encounter"}
-                      </p>
-                      <p className="mt-1 font-semibold text-slate-900">
-                        {formatDate(patientDate)}
-                      </p>
-                    </div>
-
-                    <div className="rounded-xl bg-white p-3">
-                      <p className="text-xs text-slate-400">
-                        Type
-                      </p>
-                      <p className="mt-1 font-semibold text-slate-900">
-                        {patient.encounter_type || "Patient"}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-
-
-// =========================================================
-// WORKLOAD SECTION
-// =========================================================
-
-function WorkloadSection({
-  title,
-  subtitle,
-  icon: Icon,
-  people,
-  type,
-  open,
-  setOpen,
-  selectedPerson,
-  setSelectedPerson,
-}) {
-  const totalPatients = useMemo(
-    () =>
-      people.reduce(
-        (total, person) =>
-          total +
-          Number(person.patient_count || 0),
-        0,
-      ),
-    [people],
-  )
-
-  return (
-
-    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-
-      {/* =================================================
-          HEADER
-      ================================================= */}
-
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="w-full p-6 text-left transition hover:bg-slate-50"
-      >
-
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-
-          <div className="flex items-center gap-4">
-
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-50">
-
-              <Icon className="h-7 w-7 text-cyan-600" />
-
-            </div>
-
-            <div>
-
-              <h2 className="text-2xl font-bold text-slate-900">
-                {title}
-              </h2>
-
-              <p className="mt-1 text-sm text-slate-500">
-                {subtitle}
-              </p>
-
-            </div>
-
-          </div>
-
-          <div className="flex items-center gap-3">
-
-            <div className="rounded-xl bg-slate-50 px-4 py-3">
-
-              <p className="text-xs text-slate-500">
-                Registered
-              </p>
-
-              <p className="text-xl font-bold text-slate-900">
-                {people.length}
-              </p>
-
-            </div>
-
-            <div className="rounded-xl bg-slate-50 px-4 py-3">
-
-              <p className="text-xs text-slate-500">
-                Patients
-              </p>
-
-              <p className="text-xl font-bold text-slate-900">
-                {totalPatients}
-              </p>
-
-            </div>
-
-            <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3">
-
-              {open ? (
-                <ChevronUp className="h-5 w-5 text-cyan-700" />
-              ) : (
-                <ChevronDown className="h-5 w-5 text-cyan-700" />
-              )}
-
-            </div>
-
-          </div>
-
-        </div>
-
-      </button>
-
-
-      {/* =================================================
-          OPEN STAFF LIST
-      ================================================= */}
-
-      {open && (
-
-        <div className="border-t border-slate-200 bg-slate-50/60 p-5">
-
-          <div className="grid gap-4 xl:grid-cols-2">
-
-            <div
-              className={
-                selectedPerson
-                  ? "xl:col-span-1"
-                  : "xl:col-span-2"
-              }
-            >
-
-              <p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-400">
-                Registered {type === "nurse" ? "Nurses" : "Doctors"}
-              </p>
-
-              <div className="space-y-3">
-
-                {people.map((person) => (
-
-                  <StaffCard
-                    key={person.id}
-                    person={person}
-                    type={type}
-                    onClick={() =>
-                      setSelectedPerson(person)
-                    }
-                  />
-
-                ))}
-
-              </div>
-
-            </div>
-
-
-            {/* =================================================
-                SELECTED PERSON
-            ================================================= */}
-
-            {selectedPerson && (
-
-              <div className="rounded-3xl border border-slate-200 bg-white p-5">
-
-                <div className="flex items-center justify-between gap-3">
-
-                  <div>
-
-                    <p className="text-xs font-bold uppercase tracking-wider text-cyan-600">
-                      {type === "nurse"
-                        ? "Nurse Workload"
-                        : "Doctor Workload"}
-                    </p>
-
-                    <h3 className="mt-1 text-xl font-bold text-slate-900">
-                      {selectedPerson.full_name}
-                    </h3>
-
-                    <p className="mt-1 text-sm text-slate-500">
-                      {type === "nurse"
-                        ? "Assigned patients and activity"
-                        : "Patients linked to active encounters"}
-                    </p>
-
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelectedPerson(null)
-                    }
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                  >
-                    Close
-                  </button>
-
-                </div>
-
-
-                <div className="mt-5 grid grid-cols-2 gap-3">
-
-                  <div className="rounded-2xl bg-slate-50 p-4">
-
-                    <p className="text-xs text-slate-500">
-                      Patients
-                    </p>
-
-                    <p className="mt-1 text-3xl font-bold text-slate-900">
-                      {selectedPerson.patient_count || 0}
-                    </p>
-
-                  </div>
-
-                  <div className="rounded-2xl bg-slate-50 p-4">
-
-                    <p className="text-xs text-slate-500">
-                      Staff ID
-                    </p>
-
-                    <p className="mt-1 text-3xl font-bold text-slate-900">
-                      {selectedPerson.id}
-                    </p>
-
-                  </div>
-
-                </div>
-
-
-                <PatientList
-                  person={selectedPerson}
-                  type={type}
-                />
-
-              </div>
-
-            )}
-
-          </div>
-
-        </div>
-
-      )}
-
-    </section>
-  )
-}
-
-
 // =========================================================
 // MAIN PAGE
 // =========================================================
 
 export default function MonitoringDashboard() {
-
   const [nurses, setNurses] = useState([])
-
   const [doctors, setDoctors] = useState([])
-
   const [loading, setLoading] = useState(true)
-
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState("")
 
-  const [nurseOpen, setNurseOpen] = useState(false)
-
-  const [doctorOpen, setDoctorOpen] = useState(false)
-
+  const [activeTab, setActiveTab] = useState("all") // 'all', 'doctors', 'nurses'
+  const [searchTerm, setSearchTerm] = useState("")
   const [selectedNurse, setSelectedNurse] = useState(null)
-
   const [selectedDoctor, setSelectedDoctor] = useState(null)
 
-
-  async function loadWorkload() {
-
-    setLoading(true)
+  async function loadWorkload(isManualRefresh = false) {
+    if (isManualRefresh) setRefreshing(true)
+    else setLoading(true)
     setError("")
 
     try {
-
-      const [
-        nurseResponse,
-        doctorResponse,
-      ] = await Promise.all([
+      const [nurseResponse, doctorResponse] = await Promise.all([
         getNurseWorkload(),
         getDoctorWorkload(),
       ])
 
       setNurses(
-        Array.isArray(nurseResponse?.nurses)
-          ? nurseResponse.nurses
-          : [],
+        Array.isArray(nurseResponse?.nurses) ? nurseResponse.nurses : [],
       )
-
       setDoctors(
-        Array.isArray(doctorResponse?.doctors)
-          ? doctorResponse.doctors
-          : [],
+        Array.isArray(doctorResponse?.doctors) ? doctorResponse.doctors : [],
       )
-
     } catch (requestError) {
-
-      console.error(
-        "Workload loading error:",
-        requestError,
-      )
-
+      console.error("Workload loading error:", requestError)
       setError(
         requestError?.response?.data?.detail ||
-          "Unable to load staff workload.",
+          "Unable to load clinical staff workload data. Check server connectivity.",
       )
-
     } finally {
-
       setLoading(false)
-
+      setRefreshing(false)
     }
   }
-
 
   useEffect(() => {
     loadWorkload()
   }, [])
 
+  // Aggregate Metrics
+  const totalNurses = nurses.length
+  const totalDoctors = doctors.length
+  const totalDoctorPatients = useMemo(
+    () => doctors.reduce((sum, d) => sum + Number(d.patient_count || 0), 0),
+    [doctors],
+  )
+  const totalNursePatients = useMemo(
+    () => nurses.reduce((sum, n) => sum + Number(n.patient_count || 0), 0),
+    [nurses],
+  )
+  const highWorkloadStaffCount = useMemo(() => {
+    const heavyDocs = doctors.filter((d) => Number(d.patient_count || 0) >= 5).length
+    const heavyNurses = nurses.filter((n) => Number(n.patient_count || 0) >= 5).length
+    return heavyDocs + heavyNurses
+  }, [doctors, nurses])
+
+  // Filtering
+  const filteredDoctors = useMemo(() => {
+    if (!searchTerm.trim()) return doctors
+    const q = searchTerm.toLowerCase()
+    return doctors.filter(
+      (d) =>
+        (d.full_name || "").toLowerCase().includes(q) ||
+        (d.username || "").toLowerCase().includes(q) ||
+        String(d.id || "").includes(q),
+    )
+  }, [doctors, searchTerm])
+
+  const filteredNurses = useMemo(() => {
+    if (!searchTerm.trim()) return nurses
+    const q = searchTerm.toLowerCase()
+    return nurses.filter(
+      (n) =>
+        (n.full_name || "").toLowerCase().includes(q) ||
+        (n.username || "").toLowerCase().includes(q) ||
+        String(n.id || "").includes(q),
+    )
+  }, [nurses, searchTerm])
 
   if (loading) {
     return (
-      <MainLayout title="Staff Workload">
-
-        <div className="flex min-h-[60vh] items-center justify-center">
-
-          <div className="text-center">
-
-            <Activity className="mx-auto h-10 w-10 animate-pulse text-cyan-600" />
-
-            <p className="mt-4 font-semibold text-slate-800">
-              Loading staff workload...
-            </p>
-
-            <p className="mt-1 text-sm text-slate-500">
-              Loading registered nurses, doctors and patients.
-            </p>
-
-          </div>
-
-        </div>
-
+      <MainLayout
+        title="Hospital Monitoring"
+        subtitle="Live clinical staff workload & patient distribution"
+      >
+        <Loading
+          fullScreen
+          message="Loading Clinical Operations Center..."
+          subtext="Fetching live workload metrics for doctors and nurses"
+        />
       </MainLayout>
     )
   }
 
-
   return (
-    <MainLayout title="Staff Workload">
-
-      <div className="mx-auto max-w-7xl space-y-6">
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <section className="rounded-3xl border border-slate-800 bg-slate-950 p-6 text-white">
-
-          <div className="flex items-center gap-4">
-
-            <div className="rounded-2xl bg-cyan-500/10 p-3">
-
-              <BriefcaseBusiness className="h-7 w-7 text-cyan-400" />
-
-            </div>
-
-            <div>
-
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-400">
-                SMARTMEDCHART
+    <MainLayout
+      title="Staff Workload & Monitoring"
+      subtitle="Executive command center for hospital clinical load balancing"
+    >
+      <div className="space-y-6 sm:space-y-8">
+        {/* Top Control Bar with Quick Refresh */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Hospital Clinical Status: Active Monitoring
               </p>
-
-              <h1 className="mt-1 text-2xl font-bold">
-                Staff Workload
-              </h1>
-
-              <p className="mt-2 text-sm text-slate-400">
-                Review registered staff and their current patient workload.
-              </p>
-
             </div>
-
+            <h2 className="font-heading text-2xl font-extrabold text-slate-900 mt-1">
+              Staff Workload Overview
+            </h2>
           </div>
 
-        </section>
-
-
-        {/* =================================================
-            ERROR
-        ================================================= */}
+          <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              loading={refreshing}
+              onClick={() => loadWorkload(true)}
+            >
+              Refresh Data
+            </Button>
+          </div>
+        </div>
 
         {error && (
-
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">
-            {error}
-          </div>
-
+          <ErrorState
+            title="Workload Synchronization Issue"
+            message={error}
+            onRetry={() => loadWorkload(true)}
+          />
         )}
 
+        {/* Aggregate KPI Stat Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            title="Active Doctors"
+            value={totalDoctors}
+            description="Specialists & general physicians"
+            icon={Stethoscope}
+            variant="sky"
+            badge="On Duty"
+          />
+          <StatCard
+            title="Registered Nurses"
+            value={totalNurses}
+            description="Ward and triage clinical staff"
+            icon={UserRound}
+            variant="emerald"
+            badge="Staffed"
+          />
+          <StatCard
+            title="Doctor Encounters"
+            value={totalDoctorPatients}
+            description="Active clinical patient visits"
+            icon={Activity}
+            variant="indigo"
+          />
+          <StatCard
+            title="High Load Alerts"
+            value={highWorkloadStaffCount}
+            description="Staff with ≥ 5 active patients"
+            icon={AlertTriangle}
+            variant={highWorkloadStaffCount > 0 ? "amber" : "emerald"}
+            badge={highWorkloadStaffCount > 0 ? "Review Needed" : "Optimal"}
+          />
+        </div>
 
-        {/* =================================================
-            NURSE WORKLOAD
-        ================================================= */}
+        {/* Filter and Search Bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-slate-200/90 bg-white p-3 shadow-xs">
+          {/* Tabs */}
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setActiveTab("all")}
+              className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold transition ${
+                activeTab === "all"
+                  ? "bg-slate-900 text-white shadow-xs"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              All Staff ({totalDoctors + totalNurses})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("doctors")}
+              className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold transition ${
+                activeTab === "doctors"
+                  ? "bg-sky-600 text-white shadow-xs"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              Doctors ({totalDoctors})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("nurses")}
+              className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold transition ${
+                activeTab === "nurses"
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              Nurses ({totalNurses})
+            </button>
+          </div>
 
-        <WorkloadSection
-          title="Nurse Workload"
-          subtitle="Registered nurses and their assigned patients"
-          icon={UserRound}
-          people={nurses}
-          type="nurse"
-          open={nurseOpen}
-          setOpen={(value) => {
-            setNurseOpen(value)
+          {/* Search Input */}
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search staff name or ID..."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 py-2 pl-9 pr-8 text-xs font-medium text-slate-900 outline-none transition focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm("")}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
 
-            if (!value) {
-              setSelectedNurse(null)
-            }
-          }}
-          selectedPerson={selectedNurse}
-          setSelectedPerson={setSelectedNurse}
-        />
+        {/* Selected Staff Detail Drilldown Modal / View */}
+        {(selectedNurse || selectedDoctor) && (
+          <div className="mb-6">
+            <PatientList
+              person={selectedNurse || selectedDoctor}
+              type={selectedNurse ? "nurse" : "doctor"}
+              onClose={() => {
+                setSelectedNurse(null)
+                setSelectedDoctor(null)
+              }}
+            />
+          </div>
+        )}
 
+        {/* Main Workload Sections */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Doctors Section */}
+          {(activeTab === "all" || activeTab === "doctors") && (
+            <div className={`space-y-3 ${activeTab === "doctors" ? "lg:col-span-2" : ""}`}>
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                    <Stethoscope className="h-4 w-4" />
+                  </div>
+                  <h3 className="font-heading text-base font-bold text-slate-900">
+                    Doctors Roster
+                  </h3>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+                    {filteredDoctors.length}
+                  </span>
+                </div>
+                <span className="text-xs text-slate-400 font-medium">
+                  {totalDoctorPatients} total encounters
+                </span>
+              </div>
 
-        {/* =================================================
-            DOCTOR WORKLOAD
-        ================================================= */}
+              {filteredDoctors.length === 0 ? (
+                <EmptyState
+                  icon={Stethoscope}
+                  title="No Doctors Found"
+                  description={
+                    searchTerm
+                      ? `No doctor matches "${searchTerm}".`
+                      : "No active doctors are currently registered."
+                  }
+                />
+              ) : (
+                <div
+                  className={`grid gap-3 ${
+                    activeTab === "doctors" ? "sm:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
+                  }`}
+                >
+                  {filteredDoctors.map((doc) => (
+                    <StaffCard
+                      key={doc.id}
+                      person={doc}
+                      type="doctor"
+                      isSelected={selectedDoctor?.id === doc.id}
+                      onClick={() => {
+                        setSelectedNurse(null)
+                        setSelectedDoctor(selectedDoctor?.id === doc.id ? null : doc)
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
-        <WorkloadSection
-          title="Doctor Workload"
-          subtitle="Registered doctors and patients under active encounters"
-          icon={Stethoscope}
-          people={doctors}
-          type="doctor"
-          open={doctorOpen}
-          setOpen={(value) => {
-            setDoctorOpen(value)
+          {/* Nurses Section */}
+          {(activeTab === "all" || activeTab === "nurses") && (
+            <div className={`space-y-3 ${activeTab === "nurses" ? "lg:col-span-2" : ""}`}>
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                    <UserRound className="h-4 w-4" />
+                  </div>
+                  <h3 className="font-heading text-base font-bold text-slate-900">
+                    Nurses Roster
+                  </h3>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+                    {filteredNurses.length}
+                  </span>
+                </div>
+                <span className="text-xs text-slate-400 font-medium">
+                  {totalNursePatients} assigned patients
+                </span>
+              </div>
 
-            if (!value) {
-              setSelectedDoctor(null)
-            }
-          }}
-          selectedPerson={selectedDoctor}
-          setSelectedPerson={setSelectedDoctor}
-        />
-
+              {filteredNurses.length === 0 ? (
+                <EmptyState
+                  icon={UserRound}
+                  title="No Nurses Found"
+                  description={
+                    searchTerm
+                      ? `No nurse matches "${searchTerm}".`
+                      : "No active nurses are currently registered."
+                  }
+                />
+              ) : (
+                <div
+                  className={`grid gap-3 ${
+                    activeTab === "nurses" ? "sm:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
+                  }`}
+                >
+                  {filteredNurses.map((nurse) => (
+                    <StaffCard
+                      key={nurse.id}
+                      person={nurse}
+                      type="nurse"
+                      isSelected={selectedNurse?.id === nurse.id}
+                      onClick={() => {
+                        setSelectedDoctor(null)
+                        setSelectedNurse(selectedNurse?.id === nurse.id ? null : nurse)
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-
     </MainLayout>
   )
 }

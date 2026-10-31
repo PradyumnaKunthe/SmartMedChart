@@ -13,6 +13,8 @@ from app.routes.safety import router as safety_router
 from app.routes.hospital import router as hospital_router
 from app.routes.allergies import router as allergies_router
 from app.routes.carematch import router as carematch_router
+from app.routes.monitoring import router as monitoring_router
+
 
 app = FastAPI(
     title="SmartMedChart API",
@@ -55,6 +57,8 @@ app.include_router(chat.router)
 app.include_router(admin_router)
 app.include_router(allergies_router)
 app.include_router(carematch_router)
+app.include_router(monitoring_router)
+
 
 # =========================================================
 # Root

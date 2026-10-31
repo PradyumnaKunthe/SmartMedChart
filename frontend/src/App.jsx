@@ -24,6 +24,7 @@ import PatientQR from "./pages/admin/PatientQR"
 import PatientManagement from "./pages/admin/PatientManagement"
 import WardBedManagement from "./pages/admin/WardBedManagement"
 import DoctorProfiles from "./pages/admin/DoctorProfiles";
+import MedicationMonitoring from "./pages/admin/MedicationMonitoring";
 // =====================================================
 // NURSE
 // =====================================================
@@ -457,6 +458,22 @@ export default function App() {
               ]}
             >
               <MonitoringDashboard />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/medication-monitoring"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+              ]}
+            >
+              <MedicationMonitoring />
             </RoleRoute>
           </ProtectedRoute>
         }

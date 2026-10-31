@@ -1,6 +1,9 @@
+import React, { useEffect, useRef, useState } from "react"
 import {
+  AlertCircle,
   Bot,
   CheckCircle2,
+  ChevronDown,
   LoaderCircle,
   MessageCircle,
   Send,
@@ -9,111 +12,62 @@ import {
   X,
 } from "lucide-react"
 
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react"
-
-import {
-  sendChatMessage,
-} from "../../services/chat"
-
+import { sendChatMessage } from "../../services/chat"
 
 export default function SmartMedChatbot() {
   const [open, setOpen] = useState(false)
-
-  const [message, setMessage] =
-    useState("")
-
-  const [messages, setMessages] =
-    useState([
-      {
-        id: 1,
-        sender: "bot",
-        text:
-          "Hello! I’m SmartMed Assistant. Ask me about patients, medicines, prescriptions, schedules, STAT medications, or medication status.",
-      },
-    ])
-
-  const [sending, setSending] =
-    useState(false)
-
-  const messagesEndRef =
-    useRef(null)
-
-  // ---------------------------------------------------------
-  // AUTO SCROLL
-  // ---------------------------------------------------------
+  const [message, setMessage] = useState("")
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      sender: "bot",
+      text:
+        "Hello! I am SmartMed Clinical Assistant. Ask me about patient records, medications, prescription schedules, STAT doses, or active hospital encounters.",
+    },
+  ])
+  const [sending, setSending] = useState(false)
+  const messagesEndRef = useRef(null)
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-    })
-  }, [messages, sending])
-
-
-  // ---------------------------------------------------------
-  // SEND MESSAGE
-  // ---------------------------------------------------------
+    if (open) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [messages, sending, open])
 
   async function handleSend(event) {
     event?.preventDefault()
+    const trimmed = message.trim()
+    if (!trimmed || sending) return
 
-    const trimmedMessage =
-      message.trim()
-
-    if (!trimmedMessage || sending) {
-      return
-    }
-
-    const userMessage = {
-      id:
-        Date.now(),
+    const userMsg = {
+      id: Date.now(),
       sender: "user",
-      text: trimmedMessage,
+      text: trimmed,
     }
 
-    setMessages((previous) => [
-      ...previous,
-      userMessage,
-    ])
-
+    setMessages((prev) => [...prev, userMsg])
     setMessage("")
     setSending(true)
 
     try {
-      const result =
-        await sendChatMessage(
-          trimmedMessage,
-        )
-
-      const botMessage = {
-        id:
-          Date.now() + 1,
+      const result = await sendChatMessage(trimmed)
+      const botMsg = {
+        id: Date.now() + 1,
         sender: "bot",
-        text:
-          result?.answer ||
-          "I could not find an answer.",
+        text: result?.answer || "I could not locate an answer in the database.",
       }
-
-      setMessages((previous) => [
-        ...previous,
-        botMessage,
-      ])
-    } catch (error) {
-      const errorMessage =
-        error?.response?.data?.detail ||
-        error?.message ||
-        "Unable to connect to SmartMed Assistant."
-
-      setMessages((previous) => [
-        ...previous,
+      setMessages((prev) => [...prev, botMsg])
+    } catch (err) {
+      const errorMsg =
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Unable to communicate with SmartMed Assistant."
+      setMessages((prev) => [
+        ...prev,
         {
-          id:
-            Date.now() + 1,
+          id: Date.now() + 1,
           sender: "bot",
-          text: errorMessage,
+          text: errorMsg,
           error: true,
         },
       ])
@@ -122,311 +76,168 @@ export default function SmartMedChatbot() {
     }
   }
 
-
-  // ---------------------------------------------------------
-  // QUICK QUESTIONS
-  // ---------------------------------------------------------
-
   const quickQuestions = [
     "What medicines does PRADYUMNA KUNTHE have?",
     "Show the medication schedule for PRADYUMNA KUNTHE",
-    "How many delayed medicines are there?",
+    "How many delayed medicines are there currently?",
   ]
 
-
-  function handleQuickQuestion(
-    question,
-  ) {
-    setMessage(question)
+  function handleQuickQuestion(q) {
+    setMessage(q)
   }
-
-
-  // ---------------------------------------------------------
-  // UI
-  // ---------------------------------------------------------
 
   return (
     <>
-      {/* =====================================================
-          FLOATING CHAT BUTTON
-      ===================================================== */}
-
+      {/* Floating Launcher Button */}
       {!open && (
         <button
           type="button"
-          onClick={() =>
-            setOpen(true)
-          }
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-2xl bg-slate-950 px-4 py-3 text-white shadow-2xl ring-1 ring-slate-700 transition hover:-translate-y-1 hover:bg-slate-900 focus:outline-none focus:ring-4 focus:ring-cyan-500/30"
+          onClick={() => setOpen(true)}
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 px-4 py-3 text-white shadow-xl shadow-sky-500/25 transition-all duration-300 hover:scale-105 hover:shadow-2xl focus:outline-none focus:ring-4 focus:ring-sky-500/30 group"
           aria-label="Open SmartMed Assistant"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500">
-            <MessageCircle className="h-5 w-5" />
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md group-hover:rotate-12 transition-transform">
+            <Sparkles className="h-5 w-5 text-white" />
           </span>
 
           <span className="hidden text-left sm:block">
-            <span className="block text-sm font-bold">
-              SmartMed Assistant
+            <span className="block text-sm font-bold leading-tight">
+              SmartMed AI
             </span>
-
-            <span className="block text-xs text-slate-400">
-              Ask about your clinical data
+            <span className="block text-xs text-sky-100">
+              Clinical Assistant
             </span>
           </span>
         </button>
       )}
 
-
-      {/* =====================================================
-          CHAT WINDOW
-      ===================================================== */}
-
+      {/* Expandable Chat Drawer */}
       {open && (
-        <div className="fixed bottom-4 right-4 z-50 flex h-[min(720px,calc(100vh-32px))] w-[min(430px,calc(100vw-32px))] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl ring-1 ring-slate-900/5 sm:bottom-6 sm:right-6">
-
-          {/* -------------------------------------------------
-              HEADER
-          ------------------------------------------------- */}
-
-          <div className="bg-slate-950 px-5 py-4 text-white">
+        <div className="fixed bottom-4 right-4 z-50 flex h-[min(650px,calc(100vh-32px))] w-[min(410px,calc(100vw-32px))] flex-col overflow-hidden rounded-3xl border border-slate-200/90 bg-white shadow-2xl transition-all sm:bottom-6 sm:right-6">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-sky-600 via-sky-700 to-indigo-700 px-5 py-4 text-white shadow-sm">
             <div className="flex items-center justify-between gap-3">
-
-              <div className="flex min-w-0 items-center gap-3">
-
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-cyan-500">
-                  <Bot className="h-6 w-6" />
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md">
+                  <Bot className="h-5 w-5 text-white" />
                 </div>
-
-                <div className="min-w-0">
+                <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="truncate text-sm font-bold sm:text-base">
+                    <h2 className="text-sm font-bold sm:text-base">
                       SmartMed Assistant
                     </h2>
-
-                    <Sparkles className="h-4 w-4 shrink-0 text-cyan-400" />
+                    <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold text-sky-100">
+                      AI EMR
+                    </span>
                   </div>
-
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
-
-                    <p className="text-xs text-slate-400">
-                      Connected to SmartMedChart
-                    </p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xs text-sky-100/90">
+                      Connected to Clinical Database
+                    </span>
                   </div>
                 </div>
-
               </div>
-
 
               <button
                 type="button"
-                onClick={() =>
-                  setOpen(false)
-                }
-                className="rounded-xl p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
-                aria-label="Close SmartMed Assistant"
+                onClick={() => setOpen(false)}
+                className="rounded-xl p-1.5 text-white/80 hover:bg-white/10 hover:text-white transition-colors"
+                aria-label="Close Assistant"
               >
                 <X className="h-5 w-5" />
               </button>
-
             </div>
           </div>
 
-
-          {/* -------------------------------------------------
-              INTRO
-          ------------------------------------------------- */}
-
-          <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
-            <div className="flex items-start gap-2">
-
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-
-              <p className="text-xs leading-5 text-slate-500">
-                Ask questions about information available
-                inside SmartMedChart. Responses are based on
-                the application's database.
-              </p>
-
-            </div>
-          </div>
-
-
-          {/* -------------------------------------------------
-              MESSAGES
-          ------------------------------------------------- */}
-
-          <div className="flex-1 overflow-y-auto bg-slate-50/70 px-4 py-4">
-
-            <div className="space-y-4">
-
-              {messages.map(
-                (chatMessage) => {
-                  const isUser =
-                    chatMessage.sender ===
-                    "user"
-
-                  return (
-                    <div
-                      key={
-                        chatMessage.id
-                      }
-                      className={[
-                        "flex gap-2.5",
-                        isUser
-                          ? "justify-end"
-                          : "justify-start",
-                      ].join(" ")}
-                    >
-
-                      {!isUser && (
-                        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-cyan-400">
-                          <Bot className="h-4 w-4" />
-                        </div>
-                      )}
-
-
-                      <div
-                        className={[
-                          "max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm",
-                          isUser
-                            ? "rounded-br-md bg-cyan-600 text-white"
-                            : chatMessage.error
-                              ? "rounded-bl-md border border-red-200 bg-red-50 text-red-700"
-                              : "rounded-bl-md border border-slate-200 bg-white text-slate-700",
-                        ].join(" ")}
-                      >
-                        <div className="whitespace-pre-wrap break-words">
-                          {chatMessage.text}
-                        </div>
-                      </div>
-
-
-                      {isUser && (
-                        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-cyan-100 text-cyan-700">
-                          <User className="h-4 w-4" />
-                        </div>
-                      )}
-
+          {/* Messages Stream */}
+          <div className="flex-1 overflow-y-auto bg-slate-50/60 p-4 space-y-3.5">
+            {messages.map((chat) => {
+              const isUser = chat.sender === "user"
+              return (
+                <div
+                  key={chat.id}
+                  className={`flex gap-2.5 ${isUser ? "justify-end" : "justify-start"}`}
+                >
+                  {!isUser && (
+                    <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
+                      <Bot className="h-4 w-4" />
                     </div>
-                  )
-                },
-              )}
+                  )}
 
-
-              {/* -------------------------------------------------
-                  TYPING INDICATOR
-              ------------------------------------------------- */}
-
-              {sending && (
-                <div className="flex items-start gap-2.5">
-
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-cyan-400">
-                    <Bot className="h-4 w-4" />
-                  </div>
-
-                  <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                    <div className="flex items-center gap-2">
-
-                      <LoaderCircle className="h-4 w-4 animate-spin text-cyan-600" />
-
-                      <span className="text-xs font-medium text-slate-500">
-                        SmartMed Assistant is thinking...
-                      </span>
-
-                    </div>
-                  </div>
-
-                </div>
-              )}
-
-
-              <div
-                ref={messagesEndRef}
-              />
-
-            </div>
-          </div>
-
-
-          {/* -------------------------------------------------
-              QUICK QUESTIONS
-          ------------------------------------------------- */}
-
-          <div className="border-t border-slate-100 bg-white px-4 pb-2 pt-3">
-
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              Quick questions
-            </p>
-
-            <div className="flex gap-2 overflow-x-auto pb-1">
-
-              {quickQuestions.map(
-                (question) => (
-                  <button
-                    key={question}
-                    type="button"
-                    onClick={() =>
-                      handleQuickQuestion(
-                        question,
-                      )
-                    }
-                    className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50 hover:text-cyan-700"
+                  <div
+                    className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs ${
+                      isUser
+                        ? "rounded-br-sm bg-sky-600 text-white font-medium"
+                        : chat.error
+                        ? "rounded-bl-sm border border-rose-200 bg-rose-50 text-rose-800"
+                        : "rounded-bl-sm border border-slate-200/80 bg-white text-slate-800"
+                    }`}
                   >
-                    {question}
-                  </button>
-                ),
-              )}
+                    <div className="whitespace-pre-wrap break-words">{chat.text}</div>
+                  </div>
 
-            </div>
+                  {isUser && (
+                    <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-600 text-white">
+                      <User className="h-4 w-4" />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
 
+            {sending && (
+              <div className="flex items-start gap-2.5">
+                <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
+                  <Bot className="h-4 w-4" />
+                </div>
+                <div className="rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-4 py-2.5 shadow-2xs flex items-center gap-2">
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin text-sky-600" />
+                  <span className="text-xs text-slate-500 font-medium">
+                    Searching clinical knowledgebase...
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
           </div>
 
+          {/* Quick Prompts */}
+          <div className="border-t border-slate-100 bg-white p-3 space-y-1.5">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Suggested queries
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {quickQuestions.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => handleQuickQuestion(q)}
+                  className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 transition-colors"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          {/* -------------------------------------------------
-              INPUT
-          ------------------------------------------------- */}
-
-          <form
-            onSubmit={
-              handleSend
-            }
-            className="border-t border-slate-200 bg-white p-3"
-          >
-
-            <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 transition focus-within:border-cyan-300 focus-within:ring-4 focus-within:ring-cyan-500/10">
-
-              <textarea
+          {/* Input Form */}
+          <form onSubmit={handleSend} className="border-t border-slate-200 bg-white p-3">
+            <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-1.5 focus-within:border-sky-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-sky-500/10 transition-all">
+              <input
+                type="text"
                 value={message}
-                onChange={(event) =>
-                  setMessage(
-                    event.target.value,
-                  )
-                }
-                onKeyDown={(event) => {
-                  if (
-                    event.key ===
-                      "Enter" &&
-                    !event.shiftKey
-                  ) {
-                    event.preventDefault()
-                    handleSend(event)
-                  }
-                }}
-                placeholder="Ask SmartMed Assistant..."
-                rows={1}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="Ask clinical question..."
                 disabled={sending}
-                className="min-h-[42px] max-h-28 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex-1 bg-transparent px-2.5 py-1.5 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none"
               />
-
               <button
                 type="submit"
-                disabled={
-                  !message.trim() ||
-                  sending
-                }
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Send message"
+                disabled={!message.trim() || sending}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-40 transition-colors"
+                aria-label="Send"
               >
                 {sending ? (
                   <LoaderCircle className="h-4 w-4 animate-spin" />
@@ -434,16 +245,8 @@ export default function SmartMedChatbot() {
                   <Send className="h-4 w-4" />
                 )}
               </button>
-
             </div>
-
-            <p className="px-2 pt-2 text-[10px] leading-4 text-slate-400">
-              SmartMed Assistant provides information from
-              SmartMedChart and does not replace clinical judgment.
-            </p>
-
           </form>
-
         </div>
       )}
     </>
