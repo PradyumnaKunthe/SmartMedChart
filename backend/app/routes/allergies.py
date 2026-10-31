@@ -24,11 +24,13 @@ def next_mongo_id(collection_name: str) -> int:
         sort=[("_id", -1)],
         projection={"_id": 1},
     )
-    maximum = (
-        int(latest["_id"])
-        if latest and isinstance(latest["_id"], int)
-        else 0
-    )
+    maximum = 0
+    if latest:
+        val = latest.get("_id")
+        if isinstance(val, int):
+            maximum = val
+        elif isinstance(val, str) and val.isdigit():
+            maximum = int(val)
 
     counters = mongo_db["_id_sequences"]
     counters.update_one(
@@ -60,14 +62,12 @@ def create_patient_allergy(
     ),
 ):
     patient = mongo_db.patients.find_one({
-        "_id": patient_id,
-        "is_active": {"$in": [1, True]},
+        "$or": [
+            {"_id": patient_id},
+            {"id": patient_id},
+        ],
+        "is_active": {"$in": [1, True, "1"]},
     })
-    if not patient:
-        patient = mongo_db.patients.find_one({
-            "id": patient_id,
-            "is_active": {"$in": [1, True]},
-        })
 
     if patient is None:
         raise HTTPException(

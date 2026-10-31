@@ -62,7 +62,10 @@ export default function DoctorDashboard() {
 
     try {
       const data = await getDoctorPatients()
-      const visiblePatients = hideTestPatients(Array.isArray(data) ? data : [])
+      const rawList = Array.isArray(data) ? data : []
+      const visiblePatients = hideTestPatients(rawList).filter(
+        (p) => Boolean(p.is_active) && p.lifecycle_status !== "DISCHARGED"
+      )
       setPatients(visiblePatients)
     } catch (requestError) {
       setError(
@@ -81,12 +84,11 @@ export default function DoctorDashboard() {
     loadPatients()
   }, [])
 
-  const activePatients = useMemo(
-    () => patients.filter((patient) => patient.is_active).length,
+  const activePatients = patients.length
+  const admittedWithBed = useMemo(
+    () => patients.filter((patient) => Boolean(patient.bed_id)).length,
     [patients],
   )
-
-  const inactivePatients = Math.max(0, patients.length - activePatients)
   const recentPatients = useMemo(() => patients.slice(0, 6), [patients])
 
   const doctorName = user?.full_name || user?.username || "Doctor"
@@ -165,30 +167,23 @@ export default function DoctorDashboard() {
         )}
 
         {/* Clinical KPI Metric Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            title="Total Assigned"
-            value={patients.length}
-            description="Patient encounters on record"
-            icon={Users}
-            variant="sky"
-            onClick={() => navigate("/doctor/patients")}
-          />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <StatCard
             title="Active Inpatients"
             value={activePatients}
-            description="Currently in ward beds"
+            description="Under primary clinical care"
             icon={UserRound}
             variant="emerald"
             badge="Active Care"
             onClick={() => navigate("/doctor/patients")}
           />
           <StatCard
-            title="Discharged Records"
-            value={inactivePatients}
-            description="Historical patient cases"
-            icon={CheckCircle2}
-            variant="neutral"
+            title="Ward Bed Admitted"
+            value={admittedWithBed}
+            description="Assigned inpatient beds"
+            icon={Users}
+            variant="sky"
+            onClick={() => navigate("/doctor/patients")}
           />
           <StatCard
             title="AI Safety Protocol"
@@ -345,11 +340,11 @@ export default function DoctorDashboard() {
                       </div>
 
                       <Badge
-                        variant={patient.is_active ? "success" : "neutral"}
+                        variant="success"
                         size="sm"
                         dot
                       >
-                        {patient.is_active ? "Active" : "Discharged"}
+                        Active Inpatient
                       </Badge>
                     </div>
 

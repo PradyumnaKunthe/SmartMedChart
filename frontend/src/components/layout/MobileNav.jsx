@@ -1,10 +1,12 @@
 import {
   Activity,
+  Pill,
   BrainCircuit,
   Building2,
   CalendarCheck,
   ClipboardList,
   HeartPulse,
+  History,
   LayoutDashboard,
   LogOut,
   QrCode,
@@ -68,6 +70,11 @@ export default function MobileNav({ open, onClose }) {
         path: "/doctor/patients",
       },
       {
+        label: "ON ROUND",
+        icon: Stethoscope,
+        path: "/doctor/on-round",
+      },
+      {
         label: "Prescriptions",
         icon: ClipboardList,
         path: "/doctor/prescriptions",
@@ -76,6 +83,17 @@ export default function MobileNav({ open, onClose }) {
         label: "AI Clinical Insights",
         icon: BrainCircuit,
         path: "/doctor/ai",
+      },
+    ]
+  }
+
+  // PHARMACIST
+  if (role === "pharmacist") {
+    navigation = [
+      {
+        label: "Pharmacy Management",
+        icon: Pill,
+        path: "/admin/pharmacy",
       },
     ]
   }
@@ -89,9 +107,19 @@ export default function MobileNav({ open, onClose }) {
         path: "/admin/dashboard",
       },
       {
+        label: "Pharmacy Management",
+        icon: Pill,
+        path: "/admin/pharmacy",
+      },
+      {
         label: "Staff & Workload",
         icon: Users,
         path: "/admin/staff",
+      },
+      {
+        label: "Patient Intake & CareMatch",
+        icon: UserPlus,
+        path: "/hospital/patients/new",
       },
       {
         label: "CareMatch Doctors",
@@ -102,6 +130,11 @@ export default function MobileNav({ open, onClose }) {
         label: "Patient Management",
         icon: UsersRound,
         path: "/admin/patients",
+      },
+      {
+        label: "Discharged Patients",
+        icon: History,
+        path: "/admin/patients/discharged",
       },
       {
         label: "Ward & Bed Ops",
@@ -116,6 +149,7 @@ export default function MobileNav({ open, onClose }) {
       {
         label: "Hospital Portal",
         icon: HeartPulse,
+  History,
         path: "/hospital/dashboard",
       },
     ]
@@ -134,14 +168,9 @@ export default function MobileNav({ open, onClose }) {
         path: "/hospital/dashboard",
       },
       {
-        label: "Admit / Register",
+        label: "Patient Intake & CareMatch",
         icon: UserPlus,
         path: "/hospital/patients/new",
-      },
-      {
-        label: "CareMatch Counter",
-        icon: CalendarCheck,
-        path: "/receptionist/counter",
       },
     ]
   }

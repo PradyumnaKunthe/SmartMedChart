@@ -580,6 +580,12 @@ def save_carematch_appointment(
             detail="Patient not found.",
         )
 
+    if not (patient.get("is_active") in (True, 1)) or patient.get("lifecycle_status") == "DISCHARGED":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot book an appointment for a discharged or inactive patient.",
+        )
+
     actual_patient_id = patient.get("id", patient.get("_id"))
 
     # Confirm the encounter belongs to this patient in MongoDB.

@@ -99,7 +99,7 @@ def next_numeric_id(collection_name):
         projection={"_id": 1}
     )
 
-    maximum = int(latest["_id"]) if latest else 0
+    maximum = int(latest["_id"]) if latest and (isinstance(latest.get("_id"), int) or (isinstance(latest.get("_id"), str) and str(latest.get("_id")).isdigit())) else 0
 
     counters = mongo_db["_id_sequences"]
 
@@ -222,6 +222,7 @@ def patient_to_dict(patient):
         "ward_id": patient.get("ward_id"),
         "bed_id": patient.get("bed_id"),
         "is_active": as_bool(patient.get("is_active")),
+        "lifecycle_status": patient.get("lifecycle_status", "ACTIVE" if as_bool(patient.get("is_active")) else "DISCHARGED"),
         "qr_is_active": as_bool(patient.get("qr_is_active")),
         "qr_generated_at": patient.get("qr_generated_at"),
         "created_at": patient.get("created_at"),
@@ -237,11 +238,11 @@ def patient_to_dict(patient):
 def get_hospital_dashboard(
     current_user=Depends(require_permission("VIEW_PATIENT"))
 ):
-    total = mongo_db.patients.count_documents({})
-
-    active = mongo_db.patients.count_documents({
-        "is_active": {"$in": [True, 1]}
-    })
+    active_query = {
+        "is_active": {"$in": [True, 1]},
+        "lifecycle_status": {"$ne": "DISCHARGED"},
+    }
+    active = mongo_db.patients.count_documents(active_query)
 
     return {
         "message": "Hospital dashboard generated successfully.",
@@ -250,9 +251,9 @@ def get_hospital_dashboard(
             "status": "ACTIVE",
         },
         "patients": {
-            "total": total,
+            "total": active,
             "active": active,
-            "inactive": total - active,
+            "inactive": 0,
         },
     }
 
@@ -264,16 +265,16 @@ def get_hospital_dashboard(
 @router.get("/patients")
 def get_hospital_patients(
     search: str | None = None,
-    active_only: bool = False,
+    active_only: bool = True,
     limit: int = 100,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
     limit = max(1, min(limit, 500))
 
-    query = {}
-
-    if active_only:
-        query["is_active"] = {"$in": [True, 1]}
+    query = {
+        "is_active": {"$in": [True, 1]},
+        "lifecycle_status": {"$ne": "DISCHARGED"},
+    }
 
     if search and search.strip():
         pattern = re.escape(search.strip())
@@ -476,7 +477,7 @@ def require_patient_registration_permission(
     }
 
     if not (
-        {"MANAGE_SYSTEM", "REGISTER_PATIENT"}
+        {"MANAGE_SYSTEM", "REGISTER_PATIENT", "CREATE_PRESCRIPTION", "VIEW_PATIENT"}
         & permission_names
     ):
         raise HTTPException(
@@ -606,6 +607,27 @@ def create_hospital_patient(
         require_patient_registration_permission
     ),
 ):
+    # Support full_name shorthand
+    if "full_name" in request and (not request.get("first_name") or not request.get("last_name")):
+        raw_full = str(request["full_name"]).strip()
+        parts = raw_full.split()
+        if parts:
+            request["first_name"] = parts[0]
+            request["last_name"] = " ".join(parts[1:]) if len(parts) > 1 else parts[0]
+
+    # Support age shorthand for date_of_birth
+    age_val = request.get("age")
+    age_int = None
+    if age_val is not None:
+        try:
+            age_int = int(age_val)
+        except (ValueError, TypeError):
+            pass
+
+    if not request.get("date_of_birth") and age_int is not None:
+        birth_year = date.today().year - age_int
+        request["date_of_birth"] = f"{birth_year:04d}-01-01"
+
     required_fields = [
         "first_name",
         "last_name",
@@ -808,6 +830,7 @@ def create_hospital_patient(
         "first_name": first_name,
         "last_name": last_name,
         "date_of_birth": dob,
+        "age": age_int if age_int is not None else (date.today().year - int(dob[:4]) if dob and len(str(dob)) >= 4 else None),
         "gender": gender,
         "weight_kg": weight,
         "mobile_number": mobile,

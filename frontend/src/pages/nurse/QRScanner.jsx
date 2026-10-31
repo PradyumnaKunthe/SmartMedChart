@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
   ArrowLeft,
@@ -23,8 +23,12 @@ import { verifyMedication } from "../../services/qr"
 
 export default function QRScanner() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const scheduleId = searchParams.get("schedule")
+  const targetPatientId = searchParams.get("patient") || location.state?.patientId || null
+  const targetPatientName = location.state?.patientName || null
+  const targetPatientCode = location.state?.patientCode || null
 
   const [patientId, setPatientId] = useState(null)
   const [medicationResult, setMedicationResult] = useState(null)
@@ -35,13 +39,23 @@ export default function QRScanner() {
       setPatientId(verifiedPatientId)
       setMedicationResult(null)
 
+      if (targetPatientId && String(verifiedPatientId) !== String(targetPatientId)) {
+        setMedicationResult({
+          valid: false,
+          patient_id: verifiedPatientId,
+          medication_schedule_id: scheduleId ? Number(scheduleId) : null,
+          message: `Scanned patient ID (${verifiedPatientId}) does not match expected patient (${targetPatientName || targetPatientId}). Verification aborted for patient safety.`,
+        })
+        return
+      }
+
       if (!scheduleId) {
         setMedicationResult({
           valid: true,
           patient_id: verifiedPatientId,
           medication_schedule_id: null,
           message:
-            "Patient identity verified successfully. You can now select a scheduled medication or view their active profile.",
+            "Patient identity verified successfully. The patient is confirmed as eligible for bedside care and rounds.",
         })
         return
       }
@@ -77,11 +91,15 @@ export default function QRScanner() {
         setVerifyingMedication(false)
       }
     },
-    [navigate, scheduleId]
+    [navigate, scheduleId, targetPatientId, targetPatientName]
   )
 
   function goBack() {
-    navigate(scheduleId ? `/nurse/medications/${scheduleId}` : "/nurse/medications")
+    if (scheduleId) {
+      navigate(`/nurse/medications/${scheduleId}`)
+    } else {
+      navigate("/nurse/dashboard")
+    }
   }
 
   return (
@@ -189,6 +207,29 @@ export default function QRScanner() {
           </div>
         </div>
 
+        {/* Target Patient Context */}
+        {targetPatientId && (
+          <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-2xl flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-xs">
+                <User className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  Target Inpatient: {targetPatientName || `Patient #${targetPatientId}`}
+                  {targetPatientCode ? ` (${targetPatientCode})` : ""}
+                </h4>
+                <p className="text-xs text-slate-600">
+                  Scan patient wristband to complete bedside identification and verify shift assignment.
+                </p>
+              </div>
+            </div>
+            <Badge variant="primary" size="sm">
+              Shift Assignment
+            </Badge>
+          </div>
+        )}
+
         {/* Selected Dose Context (if scheduleId exists) */}
         {scheduleId && (
           <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-2xl flex items-center justify-between">
@@ -285,9 +326,16 @@ export default function QRScanner() {
               <Button
                 variant="primary"
                 size="sm"
+                onClick={() => navigate("/nurse/dashboard")}
+              >
+                Return to Nurse Station
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => navigate("/nurse/medications")}
               >
-                View Patient Medication Queue
+                View Medication Queue
               </Button>
             </div>
           </div>

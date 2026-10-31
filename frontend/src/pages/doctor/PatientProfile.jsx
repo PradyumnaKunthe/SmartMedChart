@@ -18,6 +18,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   StopCircle,
+  TrendingUp,
   UserRound,
   XCircle,
 } from "lucide-react"
@@ -39,6 +40,7 @@ import Card, { CardHeader } from "../../components/common/Card"
 import EmptyState from "../../components/common/EmptyState"
 import ErrorState from "../../components/common/ErrorState"
 import Loading from "../../components/common/Loading"
+import Modal from "../../components/common/Modal"
 import StatCard from "../../components/dashboard/StatCard"
 
 import {
@@ -46,7 +48,10 @@ import {
   getPatientAllergies,
   getCurrentMedications,
   getPrescriptionHistory,
+  getDoctorPatientAssessments,
   stopPrescription,
+  createPatientAllergy,
+  deletePatientAllergy,
 } from "../../services/doctor"
 
 function formatDate(value) {
@@ -79,6 +84,7 @@ export default function PatientProfile() {
   const [allergies, setAllergies] = useState([])
   const [medications, setMedications] = useState([])
   const [prescriptions, setPrescriptions] = useState([])
+  const [assessments, setAssessments] = useState([])
 
   const [activeTab, setActiveTab] = useState("medications") // 'medications', 'prescriptions', 'allergies', 'summary'
   const [loading, setLoading] = useState(true)
@@ -86,6 +92,82 @@ export default function PatientProfile() {
   const [error, setError] = useState("")
   const [successMessage, setSuccessMessage] = useState("")
   const [stoppingId, setStoppingId] = useState(null)
+
+  // Allergy modal state
+  const [allergyModalOpen, setAllergyModalOpen] = useState(false)
+  const [savingAllergy, setSavingAllergy] = useState(false)
+  const [allergyError, setAllergyError] = useState("")
+  const [allergyForm, setAllergyForm] = useState({
+    allergen: "",
+    severity: "MODERATE",
+    reaction: "",
+    notes: "",
+  })
+
+  function openAddAllergy() {
+    setAllergyForm({
+      allergen: "",
+      severity: "MODERATE",
+      reaction: "",
+      notes: "",
+    })
+    setAllergyError("")
+    setAllergyModalOpen(true)
+  }
+
+  function handleAllergyChange(event) {
+    const { name, value } = event.target
+    setAllergyForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  async function handleSaveAllergy(event) {
+    event.preventDefault()
+    setAllergyError("")
+
+    if (!allergyForm.allergen.trim()) {
+      setAllergyError("Please enter the drug / allergy name.")
+      return
+    }
+
+    setSavingAllergy(true)
+    try {
+      const payload = {
+        allergen: allergyForm.allergen.trim().toUpperCase(),
+        severity: allergyForm.severity || null,
+        reaction: allergyForm.reaction.trim().toUpperCase() || null,
+        notes: allergyForm.notes.trim() || null,
+      }
+      const result = await createPatientAllergy(patientId, payload)
+      setAllergies((prev) => [...prev, result])
+      setAllergyModalOpen(false)
+      setSuccessMessage(`Allergy "${payload.allergen}" recorded successfully.`)
+      setTimeout(() => setSuccessMessage(""), 4000)
+    } catch (requestError) {
+      setAllergyError(
+        requestError?.response?.data?.detail || "Unable to save allergy record."
+      )
+    } finally {
+      setSavingAllergy(false)
+    }
+  }
+
+  async function handleDeleteAllergy(allergy) {
+    const confirmed = window.confirm(
+      `Remove allergy "${allergy.allergen}" from patient record?`
+    )
+    if (!confirmed) return
+
+    try {
+      await deletePatientAllergy(patientId, allergy.id)
+      setAllergies((prev) => prev.filter((item) => item.id !== allergy.id))
+      setSuccessMessage(`Allergy "${allergy.allergen}" removed.`)
+      setTimeout(() => setSuccessMessage(""), 4000)
+    } catch (requestError) {
+      setError(
+        requestError?.response?.data?.detail || "Unable to delete allergy record."
+      )
+    }
+  }
 
   async function loadProfile(showFullLoading = true) {
     if (!patientId) {
@@ -99,18 +181,20 @@ export default function PatientProfile() {
     setError("")
 
     try {
-      const [patientData, allergyData, medicationData, prescriptionData] =
+      const [patientData, allergyData, medicationData, prescriptionData, assessmentData] =
         await Promise.all([
           getDoctorPatient(patientId),
           getPatientAllergies(patientId),
           getCurrentMedications(patientId),
           getPrescriptionHistory(patientId),
+          getDoctorPatientAssessments(patientId).catch(() => []),
         ])
 
       setPatient(patientData)
       setAllergies(Array.isArray(allergyData) ? allergyData : [])
       setMedications(Array.isArray(medicationData) ? medicationData : [])
       setPrescriptions(Array.isArray(prescriptionData) ? prescriptionData : [])
+      setAssessments(Array.isArray(assessmentData) ? assessmentData : [])
     } catch (requestError) {
       setError(
         requestError?.response?.data?.detail ||
@@ -127,7 +211,12 @@ export default function PatientProfile() {
   }, [patientId])
 
   function handleCreatePrescription() {
-    navigate(`/doctor/prescriptions/create?patient=${patient.id}`)
+    if (patient && (!patient.is_active || patient.lifecycle_status === "DISCHARGED")) {
+      alert("Cannot create prescription for a discharged patient.")
+      return
+    }
+    const targetId = patient?.id || patientId
+    navigate(`/doctor/prescriptions/create?patient=${targetId}`)
   }
 
   function handleEditPrescription(prescription) {
@@ -239,7 +328,7 @@ export default function PatientProfile() {
               icon={Plus}
               onClick={handleCreatePrescription}
             >
-              Write Prescription
+              Write New Prescription
             </Button>
           </div>
         </div>
@@ -418,6 +507,19 @@ export default function PatientProfile() {
             >
               <ShieldAlert className="h-4 w-4" />
               <span>Drug Allergies & Alerts ({allergies.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("recovery")}
+              className={`pb-3.5 border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === "recovery"
+                  ? "border-emerald-600 text-emerald-600"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <TrendingUp className="h-4 w-4" />
+              <span>Recovery Progress ({assessments.length})</span>
             </button>
 
             <button
@@ -667,14 +769,23 @@ export default function PatientProfile() {
                 </p>
               </div>
 
-              <Button
-                variant="outline"
-                size="sm"
-                icon={Plus}
-                onClick={handleCreatePrescription}
-              >
-                Add via Prescription Form
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={Plus}
+                  onClick={openAddAllergy}
+                >
+                  Add Allergy
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCreatePrescription}
+                >
+                  Prescription Form
+                </Button>
+              </div>
             </div>
 
             {allergies.length === 0 ? (
@@ -686,6 +797,11 @@ export default function PatientProfile() {
                 <p className="text-xs text-emerald-700 mt-1 max-w-sm mx-auto">
                   No hypersensitivities or allergic reactions have been logged on this patient chart.
                 </p>
+                <div className="mt-4">
+                  <Button size="sm" variant="outline" icon={Plus} onClick={openAddAllergy}>
+                    Record First Allergy
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -694,7 +810,7 @@ export default function PatientProfile() {
                   return (
                     <div
                       key={allergy.id || index}
-                      className="rounded-2xl border border-rose-200 bg-rose-50/30 p-5 shadow-xs"
+                      className="rounded-2xl border border-rose-200 bg-rose-50/30 p-5 shadow-xs relative group"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3">
@@ -711,15 +827,31 @@ export default function PatientProfile() {
                           </div>
                         </div>
 
-                        <Badge variant={severityVariant} size="sm">
-                          {allergy.severity || "Reported"}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={severityVariant} size="sm">
+                            {allergy.severity || "Reported"}
+                          </Badge>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAllergy(allergy)}
+                            className="text-slate-400 hover:text-rose-600 p-1 rounded-lg transition"
+                            title="Remove Allergy"
+                          >
+                            <XCircle className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
 
                       {allergy.reaction && (
                         <p className="mt-3 text-xs text-slate-700 bg-white p-2.5 rounded-xl border border-rose-100">
                           <span className="font-semibold text-rose-900">Reaction / Symptoms: </span>
                           {allergy.reaction}
+                        </p>
+                      )}
+
+                      {allergy.notes && (
+                        <p className="mt-2 text-xs text-slate-500 italic">
+                          Notes: {allergy.notes}
                         </p>
                       )}
                     </div>
@@ -788,6 +920,399 @@ export default function PatientProfile() {
             </div>
           </div>
         )}
+
+        {/* TAB 5: PATIENT RECOVERY PROGRESS */}
+        {activeTab === "recovery" && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Header info */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <h3 className="font-heading text-lg font-bold text-slate-900">
+                  Patient Recovery Trajectory & Ward Round History
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Bedside recovery scores (0-100%) and clinical round evaluations logged over time
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={TrendingUp}
+                onClick={() => navigate("/doctor/on-round")}
+              >
+                Conduct Round Assessment
+              </Button>
+            </div>
+
+            {/* Metric KPI cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Current Recovery Score
+                </span>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="font-heading text-2xl font-black text-emerald-600">
+                    {assessments.length > 0
+                      ? `${assessments[assessments.length - 1].improvement_percentage}%`
+                      : "—"}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    {assessments.length > 0 &&
+                    assessments[assessments.length - 1].improvement_percentage >= 75
+                      ? "Near Recovery"
+                      : assessments.length > 0 &&
+                        assessments[assessments.length - 1].improvement_percentage >= 50
+                      ? "Moderate Progress"
+                      : assessments.length > 0
+                      ? "Guarded"
+                      : "Unassessed"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Initial Round Score
+                </span>
+                <div className="mt-1 font-heading text-2xl font-black text-slate-800">
+                  {assessments.length > 0 ? `${assessments[0].improvement_percentage}%` : "—"}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Total Assessments
+                </span>
+                <div className="mt-1 font-heading text-2xl font-black text-sky-700">
+                  {assessments.length}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Attending Doctor
+                </span>
+                <div className="mt-1 font-heading text-sm font-bold text-slate-800 truncate">
+                  {assessments.length > 0
+                    ? assessments[assessments.length - 1].doctor_name || "Assigned Physician"
+                    : "Assigned Physician"}
+                </div>
+              </div>
+            </div>
+
+            {/* Line Graph Card */}
+            <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs">
+              <h4 className="font-heading font-bold text-slate-900 text-sm mb-4 flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-emerald-600" />
+                <span>PATIENT RECOVERY PROGRESS GRAPH (0% – 100%)</span>
+              </h4>
+
+              {assessments.length === 0 ? (
+                <EmptyState
+                  icon={TrendingUp}
+                  title="No Recovery Assessments Logged"
+                  description="Conduct bedside evaluations in the Doctor On-Round system to plot the patient's recovery trajectory."
+                  actionLabel="Start On-Round Assessment"
+                  actionIcon={Plus}
+                  onAction={() => navigate("/doctor/on-round")}
+                />
+              ) : (
+                <div className="space-y-4">
+                  {/* Interactive SVG Chart */}
+                  <div className="w-full overflow-x-auto">
+                    <div className="min-w-[500px]">
+                      <svg
+                        viewBox="0 0 650 220"
+                        className="w-full h-56 select-none"
+                      >
+                        <defs>
+                          <linearGradient id="recoveryGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
+                            <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                          </linearGradient>
+                        </defs>
+
+                        {/* Y-axis Grid Lines */}
+                        {[100, 75, 50, 25, 0].map((val) => {
+                          const y = 20 + ((100 - val) / 100) * 160
+                          return (
+                            <g key={val}>
+                              <line
+                                x1="50"
+                                y1={y}
+                                x2="620"
+                                y2={y}
+                                stroke="#f1f5f9"
+                                strokeDasharray={val === 0 ? "none" : "3,3"}
+                                strokeWidth="1"
+                              />
+                              <text
+                                x="40"
+                                y={y + 4}
+                                textAnchor="end"
+                                fontSize="10"
+                                fill="#94a3b8"
+                                fontWeight="bold"
+                              >
+                                {val}%
+                              </text>
+                            </g>
+                          )
+                        })}
+
+                        {/* Render Polyline & Area */}
+                        {(() => {
+                          const padX = 70
+                          const usableW = 530
+                          const count = assessments.length
+                          const pts = assessments.map((a, i) => {
+                            const x = count === 1 ? padX + usableW / 2 : padX + (i / (count - 1)) * usableW
+                            const pct = Math.max(0, Math.min(100, a.improvement_percentage))
+                            const y = 20 + ((100 - pct) / 100) * 160
+                            return { x, y, pct, date: a.created_at, note: a.clinical_notes, doc: a.doctor_name }
+                          })
+
+                          const pointsStr = pts.map((p) => `${p.x},${p.y}`).join(" ")
+                          const areaStr = `${pointsStr} ${pts[pts.length - 1].x},180 ${pts[0].x},180`
+
+                          return (
+                            <g>
+                              {/* Filled Area */}
+                              <polygon points={areaStr} fill="url(#recoveryGradient)" />
+
+                              {/* Curve line */}
+                              <polyline
+                                fill="none"
+                                stroke="#10b981"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                points={pointsStr}
+                              />
+
+                              {/* Data Points */}
+                              {pts.map((p, idx) => (
+                                <g key={idx} className="group cursor-pointer">
+                                  <circle
+                                    cx={p.x}
+                                    cy={p.y}
+                                    r="6"
+                                    fill="#ffffff"
+                                    stroke="#10b981"
+                                    strokeWidth="3"
+                                    className="transition-all hover:r-8 hover:fill-emerald-500 hover:stroke-white shadow-sm"
+                                  />
+                                  <text
+                                    x={p.x}
+                                    y={p.y - 12}
+                                    textAnchor="middle"
+                                    fontSize="11"
+                                    fontWeight="bold"
+                                    fill="#065f46"
+                                  >
+                                    {p.pct}%
+                                  </text>
+                                  <text
+                                    x={p.x}
+                                    y={198}
+                                    textAnchor="middle"
+                                    fontSize="9"
+                                    fill="#64748b"
+                                  >
+                                    {formatDate(p.date).split(",")[0]}
+                                  </text>
+                                </g>
+                              ))}
+                            </g>
+                          )
+                        })()}
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Historical Assessments List */}
+            {assessments.length > 0 && (
+              <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs space-y-4">
+                <h4 className="font-heading font-bold text-slate-900 text-sm">
+                  Clinical Ward Round Assessments Log ({assessments.length})
+                </h4>
+
+                <div className="space-y-3">
+                  {[...assessments].reverse().map((item, idx) => (
+                    <div
+                      key={item.id || idx}
+                      className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4 transition hover:bg-slate-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900">
+                            Assessment #{item.id || idx + 1}
+                          </span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-500 font-medium">
+                            By {item.doctor_name || "Attending Physician"}
+                          </span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-400">
+                            {formatDate(item.created_at)}
+                          </span>
+                        </div>
+                        {item.clinical_notes && (
+                          <p className="text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200/60 mt-1.5 leading-relaxed">
+                            <span className="font-semibold text-slate-900">Round Notes: </span>
+                            {item.clinical_notes}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Badge
+                          variant={
+                            item.improvement_percentage >= 75
+                              ? "success"
+                              : item.improvement_percentage >= 50
+                              ? "info"
+                              : item.improvement_percentage >= 25
+                              ? "warning"
+                              : "danger"
+                          }
+                          size="md"
+                        >
+                          {item.improvement_percentage}% Recovery
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Record Patient Allergy Modal */}
+        <Modal
+          open={allergyModalOpen}
+          isOpen={allergyModalOpen}
+          onClose={() => setAllergyModalOpen(false)}
+          title="RECORD DRUG / SUBSTANCE ALLERGY"
+          subtitle="Document a verified allergy or hypersensitivity to protect patient safety during prescribing."
+        >
+          <form onSubmit={handleSaveAllergy} className="space-y-4">
+            {allergyError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+                {allergyError}
+              </div>
+            )}
+
+            <div>
+              <label
+                htmlFor="profile_allergen"
+                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+              >
+                DRUG / ALLERGEN NAME <span className="text-rose-500">*</span>
+              </label>
+              <input
+                id="profile_allergen"
+                name="allergen"
+                type="text"
+                required
+                placeholder="E.G. PENICILLIN, SULFA DRUGS, PARACETAMOL"
+                value={allergyForm.allergen}
+                onChange={(e) =>
+                  setAllergyForm((prev) => ({
+                    ...prev,
+                    allergen: e.target.value.toUpperCase(),
+                  }))
+                }
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="profile_severity"
+                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+              >
+                CLINICAL SEVERITY
+              </label>
+              <select
+                id="profile_severity"
+                name="severity"
+                value={allergyForm.severity}
+                onChange={handleAllergyChange}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase font-medium"
+              >
+                <option value="LOW">LOW</option>
+                <option value="MODERATE">MODERATE</option>
+                <option value="HIGH">HIGH</option>
+                <option value="SEVERE">SEVERE / ANAPHYLACTIC</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="profile_reaction"
+                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+              >
+                OBSERVED REACTION
+              </label>
+              <input
+                id="profile_reaction"
+                name="reaction"
+                type="text"
+                placeholder="E.G. URTICARIA, RASH, BRONCHOSPASM, SWELLING"
+                value={allergyForm.reaction}
+                onChange={(e) =>
+                  setAllergyForm((prev) => ({
+                    ...prev,
+                    reaction: e.target.value.toUpperCase(),
+                  }))
+                }
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="profile_allergy_notes"
+                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+              >
+                CLINICAL NOTES
+              </label>
+              <textarea
+                id="profile_allergy_notes"
+                name="notes"
+                rows={2}
+                placeholder="ADDITIONAL DETAILS CONCERNING PREVIOUS EXPOSURE..."
+                value={allergyForm.notes}
+                onChange={handleAllergyChange}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none uppercase"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAllergyModalOpen(false)}
+              >
+                CANCEL
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                loading={savingAllergy}
+              >
+                RECORD ALLERGY
+              </Button>
+            </div>
+          </form>
+        </Modal>
       </div>
     </MainLayout>
   )

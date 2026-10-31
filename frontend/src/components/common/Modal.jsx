@@ -3,19 +3,33 @@ import { X } from "lucide-react"
 
 export default function Modal({
   open,
+  isOpen,
   onClose,
   title,
   subtitle,
   children,
   maxWidth = "max-w-xl",
+  size,
 }) {
+  const isVisible = Boolean(open ?? isOpen)
+
+  // Support legacy 'size' prop (sm, md, lg, xl, 2xl)
+  const sizeMap = {
+    sm: "max-w-md",
+    md: "max-w-xl",
+    lg: "max-w-2xl",
+    xl: "max-w-4xl",
+    "2xl": "max-w-5xl",
+  }
+  const resolvedMaxWidth = (size && sizeMap[size]) || maxWidth
+
   useEffect(() => {
     function handleKeyDown(e) {
-      if (e.key === "Escape" && open) {
+      if (e.key === "Escape" && isVisible) {
         onClose?.()
       }
     }
-    if (open) {
+    if (isVisible) {
       document.body.style.overflow = "hidden"
       window.addEventListener("keydown", handleKeyDown)
     }
@@ -23,9 +37,9 @@ export default function Modal({
       document.body.style.overflow = "unset"
       window.removeEventListener("keydown", handleKeyDown)
     }
-  }, [open, onClose])
+  }, [isVisible, onClose])
 
-  if (!open) return null
+  if (!isVisible) return null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
@@ -39,7 +53,7 @@ export default function Modal({
       <div
         role="dialog"
         aria-modal="true"
-        className={`relative w-full ${maxWidth} rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl transition-all my-8 z-10`}
+        className={`relative w-full ${resolvedMaxWidth} rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl transition-all my-8 z-10`}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4 mb-5">
           <div>

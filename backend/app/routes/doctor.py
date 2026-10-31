@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timedelta
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.mongo_client import mongo_db
 from app.security import require_permission
@@ -16,6 +17,15 @@ from app.schemas.prescription import PrescriptionCreate
 from app.schemas.prescription_history import PrescriptionHistoryResponse
 from app.schemas.prescription_update import PrescriptionUpdate
 
+
+class RoundVerifyQRRequest(BaseModel):
+    qr_token: str
+
+
+class RoundAssessmentCreate(BaseModel):
+    patient_id: int
+    improvement_percentage: int = Field(..., ge=0, le=100)
+    clinical_notes: str | None = None
 
 router = APIRouter(
     prefix="/api/doctor",
@@ -90,55 +100,73 @@ def patient_response(patient):
     }
 
 
-def get_doctor_patient_or_404(patient_id: int, current_user):
+def get_doctor_patient_or_404(patient_id: Any, current_user):
     """
     Return only an active patient assigned to the
     currently logged-in doctor through an active encounter.
     """
+    queries = [{"patient_id": str(patient_id).strip()}]
+    try:
+        numeric_id = int(patient_id)
+        queries.extend([{"_id": numeric_id}, {"id": numeric_id}])
+    except (ValueError, TypeError):
+        pass
 
-    patient = mongo_db.patients.find_one({
-        "_id": patient_id,
-        "is_active": active_filter(),
-    })
+    patient = mongo_db.patients.find_one({"$or": queries})
 
     if patient is None:
         raise HTTPException(
             status_code=404,
-            detail="Patient is not assigned to this doctor.",
+            detail="Patient not found.",
         )
 
+    if not mongo_bool(patient.get("is_active")) or patient.get("lifecycle_status") == "DISCHARGED":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot create prescription for a discharged patient.",
+        )
+
+    actual_id = int(patient.get("id", patient.get("_id")))
+
     encounter = mongo_db.encounters.find_one({
-        "patient_id": patient_id,
+        "patient_id": actual_id,
         "doctor_id": current_user.id,
         "status": "ACTIVE",
     })
 
     if encounter is None:
         raise HTTPException(
-            status_code=404,
+            status_code=403,
             detail="Patient is not assigned to this doctor.",
         )
 
     return patient
 
 
-def get_doctor_patient_history_or_404(patient_id: int, current_user):
+def get_doctor_patient_history_or_404(patient_id: Any, current_user):
     """
     Verify that the patient exists and has at least one clinical
     encounter linked to the logged-in doctor (active or discharged).
     """
-    patient = mongo_db.patients.find_one({
-        "$or": [{"_id": patient_id}, {"id": patient_id}],
-    })
+    queries = [{"patient_id": str(patient_id).strip()}]
+    try:
+        numeric_id = int(patient_id)
+        queries.extend([{"_id": numeric_id}, {"id": numeric_id}])
+    except (ValueError, TypeError):
+        pass
+
+    patient = mongo_db.patients.find_one({"$or": queries})
 
     if patient is None:
         raise HTTPException(
             status_code=404,
-            detail="Patient is not assigned to this doctor.",
+            detail="Patient not found.",
         )
 
+    actual_id = int(patient.get("id", patient.get("_id")))
+
     encounter = mongo_db.encounters.find_one({
-        "patient_id": patient_id,
+        "patient_id": actual_id,
         "doctor_id": current_user.id,
     })
 
@@ -345,10 +373,12 @@ def search_patients(
     query = {
         "_id": {"$in": patient_ids},
         "is_active": active_filter(),
+        "lifecycle_status": {"$ne": "DISCHARGED"},
     }
 
-    if search:
-        pattern = re.escape(search.strip())
+    search_term = None if (search is None or hasattr(search, 'default')) else str(search).strip()
+    if search_term:
+        pattern = re.escape(search_term)
 
         query["$or"] = [
             {"patient_id": {"$regex": pattern, "$options": "i"}},
@@ -378,7 +408,7 @@ def search_patients(
     response_model=PatientSearchResponse,
 )
 def get_patient(
-    patient_id: int,
+    patient_id: str,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
     patient = get_doctor_patient_or_404(
@@ -398,7 +428,7 @@ def get_patient(
     response_model=list[AllergyResponse],
 )
 def get_patient_allergies(
-    patient_id: int,
+    patient_id: str,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
     get_doctor_patient_or_404(
@@ -434,7 +464,7 @@ def get_patient_allergies(
     response_model=list[CurrentMedicationResponse],
 )
 def get_current_medications(
-    patient_id: int,
+    patient_id: str,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
     get_doctor_patient_or_404(
@@ -572,24 +602,55 @@ def get_medicines(
 ):
     medicines = list(
         mongo_db.medicines.find({
-            "is_active": active_filter()
+            "is_active": active_filter(),
+            "is_archived": {"$ne": True},
+            "is_test": {"$ne": True},
+            "name": {"$not": {"$regex": "^(test |duplicate |status test)", "$options": "i"}},
         }).sort("name", 1)
     )
 
-    return [
-        {
+    result = []
+    for medicine in medicines:
+        # Calculate real-time available stock across active batches
+        batches = list(
+            mongo_db.medicine_batches.find({
+                "medicine_id": medicine["id"],
+                "status": "ACTIVE",
+                "current_quantity": {"$gt": 0},
+            })
+        )
+        batch_stock = sum(int(b.get("current_quantity", 0)) for b in batches)
+        total_stock = max(int(medicine.get("total_stock", 0)), batch_stock)
+        min_level = int(medicine.get("min_stock_level") or 10)
+
+        if total_stock == 0:
+            stock_status = "OUT OF STOCK"
+        elif total_stock <= min_level:
+            stock_status = "LOW STOCK"
+        else:
+            stock_status = "IN STOCK"
+
+        result.append({
             "id": medicine["id"],
             "name": medicine.get("name"),
             "generic_name": medicine.get("generic_name"),
+            "brand_name": medicine.get("brand_name"),
             "strength": medicine.get("strength"),
             "dosage_form": medicine.get("dosage_form"),
+            "unit": medicine.get("unit") or "Tablets",
+            "category": medicine.get("category") or "General",
+            "min_stock_level": min_level,
+            "supplier": medicine.get("supplier"),
+            "total_stock": total_stock,
+            "stock_status": stock_status,
             "description": medicine.get("description"),
             "is_active": mongo_bool(medicine.get("is_active")),
+            "is_archived": bool(medicine.get("is_archived", False)),
             "created_at": medicine.get("created_at"),
             "updated_at": medicine.get("updated_at"),
-        }
-        for medicine in medicines
-    ]
+        })
+
+    return result
 
 
 # =========================================================
@@ -635,6 +696,24 @@ def create_prescription(
             detail=str(error),
         ) from error
 
+    # Duplicate check: check if identical active prescription exists
+    active_rx_ids = mongo_db.prescriptions.distinct(
+        "_id",
+        {"patient_id": patient["id"], "status": "ACTIVE"}
+    )
+    if active_rx_ids:
+        duplicate = mongo_db.prescription_items.find_one({
+            "prescription_id": {"$in": active_rx_ids},
+            "medicine_id": medicine["id"],
+            "dose": request.dose.strip(),
+            "frequency": frequency,
+            "status": "ACTIVE",
+        })
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail=f"An active prescription for {medicine.get('name')} ({request.dose}) already exists for this patient. Please review active regimens to avoid duplicate orders.",
+            )
     now = mongo_now()
 
     prescription_id = next_mongo_id("prescriptions")
@@ -705,6 +784,61 @@ def create_prescription(
                 schedule_records
             )
 
+        # Handle inpatient admission & bed allocation if requested
+        bed_info = None
+        if getattr(request, "admit_patient", False) and request.ward_id and request.bed_id:
+            ward = mongo_db.wards.find_one({"_id": request.ward_id, "is_active": active_filter()})
+            if not ward:
+                raise HTTPException(404, "Selected ward not found or inactive.")
+            bed = mongo_db.beds.find_one({"_id": request.bed_id, "ward_id": request.ward_id, "is_active": active_filter()})
+            if not bed:
+                raise HTTPException(404, "Selected bed not found or inactive.")
+            
+            # Check for double allocation
+            occupant = bed.get("occupied_by_patient_id")
+            if mongo_bool(bed.get("is_occupied")) and occupant not in (None, patient["id"]):
+                raise HTTPException(400, "Selected bed is already occupied by another patient.")
+            
+            # Release previous bed if patient was assigned elsewhere
+            if patient.get("bed_id") and patient.get("bed_id") != request.bed_id:
+                mongo_db.beds.update_one(
+                    {"_id": patient["bed_id"]},
+                    {"$set": {"is_occupied": 0, "occupied_by_patient_id": None, "updated_at": now}}
+                )
+
+            # Assign new bed
+            mongo_db.beds.update_one(
+                {"_id": request.bed_id},
+                {"$set": {"is_occupied": 1, "occupied_by_patient_id": patient["id"], "updated_at": now}}
+            )
+
+            # Update patient record
+            mongo_db.patients.update_one(
+                {"_id": patient["id"]},
+                {"$set": {
+                    "ward_id": request.ward_id,
+                    "bed_id": request.bed_id,
+                    "is_admitted": True,
+                    "admission_date": now,
+                    "updated_at": now
+                }}
+            )
+
+            # Update active encounter
+            mongo_db.encounters.update_many(
+                {"patient_id": patient["id"], "status": "ACTIVE"},
+                {"$set": {"ward_id": request.ward_id, "bed_id": request.bed_id, "updated_at": now}}
+            )
+            bed_info = {"ward_id": request.ward_id, "bed_id": request.bed_id, "ward_name": ward.get("name"), "bed_number": bed.get("bed_number")}
+
+    except HTTPException:
+        if created_schedule_ids:
+            mongo_db.medication_schedules.delete_many({
+                "_id": {"$in": created_schedule_ids}
+            })
+        mongo_db.prescription_items.delete_one({"_id": item_id})
+        mongo_db.prescriptions.delete_one({"_id": prescription_id})
+        raise
     except Exception as exc:
         if created_schedule_ids:
             mongo_db.medication_schedules.delete_many({
@@ -740,6 +874,7 @@ def create_prescription(
         "start_time": item["start_time"],
         "is_stat": item["is_stat"],
         "schedule_count": len(schedule_records),
+        "bed_assignment": bed_info,
     }
 
 
@@ -973,7 +1108,7 @@ def stop_prescription(
     response_model=list[PrescriptionHistoryResponse],
 )
 def get_prescription_history(
-    patient_id: int,
+    patient_id: str,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
     get_doctor_patient_history_or_404(
@@ -1030,3 +1165,318 @@ def get_prescription_history(
             })
 
     return result
+
+
+# =========================================================
+# DOCTOR ON-ROUND SYSTEM
+# =========================================================
+
+@router.post("/rounds/verify-qr")
+def doctor_verify_round_qr(
+    request: RoundVerifyQRRequest,
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    Verify a patient wristband QR during doctor ward rounds.
+    Confirms patient identity, bed allocation, and assigned encounter.
+    """
+    token = request.qr_token.strip()
+    if not token:
+        return {"valid": False, "message": "QR token is required."}
+
+    patient = mongo_db.patients.find_one({
+        "qr_token": token,
+        "qr_is_active": active_filter(),
+        "is_active": active_filter(),
+    })
+
+    if not patient:
+        return {
+            "valid": False,
+            "message": "Invalid or inactive patient wristband QR. Ensure patient is currently admitted.",
+        }
+
+    p_id = int(patient.get("id", patient.get("_id")))
+
+    # Verify patient has an active encounter assigned to this doctor
+    encounter = mongo_db.encounters.find_one({
+        "patient_id": p_id,
+        "doctor_id": current_user.id,
+        "status": "ACTIVE",
+    })
+
+    if not encounter:
+        return {
+            "valid": False,
+            "patient_id": p_id,
+            "message": f"Patient #{patient.get('patient_id')} is not assigned to your clinical roster.",
+        }
+
+    # Fetch ward and bed details
+    ward_name = None
+    bed_number = None
+    if patient.get("ward_id"):
+        ward = mongo_db.wards.find_one({"_id": patient["ward_id"]})
+        if ward:
+            ward_name = ward.get("name")
+    if patient.get("bed_id"):
+        bed = mongo_db.beds.find_one({"_id": patient["bed_id"]})
+        if bed:
+            bed_number = bed.get("bed_number")
+
+    # Allergies
+    allergies = list(mongo_db.patient_allergies.find({"patient_id": p_id}))
+    for a in allergies:
+        a["id"] = a.get("id", a.get("_id"))
+        if "_id" in a:
+            del a["_id"]
+
+    # Active Prescriptions
+    active_rx = list(mongo_db.prescriptions.find({"patient_id": p_id, "status": "ACTIVE"}))
+    rx_items = []
+    for rx in active_rx:
+        rx_id = rx.get("id", rx.get("_id"))
+        items = list(mongo_db.prescription_items.find({"prescription_id": rx_id, "status": "ACTIVE"}))
+        for it in items:
+            med = mongo_db.medicines.find_one({"_id": it.get("medicine_id")})
+            rx_items.append({
+                "prescription_id": rx_id,
+                "medicine_name": med.get("name") if med else "Unknown",
+                "dose": it.get("dose"),
+                "route": it.get("route"),
+                "frequency": it.get("frequency"),
+                "instructions": it.get("instructions"),
+                "is_stat": it.get("is_stat", False),
+            })
+
+    # Upcoming medication schedules
+    active_items_ids = [it.get("id", it.get("_id")) for it in mongo_db.prescription_items.find({"prescription_id": {"$in": [r.get("id", r.get("_id")) for r in active_rx]}})]
+    schedules = list(mongo_db.medication_schedules.find({
+        "prescription_item_id": {"$in": active_items_ids},
+        "status": {"$in": ["UPCOMING", "SCHEDULED", "DUE", "PENDING"]},
+    }).sort([("scheduled_date", 1), ("scheduled_time", 1)]).limit(5))
+    for s in schedules:
+        s["id"] = s.get("id", s.get("_id"))
+        if "_id" in s:
+            del s["_id"]
+
+    # Past assessments
+    past_assessments = list(mongo_db.patient_round_assessments.find({
+        "patient_id": p_id,
+    }).sort("created_at", 1))
+    for pa in past_assessments:
+        pa["id"] = pa.get("id", pa.get("_id"))
+        if "_id" in pa:
+            del pa["_id"]
+
+    last_assessment = past_assessments[-1] if past_assessments else None
+
+    first = patient.get("first_name", "")
+    last = patient.get("last_name", "")
+    full_name = f"{first} {last}".strip() or "Inpatient"
+
+    return {
+        "valid": True,
+        "message": "Patient wristband verified successfully. Active encounter confirmed for doctor rounds.",
+        "patient": {
+            "id": p_id,
+            "patient_id": patient.get("patient_id"),
+            "full_name": full_name,
+            "gender": patient.get("gender"),
+            "date_of_birth": patient.get("date_of_birth"),
+            "weight_kg": patient.get("weight_kg"),
+            "ward_id": patient.get("ward_id"),
+            "ward_name": ward_name,
+            "bed_id": patient.get("bed_id"),
+            "bed_number": bed_number,
+            "admission_date": patient.get("admission_date") or encounter.get("admitted_at"),
+            "chief_complaint": encounter.get("chief_complaint"),
+            "symptom_duration": encounter.get("symptom_duration"),
+            "symptom_severity": encounter.get("symptom_severity"),
+            "allergies": allergies,
+            "active_prescriptions": rx_items,
+            "upcoming_schedules": schedules,
+            "past_assessments": past_assessments,
+            "last_assessment": last_assessment,
+        }
+    }
+
+
+@router.get("/rounds/patients")
+def get_doctor_round_patients(
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    List all active inpatients assigned to the doctor with their
+    latest recovery assessment and bed allocation for ward rounds.
+    """
+    patient_ids = mongo_db.encounters.distinct(
+        "patient_id",
+        {
+            "doctor_id": current_user.id,
+            "status": "ACTIVE",
+        },
+    )
+
+    if not patient_ids:
+        return []
+
+    patients = list(mongo_db.patients.find({
+        "_id": {"$in": patient_ids},
+        "is_active": active_filter(),
+        "lifecycle_status": {"$ne": "DISCHARGED"},
+    }).sort([("last_name", 1), ("first_name", 1)]))
+
+    results = []
+    for p in patients:
+        p_id = int(p.get("id", p.get("_id")))
+        enc = mongo_db.encounters.find_one({
+            "patient_id": p_id,
+            "doctor_id": current_user.id,
+            "status": "ACTIVE",
+        })
+
+        ward_name = None
+        bed_number = None
+        if p.get("ward_id"):
+            w = mongo_db.wards.find_one({"_id": p["ward_id"]})
+            if w:
+                ward_name = w.get("name")
+        if p.get("bed_id"):
+            b = mongo_db.beds.find_one({"_id": p["bed_id"]})
+            if b:
+                bed_number = b.get("bed_number")
+
+        assessments = list(mongo_db.patient_round_assessments.find({
+            "patient_id": p_id,
+        }).sort("created_at", -1).limit(1))
+
+        last_assessment = None
+        if assessments:
+            la = assessments[0]
+            last_assessment = {
+                "id": la.get("id", la.get("_id")),
+                "improvement_percentage": la.get("improvement_percentage"),
+                "clinical_notes": la.get("clinical_notes"),
+                "doctor_name": la.get("doctor_name"),
+                "created_at": la.get("created_at"),
+            }
+
+        total_assessments = mongo_db.patient_round_assessments.count_documents({
+            "patient_id": p_id,
+        })
+
+        first = p.get("first_name", "")
+        last = p.get("last_name", "")
+        full_name = f"{first} {last}".strip() or "Inpatient"
+
+        results.append({
+            "id": p_id,
+            "patient_id": p.get("patient_id"),
+            "full_name": full_name,
+            "gender": p.get("gender"),
+            "date_of_birth": p.get("date_of_birth"),
+            "ward_id": p.get("ward_id"),
+            "ward_name": ward_name,
+            "bed_id": p.get("bed_id"),
+            "bed_number": bed_number,
+            "admitted_at": enc.get("admitted_at") if enc else p.get("admission_date"),
+            "chief_complaint": enc.get("chief_complaint") if enc else None,
+            "last_assessment": last_assessment,
+            "assessment_count": total_assessments,
+            "qr_token": p.get("qr_token"),
+        })
+
+    return results
+
+
+@router.post("/rounds/assessments")
+def create_round_assessment(
+    request: RoundAssessmentCreate,
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    Record a bedside recovery assessment (0-100% improvement, clinical notes,
+    timestamp and doctor ID) during ward rounds.
+    """
+    p_id = request.patient_id
+
+    patient = mongo_db.patients.find_one({
+        "_id": p_id,
+        "is_active": active_filter(),
+    })
+    if not patient:
+        raise HTTPException(status_code=404, detail="Active patient not found.")
+
+    encounter = mongo_db.encounters.find_one({
+        "patient_id": p_id,
+        "doctor_id": current_user.id,
+        "status": "ACTIVE",
+    })
+    if not encounter:
+        raise HTTPException(
+            status_code=403,
+            detail="Patient is not assigned to your active clinical roster.",
+        )
+
+    now = mongo_now()
+    assessment_id = next_mongo_id("patient_round_assessments")
+
+    doc = {
+        "_id": assessment_id,
+        "id": assessment_id,
+        "patient_id": p_id,
+        "encounter_id": encounter.get("id", encounter.get("_id")),
+        "doctor_id": current_user.id,
+        "doctor_name": getattr(current_user, "full_name", None) or getattr(current_user, "username", "Attending Doctor"),
+        "improvement_percentage": int(request.improvement_percentage),
+        "clinical_notes": (request.clinical_notes or "").strip() or None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    mongo_db.patient_round_assessments.insert_one(doc)
+
+    return {
+        "message": "Patient recovery assessment saved successfully.",
+        "assessment": {
+            "id": assessment_id,
+            "patient_id": p_id,
+            "doctor_id": current_user.id,
+            "doctor_name": doc["doctor_name"],
+            "improvement_percentage": doc["improvement_percentage"],
+            "clinical_notes": doc["clinical_notes"],
+            "created_at": now,
+        }
+    }
+
+
+@router.get("/patients/{patient_id}/assessments")
+def get_patient_round_assessments(
+    patient_id: int,
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    Retrieve historical recovery assessments for a patient sorted chronologically.
+    Allows viewing progress across rounds, even after discharge.
+    """
+    get_doctor_patient_history_or_404(patient_id, current_user)
+
+    assessments = list(mongo_db.patient_round_assessments.find({
+        "patient_id": patient_id,
+    }).sort("created_at", 1))
+
+    results = []
+    for a in assessments:
+        results.append({
+            "id": a.get("id", a.get("_id")),
+            "patient_id": a.get("patient_id"),
+            "encounter_id": a.get("encounter_id"),
+            "doctor_id": a.get("doctor_id"),
+            "doctor_name": a.get("doctor_name"),
+            "improvement_percentage": a.get("improvement_percentage"),
+            "clinical_notes": a.get("clinical_notes"),
+            "created_at": a.get("created_at"),
+        })
+
+    return results

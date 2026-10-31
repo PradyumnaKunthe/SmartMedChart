@@ -68,7 +68,19 @@ function formatAmount(value) {
   return `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
 }
 
-export default function PatientManagement() {
+function formatApiError(err, fallbackMessage) {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === "string") return detail
+  if (Array.isArray(detail)) {
+    return detail.map((d) => d?.msg || d?.message || JSON.stringify(d)).join(", ")
+  }
+  if (detail && typeof detail === "object") {
+    return detail?.message || detail?.msg || JSON.stringify(detail)
+  }
+  return err?.message || fallbackMessage
+}
+
+export default function PatientManagement({ defaultTab = 'active' }) {
   const [data, setData] = useState({
     active: [],
     discharged: [],
@@ -78,9 +90,12 @@ export default function PatientManagement() {
     },
   })
 
-  const [tab, setTab] = useState("all") // 'all', 'active', 'discharged', 'pending_bill'
+  const [tab, setTab] = useState(defaultTab) // 'all', 'active', 'discharged', 'pending_bill'
   const [search, setSearch] = useState("")
-  const [sortBy, setSortBy] = useState("name_asc") // 'name_asc', 'name_desc', 'id_asc', 'bill_desc'
+  const [sortBy, setSortBy] = useState("name_asc")
+  useEffect(() => {
+    if (defaultTab) setTab(defaultTab)
+  }, [defaultTab]) // 'name_asc', 'name_desc', 'id_asc', 'bill_desc'
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 10
 
@@ -137,11 +152,13 @@ export default function PatientManagement() {
 
   // Filtered & Sorted List
   const filteredPatients = useMemo(() => {
-    let source = allPatients
-    if (tab === "active") source = activePatients
-    else if (tab === "discharged") source = dischargedPatients
-    else if (tab === "pending_bill") {
-      source = allPatients.filter((p) => (p.billing?.bill_status || "PENDING") === "PENDING")
+    let source = activePatients
+    if (tab === "discharged") {
+      source = dischargedPatients
+    } else if (tab === "pending_bill") {
+      source = activePatients.filter((p) => (p.billing?.bill_status || "PENDING") === "PENDING")
+    } else {
+      source = activePatients
     }
 
     const q = search.trim().toLowerCase()
@@ -193,7 +210,7 @@ export default function PatientManagement() {
       setBillingPatient(null)
       await loadPatients(true)
     } catch (err) {
-      alert(err?.response?.data?.detail || "Unable to update bill.")
+      alert(formatApiError(err, "Unable to update bill."))
     } finally {
       setBillingBusy(false)
     }
@@ -208,7 +225,7 @@ export default function PatientManagement() {
       setActionMessage(`Bill marked as paid for ${patient.full_name}.`)
       await loadPatients(true)
     } catch (err) {
-      alert(err?.response?.data?.detail || "Unable to mark bill as paid.")
+      alert(formatApiError(err, "Unable to mark bill as paid."))
     }
   }
 
@@ -218,12 +235,14 @@ export default function PatientManagement() {
     setActionMessage("")
 
     try {
-      await dischargePatient(dischargePatientData.id, dischargeReason || "Treatment completed")
+      await dischargePatient(dischargePatientData.id, {
+        discharge_reason: dischargeReason || "Treatment completed",
+      })
       setActionMessage(`Patient ${dischargePatientData.full_name} discharged successfully.`)
       setDischargePatientData(null)
       await loadPatients(true)
     } catch (err) {
-      alert(err?.response?.data?.detail || "Unable to discharge patient.")
+      alert(formatApiError(err, "Unable to discharge patient."))
     } finally {
       setDischargeBusy(false)
     }
@@ -238,7 +257,7 @@ export default function PatientManagement() {
       const result = await getPatientHistory(patient.id)
       setHistory(result)
     } catch (err) {
-      alert(err?.response?.data?.detail || "Unable to load patient history.")
+      alert(formatApiError(err, "Unable to load patient history."))
     } finally {
       setHistoryLoading(false)
     }
@@ -331,20 +350,6 @@ export default function PatientManagement() {
               <button
                 type="button"
                 onClick={() => {
-                  setTab("all")
-                  setCurrentPage(1)
-                }}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
-                  tab === "all"
-                    ? "bg-slate-900 text-white shadow-xs"
-                    : "text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                All Records ({allPatients.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => {
                   setTab("active")
                   setCurrentPage(1)
                 }}
@@ -368,7 +373,7 @@ export default function PatientManagement() {
                     : "text-slate-600 hover:bg-slate-100"
                 }`}
               >
-                Discharged ({data.counts.discharged})
+                Discharged Patients ({data.counts.discharged})
               </button>
               <button
                 type="button"

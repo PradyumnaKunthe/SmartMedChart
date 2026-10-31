@@ -1,7 +1,9 @@
 
 from datetime import datetime
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
@@ -99,7 +101,7 @@ def require_ward_read_permission(
     }
 
     if not (
-        {"MANAGE_SYSTEM", "REGISTER_PATIENT"}
+        {"MANAGE_SYSTEM", "REGISTER_PATIENT", "CREATE_PRESCRIPTION", "VIEW_PATIENT"}
         & permission_names
     ):
         raise HTTPException(
@@ -108,6 +110,26 @@ def require_ward_read_permission(
                 "Permission required to view "
                 "hospital wards and beds."
             ),
+        )
+
+    return current_user
+
+
+def require_bed_assignment_permission(
+    current_user=Depends(get_current_user),
+):
+    permission_names = {
+        permission.name
+        for permission in current_user.role.permissions
+    }
+
+    if not (
+        {"MANAGE_SYSTEM", "REGISTER_PATIENT", "CREATE_PRESCRIPTION"}
+        & permission_names
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Permission required to assign or release hospital beds.",
         )
 
     return current_user
@@ -380,7 +402,8 @@ def get_patients(
 
     patients = list(
         mongo_db.patients.find({
-            "is_active": active_filter()
+            "is_active": active_filter(),
+            "lifecycle_status": {"$ne": "DISCHARGED"},
         }).sort([
             ("first_name", 1),
             ("last_name", 1),
@@ -434,7 +457,12 @@ def get_assignments(
             "_id": assignment["patient_id"]
         })
 
-        if nurse is None or patient is None:
+        if (
+            nurse is None
+            or patient is None
+            or not mongo_bool(patient.get("is_active"))
+            or patient.get("lifecycle_status") == "DISCHARGED"
+        ):
             continue
 
         result.append({
@@ -935,7 +963,8 @@ def get_patient_lifecycle(
 ):
     active_patients = list(
         mongo_db.patients.find({
-            "is_active": active_filter()
+            "is_active": active_filter(),
+            "lifecycle_status": {"$ne": "DISCHARGED"},
         }).sort([
             ("first_name", 1),
             ("last_name", 1),
@@ -944,7 +973,10 @@ def get_patient_lifecycle(
 
     discharged_patients = list(
         mongo_db.patients.find({
-            "is_active": {"$in": [False, 0]}
+            "$or": [
+                {"is_active": {"$in": [False, 0]}},
+                {"lifecycle_status": "DISCHARGED"},
+            ]
         }).sort("updated_at", -1)
     )
 
@@ -985,6 +1017,49 @@ def get_patient_lifecycle(
             "active": len(active_patients),
             "discharged": len(discharged_patients),
         },
+    }
+
+
+@router.get("/patients/discharged")
+def get_discharged_patients(
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
+):
+    require_admin_permission(current_user)
+
+    discharged_patients = list(
+        mongo_db.patients.find({
+            "$or": [
+                {"is_active": {"$in": [False, 0]}},
+                {"lifecycle_status": "DISCHARGED"},
+            ]
+        }).sort("discharged_at", -1)
+    )
+
+    def patient_summary(patient):
+        billing = mongo_db.patient_billing.find_one({
+            "patient_id": patient["id"]
+        })
+
+        latest_encounter = mongo_db.encounters.find_one(
+            {"patient_id": patient["id"]},
+            sort=[("discharged_at", -1), ("created_at", -1)],
+        )
+
+        data = serialize_patient(patient)
+        data.update({
+            "billing": serialize_billing(billing),
+            "encounter": serialize_encounter(latest_encounter),
+            "discharged_at": patient.get("discharged_at"),
+            "discharge_reason": patient.get("discharge_reason"),
+        })
+        return data
+
+    return {
+        "count": len(discharged_patients),
+        "discharged": [
+            patient_summary(patient)
+            for patient in discharged_patients
+        ],
     }
 
 
@@ -1155,7 +1230,7 @@ def mark_patient_bill_paid(
 @router.post("/patients/{patient_id}/discharge")
 def discharge_patient(
     patient_id: int,
-    request: dict,
+    request: Any = Body(default={}),
     current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
     patient = mongo_db.patients.find_one({
@@ -1187,8 +1262,11 @@ def discharge_patient(
             ),
         )
 
-    discharge_reason = request.get("discharge_reason")
-
+    discharge_reason = None
+    if isinstance(request, dict):
+        discharge_reason = request.get("discharge_reason")
+    elif isinstance(request, str):
+        discharge_reason = request
     if discharge_reason is not None:
         discharge_reason = str(discharge_reason).strip() or None
 
@@ -1213,7 +1291,7 @@ def discharge_patient(
             "patient_id": patient_id,
             "is_active": active_filter(),
         },
-        {"$set": {"is_active": False}},
+        {"$set": {"is_active": False, "status": "COMPLETED", "updated_at": now}},
     )
 
     released_bed_id = patient.get("bed_id")
@@ -1222,21 +1300,70 @@ def discharge_patient(
         mongo_db.beds.update_one(
             {"_id": released_bed_id},
             {"$set": {
-                "is_occupied": False,
+                "is_occupied": 0,
+                "occupied_by_patient_id": None,
                 "updated_at": now,
             }},
         )
 
+    # Release any bed occupied by this patient
+    mongo_db.beds.update_many(
+        {"occupied_by_patient_id": patient_id},
+        {"$set": {
+            "is_occupied": 0,
+            "occupied_by_patient_id": None,
+            "updated_at": now,
+        }},
+    )
+
+    # Close active prescriptions for discharged patient
+    mongo_db.prescriptions.update_many(
+        {
+            "patient_id": patient_id,
+            "status": "ACTIVE",
+        },
+        {"$set": {
+            "status": "DISCHARGED",
+            "updated_at": now,
+        }},
+    )
+
+    # Close applicable active medication schedules
+    patient_prescriptions = list(
+        mongo_db.prescriptions.find({"patient_id": patient_id})
+    )
+    prescription_ids = [p["_id"] for p in patient_prescriptions]
+    prescription_item_ids = [
+        it["_id"]
+        for it in mongo_db.prescription_items.find(
+            {"prescription_id": {"$in": prescription_ids}}
+        )
+    ]
+    schedule_close_result = mongo_db.medication_schedules.update_many(
+        {
+            "prescription_item_id": {"$in": prescription_item_ids},
+            "status": {"$in": ["UPCOMING", "SCHEDULED", "DUE", "PENDING", "DELAYED", "HELD"]},
+        },
+        {"$set": {
+            "status": "CANCELLED",
+            "notes": "Cancelled due to inpatient discharge",
+            "updated_at": now,
+        }},
+    )
+
     mongo_db.patients.update_one(
-    {"_id": patient_id},
-    {"$set": {
-        "is_active": False,
-        "qr_is_active": False,
-        "ward_id": None,
-        "bed_id": None,
-        "updated_at": now,
-    }},
-       )
+        {"_id": patient_id},
+        {"$set": {
+            "is_active": False,
+            "lifecycle_status": "DISCHARGED",
+            "qr_is_active": False,
+            "ward_id": None,
+            "bed_id": None,
+            "discharged_at": now,
+            "discharge_reason": discharge_reason,
+            "updated_at": now,
+        }},
+    )
 
     return {
         "message": "Patient discharged successfully.",
@@ -1258,6 +1385,7 @@ def discharge_patient(
         "released_bed_id": released_bed_id,
         "closed_assignments": assignment_result.modified_count,
         "closed_encounters": encounter_result.modified_count,
+        "closed_schedules": schedule_close_result.modified_count,
     }
 
 
@@ -1683,7 +1811,7 @@ def deactivate_bed(
 def assign_patient_bed(
     patient_id: int,
     request: dict,
-    current_user=Depends(require_permission("MANAGE_SYSTEM")),
+    current_user=Depends(require_bed_assignment_permission),
 ):
     patient = mongo_db.patients.find_one({
         "_id": patient_id,
@@ -1902,7 +2030,7 @@ def assign_patient_bed(
 @router.post("/patients/{patient_id}/release-bed")
 def release_patient_bed(
     patient_id: int,
-    current_user=Depends(require_permission("MANAGE_SYSTEM")),
+    current_user=Depends(require_bed_assignment_permission),
 ):
     patient = mongo_db.patients.find_one({
         "_id": patient_id,
@@ -1956,4 +2084,114 @@ def release_patient_bed(
         "message": "Patient bed released successfully.",
         "patient_id": patient["id"],
         "released_bed_id": previous_bed_id,
+    }
+
+
+# =========================================================
+# PATIENT READMISSION ENDPOINT
+# =========================================================
+
+class ReadmitPatientRequest(BaseModel):
+    ward_id: int | None = None
+    bed_id: int | None = None
+    doctor_id: int | None = None
+    chief_complaint: str | None = None
+    admission_notes: str | None = None
+
+
+@router.post("/patients/{patient_id}/readmit")
+def readmit_patient(
+    patient_id: int,
+    request: ReadmitPatientRequest,
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
+):
+    """
+    Readmit a discharged patient with a new active encounter and bed assignment,
+    while fully preserving past encounters and historical clinical records.
+    """
+    patient = mongo_db.patients.find_one({"_id": patient_id})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+
+    if mongo_bool(patient.get("is_active")):
+        raise HTTPException(status_code=400, detail="Patient is already active in hospital.")
+
+    now = admin_mongo_now()
+    ward_id = request.ward_id
+    bed_id = request.bed_id
+
+    # If bed is requested, verify availability
+    if bed_id:
+        bed = mongo_db.beds.find_one({"_id": bed_id, "is_active": active_filter()})
+        if not bed:
+            raise HTTPException(status_code=404, detail="Requested bed not found or inactive.")
+        if mongo_bool(bed.get("is_occupied")) and bed.get("occupied_by_patient_id") not in (None, patient_id):
+            raise HTTPException(status_code=409, detail="Selected bed is already occupied by another patient.")
+        mongo_db.beds.update_one(
+            {"_id": bed_id},
+            {"$set": {"is_occupied": 1, "occupied_by_patient_id": patient_id, "updated_at": now}}
+        )
+
+    # Generate new QR token
+    token = f"QR-PAT-{patient_id}-{int(datetime.utcnow().timestamp())}"
+
+    # Create new active encounter
+    encounter_id = next_admin_mongo_id("encounters")
+    encounter = {
+        "_id": encounter_id,
+        "id": encounter_id,
+        "patient_id": patient_id,
+        "doctor_id": request.doctor_id,
+        "encounter_type": "INPATIENT" if bed_id else "OPD",
+        "status": "ACTIVE",
+        "chief_complaint": request.chief_complaint or "Readmitted patient",
+        "visit_notes": request.admission_notes,
+        "admitted_at": now,
+        "discharged_at": None,
+        "discharge_reason": None,
+        "discharged_by": None,
+        "ward_id": ward_id,
+        "bed_id": bed_id,
+        "created_at": now,
+        "updated_at": now,
+    }
+    mongo_db.encounters.insert_one(encounter)
+
+    # Update patient to ACTIVE
+    mongo_db.patients.update_one(
+        {"_id": patient_id},
+        {"$set": {
+            "is_active": True,
+            "lifecycle_status": "ACTIVE",
+            "qr_token": token,
+            "qr_is_active": True,
+            "qr_generated_at": now,
+            "ward_id": ward_id,
+            "bed_id": bed_id,
+            "admission_date": now,
+            "discharged_at": None,
+            "discharge_reason": None,
+            "updated_at": now,
+        }}
+    )
+
+    # Reset or initialize active billing
+    mongo_db.patient_billing.update_one(
+        {"patient_id": patient_id},
+        {"$set": {
+            "bill_status": "PENDING",
+            "bill_amount": 0.0,
+            "paid_at": None,
+            "updated_at": now,
+        }},
+        upsert=True,
+    )
+
+    return {
+        "message": "Patient readmitted successfully.",
+        "patient_id": patient_id,
+        "encounter_id": encounter_id,
+        "ward_id": ward_id,
+        "bed_id": bed_id,
+        "is_active": True,
     }

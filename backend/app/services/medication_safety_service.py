@@ -5,6 +5,7 @@ def _text_matches_allergen(
     medicine_name: str,
     generic_name: str | None,
     allergen: str,
+    brand_name: str | None = None,
 ) -> bool:
     """
     Perform a simple case-insensitive text match.
@@ -21,6 +22,10 @@ def _text_matches_allergen(
         generic_name or ""
     ).strip().lower()
 
+    brand_text = (
+        brand_name or ""
+    ).strip().lower()
+
     allergen_text = (
         allergen or ""
     ).strip().lower()
@@ -31,8 +36,10 @@ def _text_matches_allergen(
     return (
         allergen_text in medicine_text
         or allergen_text in generic_text
+        or (brand_text and allergen_text in brand_text)
         or medicine_text in allergen_text
-        or generic_text in allergen_text
+        or (generic_text and generic_text in allergen_text)
+        or (brand_text and brand_text in allergen_text)
     )
 
 
@@ -218,7 +225,10 @@ def check_medication_safety(
 
     allergies = list(
         mongo_db.patient_allergies.find({
-            "patient_id": patient_id
+            "$or": [
+                {"patient_id": patient_id},
+                {"patient_id": str(patient_id)},
+            ]
         })
     )
 
@@ -226,6 +236,7 @@ def check_medication_safety(
         if _text_matches_allergen(
             medicine_name=medicine.get("name", ""),
             generic_name=medicine.get("generic_name"),
+            brand_name=medicine.get("brand_name"),
             allergen=allergy.get("allergen", ""),
         ):
             severity = (

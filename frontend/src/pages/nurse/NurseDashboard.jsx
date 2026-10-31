@@ -704,7 +704,13 @@ export default function NurseDashboard() {
                         icon={QrCode}
                         onClick={(e) => {
                           e.stopPropagation()
-                          navigate(`/nurse/scanner?patient=${patient.patient_id}`)
+                          navigate(`/nurse/qr?patient=${patient.patient_id || patient.id}`, {
+                            state: {
+                              patientId: patient.patient_id || patient.id,
+                              patientName: patient.patient_name,
+                              patientCode: patient.patient_code,
+                            },
+                          })
                         }}
                       >
                         Verify Wristband
@@ -750,7 +756,13 @@ export default function NurseDashboard() {
                               variant="primary"
                               icon={QrCode}
                               onClick={() =>
-                                navigate(`/nurse/scanner?patient=${patient.patient_id}`)
+                                navigate(`/nurse/qr?patient=${patient.patient_id || patient.id}`, {
+                                  state: {
+                                    patientId: patient.patient_id || patient.id,
+                                    patientName: patient.patient_name,
+                                    patientCode: patient.patient_code,
+                                  },
+                                })
                               }
                             >
                               Verify Wristband QR

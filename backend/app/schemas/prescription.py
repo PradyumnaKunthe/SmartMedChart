@@ -53,3 +53,9 @@ class PrescriptionCreate(BaseModel):
         default=None,
         max_length=2000,
     )
+
+    admit_patient: bool = False
+
+    ward_id: int | None = None
+
+    bed_id: int | None = None

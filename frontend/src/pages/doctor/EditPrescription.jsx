@@ -262,13 +262,33 @@ export default function EditPrescription() {
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
                     >
                       <option value="">Select a medicine from pharmacy catalog</option>
-                      {medicines.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} {m.strength ? `(${m.strength})` : ""} - {m.form || "Unit"}
-                        </option>
-                      ))}
+                      {medicines.map((m) => {
+                        const stockCount = m.total_stock ?? 0
+                        const status = m.stock_status || (stockCount === 0 ? "OUT OF STOCK" : stockCount <= (m.min_stock_level || 10) ? "LOW STOCK" : "IN STOCK")
+                        return (
+                          <option key={m.id} value={m.id}>
+                            {m.name} {m.strength ? `(${m.strength})` : ""} — {m.dosage_form || "Tablet"} [{status}: {stockCount} {m.unit || "Units"}]
+                          </option>
+                        )
+                      })}
                     </select>
                   </div>
+                  {/* Selected Medicine Stock Pill */}
+                  {(() => {
+                    const selMed = medicines.find((m) => String(m.id) === String(form.medicine_id))
+                    if (!selMed) return null
+                    const stock = selMed.total_stock ?? 0
+                    const status = selMed.stock_status || (stock === 0 ? "OUT OF STOCK" : stock <= (selMed.min_stock_level || 10) ? "LOW STOCK" : "IN STOCK")
+                    const variant = stock === 0 ? "danger" : stock <= (selMed.min_stock_level || 10) ? "warning" : "success"
+                    return (
+                      <div className="mt-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between text-xs">
+                        <span className="text-slate-700">
+                          Available Pharmacy Inventory: <strong className="font-bold text-slate-900">{stock} {selMed.unit || "Units"}</strong>
+                        </span>
+                        <Badge variant={variant} size="sm">{status}</Badge>
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 {/* Dose & Route */}

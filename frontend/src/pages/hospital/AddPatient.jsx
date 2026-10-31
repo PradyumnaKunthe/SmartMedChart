@@ -1,109 +1,119 @@
+import React, { useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import {
+  Activity,
+  AlertCircle,
   ArrowLeft,
   BedDouble,
-  CalendarDays,
+  Building2,
+  Calendar,
+  Check,
   CheckCircle2,
-  ClipboardPlus,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  FileText,
+  HeartPulse,
+  Info,
   LoaderCircle,
+  Phone,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Sparkles,
   Stethoscope,
+  Thermometer,
+  User,
+  UserCheck,
   UserPlus,
   Weight,
 } from "lucide-react"
 
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
-
 import MainLayout from "../../components/layout/MainLayout"
+import Card, { CardHeader } from "../../components/common/Card"
+import Button from "../../components/common/Button"
+import Badge from "../../components/common/Badge"
 import api from "../../services/api"
-import {
-  getHospitalDoctors,
-} from "../../services/admin"
-
+import { getHospitalDoctors } from "../../services/admin"
 
 const PROBLEM_CATEGORIES = [
-  "General Medicine",
-  "Cardiology",
-  "Dermatology",
-  "Orthopedics",
-  "Pediatrics",
-  "Gynecology",
-  "Neurology",
+  "GENERAL MEDICINE",
+  "CARDIOLOGY",
+  "DERMATOLOGY",
+  "ORTHOPEDICS",
+  "PEDIATRICS",
+  "GYNECOLOGY",
+  "NEUROLOGY",
   "ENT",
-  "Ophthalmology",
-  "Gastroenterology",
-  "Pulmonology",
-  "Endocrinology",
-  "Psychiatry",
-  "Urology",
-  "Nephrology",
-  "Dentistry",
-  "Other / not sure",
+  "OPHTHALMOLOGY",
+  "GASTROENTEROLOGY",
+  "PULMONOLOGY",
+  "ENDOCRINOLOGY",
+  "PSYCHIATRY",
+  "UROLOGY",
+  "NEPHROLOGY",
+  "DENTISTRY",
+  "OTHER / NOT SURE",
 ]
 
-// =========================================================
-// MAIN
-// =========================================================
+const SEVERITY_LEVELS = ["MILD", "MODERATE", "SEVERE"]
+
+const GENDER_OPTIONS = ["MALE", "FEMALE", "OTHER"]
 
 export default function AddPatient() {
   const navigate = useNavigate()
 
   // =======================================================
-  // FORM
+  // FORM STATE
   // =======================================================
-
   const [form, setForm] = useState({
-    // Basic information
-    first_name: "",
-    last_name: "",
-    date_of_birth: "",
-    gender: "",
-    weight_kg: "",
-
-    // Contact information
+    // Essential Patient Information
+    full_name: "",
+    age: "",
+    gender: "MALE",
     mobile_number: "",
-    email: "",
-    address: "",
-    emergency_contact_name: "",
-    emergency_contact_number: "",
-    emergency_contact_relationship: "",
-    preferred_language: "",
 
-    // Visit information
+    // Essential Medical Information
     problem_category: "",
     chief_complaint: "",
     symptom_duration: "",
-    symptom_severity: "",
-    visit_notes: "",
-    medical_history_notes: "",
-    current_medication_notes: "",
-    allergy_notes: "",
+    symptom_severity: "MODERATE",
 
-    // Optional clinical observations
-    blood_pressure: "",
-    pulse: "",
-    temperature_c: "",
-    spo2_percent: "",
-    height_cm: "",
-
-    // Doctor and admission
+    // Doctor & Admission
     doctor_id: "",
     admit_patient: false,
     ward_id: "",
     bed_id: "",
+
+    // Additional Information (Collapsible)
+    address: "",
+    email: "",
+    emergency_contact_name: "",
+    emergency_contact_number: "",
+    emergency_contact_relationship: "",
+    preferred_language: "",
+    medical_history_notes: "",
+    current_medication_notes: "",
+    allergy_notes: "",
+    visit_notes: "",
+    blood_pressure: "",
+    pulse: "",
+    temperature_c: "",
+    spo2_percent: "",
+    weight_kg: "",
+    height_cm: "",
   })
 
-  // =======================================================
-  // UI STATE
-  // =======================================================
+  // Collapsible toggle
+  const [showAdditionalInfo, setShowAdditionalInfo] = useState(false)
 
+  // UI state
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [successPatient, setSuccessPatient] = useState(null)
 
-  // =======================================================
-  // DOCTOR STATE
-  // =======================================================
-
+  // Doctor state
   const [doctors, setDoctors] = useState([])
   const [doctorsLoading, setDoctorsLoading] = useState(false)
   const [recommendedDoctors, setRecommendedDoctors] = useState([])
@@ -111,86 +121,73 @@ export default function AddPatient() {
   const [recommendationMessage, setRecommendationMessage] = useState("")
   const [recommendationError, setRecommendationError] = useState(false)
 
-  // =======================================================
-  // WARD / BED STATE
-  // =======================================================
-
+  // Ward / Bed state
   const [wards, setWards] = useState([])
   const [beds, setBeds] = useState([])
-
   const [wardsLoading, setWardsLoading] = useState(false)
   const [bedsLoading, setBedsLoading] = useState(false)
 
-  // =======================================================
-  // LOAD DOCTORS
-  // =======================================================
+  // Ref to track last recommended search query to prevent duplicate requests
+  const lastQueryRef = useRef("")
 
+  // =======================================================
+  // UPPERCASE INPUT HANDLER
+  // =======================================================
+  function handleFieldChange(field, rawValue) {
+    let value = rawValue
+
+    if (field === "email") {
+      // Keep email strictly lowercase
+      value = String(rawValue || "").toLowerCase()
+    } else if (typeof rawValue === "string") {
+      if (field === "age") {
+        // Only positive integers for age
+        value = rawValue.replace(/\D/g, "").slice(0, 3)
+      } else if (field === "mobile_number" || field === "emergency_contact_number") {
+        // Phone numbers
+        value = rawValue.replace(/[^\d+ -]/g, "").slice(0, 20)
+      } else if (field !== "doctor_id" && field !== "ward_id" && field !== "bed_id") {
+        // Automatically uppercase all human-readable inputs
+        value = rawValue.toUpperCase()
+      }
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }))
+    setError("")
+  }
+
+  // =======================================================
+  // LOAD DOCTORS & WARDS
+  // =======================================================
   async function loadDoctors() {
     setDoctorsLoading(true)
-    setError("")
-
     try {
       const response = await getHospitalDoctors()
-
-      const doctorList = Array.isArray(response?.doctors)
-        ? response.doctors
-        : []
-
+      const doctorList = Array.isArray(response?.doctors) ? response.doctors : []
       setDoctors(doctorList)
-
-    } catch (requestError) {
-      console.error(
-        "Load doctors error:",
-        requestError,
-      )
-
+    } catch (err) {
+      console.error("Load doctors error:", err)
       setDoctors([])
-
-      setError(
-        requestError?.response?.data?.detail ||
-          "Unable to load registered doctors.",
-      )
-
     } finally {
       setDoctorsLoading(false)
     }
   }
 
-  // =======================================================
-  // LOAD WARDS
-  // =======================================================
-
   async function loadWards() {
     setWardsLoading(true)
-
     try {
       const response = await api.get("/api/hospital/wards")
-
-      setWards(
-        Array.isArray(response.data?.wards)
-          ? response.data.wards
-          : [],
-      )
-
-    } catch (requestError) {
-      console.error(
-        "Load wards error:",
-        requestError,
-      )
-
-      setError(
-        requestError?.response?.data?.detail ||
-          "Unable to load hospital wards.",
-      )
-
+      setWards(Array.isArray(response.data?.wards) ? response.data.wards : [])
+    } catch (err) {
+      console.error("Load wards error:", err)
+      setWards([])
     } finally {
       setWardsLoading(false)
     }
   }
-
-  // =======================================================
-  // LOAD BEDS
-  // =======================================================
 
   async function loadBeds(wardId) {
     if (!wardId) {
@@ -199,268 +196,186 @@ export default function AddPatient() {
     }
 
     setBedsLoading(true)
-
     try {
-      const response = await api.get(
-        `/api/hospital/wards/${wardId}/beds`,
-      )
-
-      const availableBeds =
-        Array.isArray(response.data?.beds)
-          ? response.data.beds.filter(
-              (bed) =>
-                bed.is_active &&
-                !bed.is_occupied,
-            )
-          : []
-
+      const response = await api.get(`/api/hospital/wards/${wardId}/beds`)
+      const availableBeds = Array.isArray(response.data?.beds)
+        ? response.data.beds.filter((bed) => bed.is_active && !bed.is_occupied)
+        : []
       setBeds(availableBeds)
-
-    } catch (requestError) {
-      console.error(
-        "Load beds error:",
-        requestError,
-      )
-
+    } catch (err) {
+      console.error("Load beds error:", err)
       setBeds([])
-
-      setError(
-        requestError?.response?.data?.detail ||
-          "Unable to load beds for this ward.",
-      )
-
     } finally {
       setBedsLoading(false)
     }
   }
-
-  // =======================================================
-  // RECOMMEND DOCTORS FROM THE PATIENT'S REPORTED CONCERN
-  // =======================================================
-
-  async function recommendDoctors() {
-    const visitReason = [
-      form.problem_category,
-      form.chief_complaint.trim(),
-      form.symptom_duration.trim()
-        ? `Duration: ${form.symptom_duration.trim()}`
-        : "",
-      form.symptom_severity
-        ? `Reported severity: ${form.symptom_severity}`
-        : "",
-      form.visit_notes.trim(),
-    ]
-      .filter(Boolean)
-      .join(" | ")
-      .slice(0, 1500)
-
-    if (!visitReason) {
-      setRecommendedDoctors([])
-      setRecommendationError(true)
-      setRecommendationMessage(
-        "Select a main problem or enter the chief complaint before requesting doctor suggestions.",
-      )
-      return
-    }
-
-    setRecommendationLoading(true)
-    setRecommendationError(false)
-    setRecommendationMessage("")
-    setRecommendedDoctors([])
-
-    try {
-      const response = await api.post(
-        "/api/carematch/recommendations",
-        { visit_reason: visitReason },
-      )
-
-      const suggestions = Array.isArray(
-        response.data?.recommendations,
-      )
-        ? response.data.recommendations
-        : []
-
-      setRecommendedDoctors(suggestions)
-      setRecommendationMessage(
-        response.data?.message ||
-          (suggestions.length > 0
-            ? `${suggestions.length} available doctor suggestion(s) found.`
-            : "No available doctor profiles matched this request. Ask the administrator to configure doctor profiles."),
-      )
-      setRecommendationError(suggestions.length === 0)
-
-    } catch (requestError) {
-      console.error("Doctor recommendation error:", requestError)
-      setRecommendedDoctors([])
-      setRecommendationError(true)
-      setRecommendationMessage(
-        requestError?.response?.data?.detail ||
-          "Unable to retrieve doctor suggestions. Check your registration permission and try again.",
-      )
-
-    } finally {
-      setRecommendationLoading(false)
-    }
-  }
-
-  function chooseRecommendedDoctor(doctor) {
-    const doctorId = String(doctor.doctor_id)
-
-    setForm((current) => ({
-      ...current,
-      doctor_id: doctorId,
-    }))
-
-    setRecommendationError(false)
-    setRecommendationMessage(
-      `${doctor.full_name} selected as the attending doctor.`,
-    )
-  }
-
-  // =======================================================
-  // INITIAL LOAD
-  // =======================================================
 
   useEffect(() => {
     loadDoctors()
     loadWards()
   }, [])
 
-  // =======================================================
-  // HANDLE INPUT
-  // =======================================================
-
-  function handleChange(event) {
-    const {
-      name,
-      value,
-      type,
-      checked,
-    } = event.target
-
-    setError("")
-
-    setForm((current) => ({
-      ...current,
-      [name]:
-        type === "checkbox"
-          ? checked
-          : value,
-    }))
-
-    if ([
-      "problem_category",
-      "chief_complaint",
-      "symptom_duration",
-      "symptom_severity",
-      "visit_notes",
-    ].includes(name)) {
-      setRecommendedDoctors([])
-      setRecommendationMessage("")
-      setRecommendationError(false)
-      setForm((current) => ({
-        ...current,
-        doctor_id: "",
-      }))
-    }
-
-    // -----------------------------------------------------
-    // Disable admission
-    // -----------------------------------------------------
-
-    if (
-      name === "admit_patient" &&
-      !checked
-    ) {
-      setForm((current) => ({
-        ...current,
-        admit_patient: false,
-        ward_id: "",
-        bed_id: "",
-      }))
-
+  useEffect(() => {
+    if (form.ward_id) {
+      loadBeds(form.ward_id)
+    } else {
       setBeds([])
     }
+  }, [form.ward_id])
 
-    // -----------------------------------------------------
-    // Ward changed
-    // -----------------------------------------------------
+  // =======================================================
+  // CAREMATCH AUTOMATIC RECOMMENDATIONS
+  // =======================================================
+  const constructedVisitReason = useMemo(() => {
+    const parts = [
+      form.problem_category ? `CATEGORY: ${form.problem_category}` : "",
+      form.chief_complaint.trim() ? `COMPLAINT: ${form.chief_complaint.trim()}` : "",
+      form.symptom_duration.trim() ? `DURATION: ${form.symptom_duration.trim()}` : "",
+      form.symptom_severity ? `SEVERITY: ${form.symptom_severity}` : "",
+      form.visit_notes.trim() ? `NOTES: ${form.visit_notes.trim()}` : "",
+    ].filter(Boolean)
 
-    if (name === "ward_id") {
-      setForm((current) => ({
-        ...current,
-        ward_id: value,
-        bed_id: "",
-      }))
+    return parts.join(" | ").slice(0, 1500)
+  }, [
+    form.problem_category,
+    form.chief_complaint,
+    form.symptom_duration,
+    form.symptom_severity,
+    form.visit_notes,
+  ])
 
-      loadBeds(value)
+  async function recommendDoctors() {
+    if (!form.problem_category && !form.chief_complaint.trim()) {
+      setRecommendedDoctors([])
+      setRecommendationError(true)
+      setRecommendationMessage("SELECT A PROBLEM CATEGORY OR ENTER CHIEF COMPLAINT TO FIND MATCHING DOCTORS.")
+      return
+    }
+
+    const query = constructedVisitReason || form.problem_category || form.chief_complaint.trim()
+    lastQueryRef.current = query
+
+    setRecommendationLoading(true)
+    setRecommendationError(false)
+    setRecommendationMessage("")
+
+    try {
+      const response = await api.post("/api/carematch/recommendations", {
+        visit_reason: query,
+        problem_category: form.problem_category || undefined,
+        chief_complaint: form.chief_complaint.trim() || undefined,
+        preferred_language: form.preferred_language.trim() || undefined,
+      })
+
+      const suggestions = Array.isArray(response.data?.recommendations)
+        ? response.data.recommendations
+        : []
+
+      setRecommendedDoctors(suggestions)
+
+      if (suggestions.length > 0) {
+        setRecommendationMessage(
+          `${suggestions.length} MATCHING SPECIALIST(S) IDENTIFIED BY CAREMATCH AI.`
+        )
+        setRecommendationError(false)
+        // If no doctor currently selected, auto-select the highest match
+        if (!form.doctor_id) {
+          setForm((prev) => ({
+            ...prev,
+            doctor_id: String(suggestions[0].doctor_id),
+          }))
+        }
+      } else {
+        setRecommendationMessage(
+          response.data?.message ||
+            "NO MATCHING SPECIALISTS FOUND FOR THIS COMPLAINT. YOU MAY SELECT AN AVAILABLE DOCTOR FROM THE ROSTER BELOW."
+        )
+        setRecommendationError(false)
+      }
+    } catch (requestError) {
+      console.error("CareMatch recommendation error:", requestError)
+      setRecommendedDoctors([])
+      setRecommendationError(true)
+      setRecommendationMessage(
+        requestError?.response?.data?.detail ||
+          "UNABLE TO RETRIEVE DOCTOR SUGGESTIONS. PLEASE SELECT ATTENDING DOCTOR MANUALLY."
+      )
+    } finally {
+      setRecommendationLoading(false)
     }
   }
 
-  // =======================================================
-  // SUBMIT
-  // =======================================================
+  // Automatic recommendation trigger with 400ms debounce
+  useEffect(() => {
+    if (!form.problem_category && !form.chief_complaint.trim()) {
+      return
+    }
 
+    const query = constructedVisitReason || form.problem_category || form.chief_complaint.trim()
+    if (query === lastQueryRef.current) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      recommendDoctors()
+    }, 400)
+
+    return () => clearTimeout(timer)
+  }, [form.problem_category, form.chief_complaint, form.symptom_duration, form.symptom_severity])
+
+  function selectDoctor(doctorId) {
+    setForm((prev) => ({
+      ...prev,
+      doctor_id: String(doctorId),
+    }))
+    setError("")
+  }
+
+  // =======================================================
+  // FORM SUBMISSION & REGISTRATION
+  // =======================================================
   async function handleSubmit(event) {
     event.preventDefault()
-
     setError("")
-    setSuccessPatient(null)
 
-    // -----------------------------------------------------
-    // Name validation
-    // -----------------------------------------------------
-
-    if (
-      !form.first_name.trim() ||
-      !form.last_name.trim()
-    ) {
-      setError(
-        "First name and last name are required.",
-      )
+    // Basic validation
+    if (!form.full_name.trim()) {
+      setError("PATIENT FULL NAME IS REQUIRED.")
       return
     }
 
-    // -----------------------------------------------------
-    // Doctor validation
-    // -----------------------------------------------------
+    if (!form.age.trim()) {
+      setError("PATIENT AGE IS REQUIRED.")
+      return
+    }
+
+    if (!form.mobile_number.trim()) {
+      setError("MOBILE NUMBER IS REQUIRED.")
+      return
+    }
+
+    if (!form.problem_category) {
+      setError("PLEASE SELECT A PRIMARY PROBLEM CATEGORY.")
+      return
+    }
+
+    if (!form.chief_complaint.trim()) {
+      setError("CHIEF COMPLAINT / PRESENTING SYMPTOMS ARE REQUIRED.")
+      return
+    }
 
     if (!form.doctor_id) {
-      setError(
-        "Please select an attending doctor.",
-      )
+      setError("PLEASE SELECT AN ATTENDING DOCTOR FOR THIS PATIENT.")
       return
     }
-
-    const selectedDoctor = doctors.find(
-      (doctor) =>
-        String(doctor.id) ===
-        String(form.doctor_id),
-    )
-
-    if (!selectedDoctor) {
-      setError(
-        "The selected doctor is no longer available. Please select an active registered doctor.",
-      )
-      return
-    }
-
-    // -----------------------------------------------------
-    // Admission validation
-    // -----------------------------------------------------
 
     if (form.admit_patient) {
       if (!form.ward_id) {
-        setError(
-          "Please select a ward for admission.",
-        )
+        setError("PLEASE SELECT A WARD FOR INPATIENT ADMISSION.")
         return
       }
-
       if (!form.bed_id) {
-        setError(
-          "Please select an available bed.",
-        )
+        setError("PLEASE SELECT AN AVAILABLE BED FOR INPATIENT ADMISSION.")
         return
       }
     }
@@ -468,1425 +383,1028 @@ export default function AddPatient() {
     setLoading(true)
 
     try {
-      const filteredObservations = Object.fromEntries(
-        Object.entries({
-          blood_pressure: form.blood_pressure.trim(),
-          pulse: form.pulse.trim(),
-          temperature_c: form.temperature_c.trim(),
-          spo2_percent: form.spo2_percent.trim(),
-          height_cm: form.height_cm.trim(),
-        }).filter(([, value]) => value !== ""),
-      )
+      // Split full name into first and last name
+      const nameParts = form.full_name.trim().split(/\s+/)
+      const firstName = nameParts[0] || "PATIENT"
+      const lastName = nameParts.slice(1).join(" ") || nameParts[0] || "PATIENT"
+
+      // Approximate DOB from age if not explicitly provided
+      const ageNum = parseInt(form.age, 10)
+      const calculatedDob = !isNaN(ageNum) && ageNum > 0
+        ? `${new Date().getFullYear() - ageNum}-01-01`
+        : null
+
+      // Collect clinical observations
+      const observations = {}
+      if (form.blood_pressure.trim()) observations.blood_pressure = form.blood_pressure.trim()
+      if (form.pulse) observations.pulse = Number(form.pulse)
+      if (form.temperature_c) observations.temperature_c = Number(form.temperature_c)
+      if (form.spo2_percent) observations.spo2_percent = Number(form.spo2_percent)
+      if (form.weight_kg) observations.weight_kg = Number(form.weight_kg)
+      if (form.height_cm) observations.height_cm = Number(form.height_cm)
 
       const payload = {
-        first_name: form.first_name.trim(),
-
-        last_name: form.last_name.trim(),
-
-        date_of_birth:
-          form.date_of_birth || null,
-
-        gender:
-          form.gender.trim() || null,
-
-        weight_kg:
-          form.weight_kg
-            ? Number(form.weight_kg)
-            : null,
-
-        // Contact information
+        full_name: form.full_name.trim(),
+        first_name: firstName,
+        last_name: lastName,
+        age: ageNum || null,
+        date_of_birth: calculatedDob,
+        gender: form.gender || null,
+        weight_kg: form.weight_kg ? Number(form.weight_kg) : null,
         mobile_number: form.mobile_number.trim() || null,
         email: form.email.trim() || null,
         address: form.address.trim() || null,
-        emergency_contact_name:
-          form.emergency_contact_name.trim() || null,
-        emergency_contact_number:
-          form.emergency_contact_number.trim() || null,
-        emergency_contact_relationship:
-          form.emergency_contact_relationship.trim() || null,
-        preferred_language:
-          form.preferred_language.trim() || null,
-
-        // Visit information
-        problem_category: form.problem_category || null,
-        chief_complaint:
-          form.chief_complaint.trim() || form.problem_category || null,
+        emergency_contact_name: form.emergency_contact_name.trim() || null,
+        emergency_contact_number: form.emergency_contact_number.trim() || null,
+        emergency_contact_relationship: form.emergency_contact_relationship.trim() || null,
+        preferred_language: form.preferred_language.trim() || null,
+        problem_category: form.problem_category,
+        chief_complaint: form.chief_complaint.trim(),
         symptom_duration: form.symptom_duration.trim() || null,
         symptom_severity: form.symptom_severity || null,
         visit_notes: form.visit_notes.trim() || null,
-        medical_history_notes:
-          form.medical_history_notes.trim() || null,
-        current_medication_notes:
-          form.current_medication_notes.trim() || null,
+        medical_history_notes: form.medical_history_notes.trim() || null,
+        current_medication_notes: form.current_medication_notes.trim() || null,
         allergy_notes: form.allergy_notes.trim() || null,
-
-        // Optional clinical observations
-        clinical_observations:
-          Object.keys(filteredObservations).length > 0
-            ? filteredObservations
-            : null,
-
-        doctor_id:
-          Number(form.doctor_id),
-
-        is_admitted:
-          Boolean(form.admit_patient),
-
-        ward_id:
-          form.admit_patient &&
-          form.ward_id
-            ? Number(form.ward_id)
-            : null,
-
-        bed_id:
-          form.admit_patient &&
-          form.bed_id
-            ? Number(form.bed_id)
-            : null,
+        clinical_observations: Object.keys(observations).length > 0 ? observations : null,
+        doctor_id: Number(form.doctor_id),
+        is_admitted: Boolean(form.admit_patient),
+        ward_id: form.admit_patient && form.ward_id ? Number(form.ward_id) : null,
+        bed_id: form.admit_patient && form.bed_id ? Number(form.bed_id) : null,
       }
 
-      const response = await api.post(
-        "/api/hospital/patients",
-        payload,
-      )
+      const response = await api.post("/api/hospital/patients", payload)
+      const createdPatient = response.data?.patient
 
-      const createdPatient =
-        response.data?.patient
+      setSuccessPatient(createdPatient || { full_name: form.full_name })
 
-      setSuccessPatient(
-        createdPatient || null,
-      )
-
-      // ---------------------------------------------------
-      // Reset
-      // ---------------------------------------------------
-
+      // Reset form
       setForm({
-        first_name: "",
-        last_name: "",
-        date_of_birth: "",
-        gender: "",
-        weight_kg: "",
+        full_name: "",
+        age: "",
+        gender: "MALE",
         mobile_number: "",
-        email: "",
-        address: "",
-        emergency_contact_name: "",
-        emergency_contact_number: "",
-        emergency_contact_relationship: "",
-        preferred_language: "",
         problem_category: "",
         chief_complaint: "",
         symptom_duration: "",
-        symptom_severity: "",
-        visit_notes: "",
-        medical_history_notes: "",
-        current_medication_notes: "",
-        allergy_notes: "",
-        blood_pressure: "",
-        pulse: "",
-        temperature_c: "",
-        spo2_percent: "",
-        height_cm: "",
+        symptom_severity: "MODERATE",
         doctor_id: "",
         admit_patient: false,
         ward_id: "",
         bed_id: "",
+        address: "",
+        email: "",
+        emergency_contact_name: "",
+        emergency_contact_number: "",
+        emergency_contact_relationship: "",
+        preferred_language: "",
+        medical_history_notes: "",
+        current_medication_notes: "",
+        allergy_notes: "",
+        visit_notes: "",
+        blood_pressure: "",
+        pulse: "",
+        temperature_c: "",
+        spo2_percent: "",
+        weight_kg: "",
+        height_cm: "",
       })
 
-      setBeds([])
+      setShowAdditionalInfo(false)
       setRecommendedDoctors([])
       setRecommendationMessage("")
-      setRecommendationError(false)
-
+      lastQueryRef.current = ""
     } catch (requestError) {
-      console.error(
-        "Create hospital patient error:",
-        requestError,
-      )
-
+      console.error("Create hospital patient error:", requestError)
       setError(
         requestError?.response?.data?.detail ||
-          "Unable to create the patient record.",
+          "UNABLE TO COMPLETE PATIENT REGISTRATION. PLEASE CHECK REQUIRED FIELDS AND TRY AGAIN."
       )
-
     } finally {
       setLoading(false)
     }
   }
 
-  // =======================================================
-  // CANCEL
-  // =======================================================
-
   function handleCancel() {
     navigate("/hospital/dashboard")
   }
 
-  // =======================================================
-  // SELECTED WARD / BED
-  // =======================================================
+  // Combined doctor roster for manual selection
+  const allDoctorOptions = useMemo(() => {
+    const list = [...doctors]
+    recommendedDoctors.forEach((rd) => {
+      if (!list.some((d) => String(d.id || d._id) === String(rd.doctor_id))) {
+        list.push({
+          id: rd.doctor_id,
+          full_name: rd.full_name,
+        })
+      }
+    })
+    return list
+  }, [doctors, recommendedDoctors])
 
-  const selectedWard = wards.find(
-    (ward) =>
-      String(ward.id) ===
-      String(form.ward_id),
+  const selectedDoctorObj = allDoctorOptions.find(
+    (d) => String(d.id || d._id) === String(form.doctor_id)
   )
 
-  const selectedBed = beds.find(
-    (bed) =>
-      String(bed.id) ===
-      String(form.bed_id),
-  )
-
-  // =======================================================
-  // DOCTOR OPTIONS / SELECTED DOCTOR
-  // =======================================================
-
-  const doctorOptions = [...doctors]
-
-  recommendedDoctors.forEach((recommendedDoctor) => {
-    const alreadyLoaded = doctorOptions.some(
-      (doctor) =>
-        String(doctor.id) === String(recommendedDoctor.doctor_id),
-    )
-
-    if (!alreadyLoaded) {
-      doctorOptions.push({
-        id: recommendedDoctor.doctor_id,
-        full_name: recommendedDoctor.full_name,
-        username: "Recommended doctor",
-      })
-    }
-  })
-
-  const selectedDoctor = doctorOptions.find(
-    (doctor) =>
-      String(doctor.id) ===
-      String(form.doctor_id),
-  )
+  const selectedWardObj = wards.find((w) => String(w.id || w._id) === String(form.ward_id))
+  const selectedBedObj = beds.find((b) => String(b.id || b._id) === String(form.bed_id))
 
   // =======================================================
   // RENDER
   // =======================================================
-
   return (
-    <MainLayout title="Register Patient">
+    <MainLayout
+      title="PATIENT INTAKE & CAREMATCH"
+      subtitle="RAPID CLINICAL INTAKE, AI DOCTOR RECOMMENDATIONS, AND ADMISSION REGISTRATION"
+    >
+      <div className="mx-auto max-w-4xl space-y-6">
+        {/* Navigation & Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="mb-2 inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition uppercase tracking-wider"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              BACK TO HOSPITAL DASHBOARD
+            </button>
+            <h1 className="text-2xl font-black tracking-tight text-slate-900 uppercase">
+              PATIENT INTAKE & CAREMATCH
+            </h1>
+            <p className="text-xs text-slate-500 uppercase tracking-wide mt-0.5">
+              COMPLETE PATIENT DETAILS, MEDICAL COMPLAINT, SELECT RECOMMENDED DOCTOR AND REGISTER
+            </p>
+          </div>
 
-      <div className="mx-auto max-w-5xl space-y-6">
-
-        {/* =================================================
-            HEADER
-        ================================================= */}
-
-        <div>
-
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-slate-500 transition hover:text-slate-900"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Hospital Dashboard
-          </button>
-
-          <p className="text-sm font-semibold text-cyan-600">
-            Hospital Data Portal
-          </p>
-
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-            Register Patient
-          </h1>
-
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-            Create a patient record in the shared
-            SmartMedChart database.
-          </p>
-
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-sky-50 text-sky-800 border border-sky-200 uppercase tracking-wider">
+              FAST-TRACK REGISTRATION
+            </span>
+          </div>
         </div>
 
-        {/* =================================================
-            ERROR
-        ================================================= */}
-
+        {/* Global Error Banner */}
         {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 shadow-xs">
             <div className="flex items-start gap-3">
-
-              <ClipboardPlus className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
-
+              <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
               <div>
-
-                <p className="font-semibold text-red-800">
-                  Patient registration failed
+                <p className="text-xs font-bold text-rose-900 uppercase tracking-wide">
+                  REGISTRATION ERROR
                 </p>
-
-                <p className="mt-1 text-sm leading-6 text-red-700">
+                <p className="mt-1 text-xs text-rose-800 uppercase tracking-wide font-medium">
                   {error}
                 </p>
-
               </div>
-
             </div>
-
           </div>
         )}
 
-        {/* =================================================
-            SUCCESS
-        ================================================= */}
-
+        {/* Success Modal / Banner */}
         {successPatient && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
-
+          <div className="rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50/50 p-6 shadow-sm space-y-4">
             <div className="flex items-start gap-3">
-
-              <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
-
-              <div className="flex-1">
-
-                <p className="font-semibold text-emerald-900">
-                  Patient registered successfully
-                </p>
-
-                <p className="mt-1 text-sm text-emerald-800">
-                  Patient ID:
-                  {" "}
-                  <span className="font-bold">
-                    {successPatient.patient_id}
-                  </span>
-                </p>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      navigate(
-                        "/hospital/dashboard",
-                      )
-                    }
-                    className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
-                  >
-                    View Patients
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSuccessPatient(null)
-                    }
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    Register Another
-                  </button>
-
-                </div>
-
+              <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <CheckCircle2 className="w-6 h-6" />
               </div>
-
+              <div className="flex-1">
+                <h3 className="text-base font-black text-emerald-950 uppercase tracking-wide">
+                  PATIENT REGISTERED SUCCESSFULLY
+                </h3>
+                <p className="text-xs text-emerald-800 uppercase tracking-wide mt-1">
+                  PATIENT HAS BEEN ENROLLED IN THE SMARTMEDCHART HOSPITAL EMR SYSTEM.
+                </p>
+              </div>
             </div>
 
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-emerald-100 text-xs">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">PATIENT ID</span>
+                <p className="font-mono font-bold text-slate-900">{successPatient.patient_id || "GENERATED"}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">FULL NAME</span>
+                <p className="font-bold text-slate-900 uppercase">{successPatient.full_name || successPatient.first_name}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">CARE TYPE</span>
+                <p className="font-bold text-slate-900 uppercase">{successPatient.bed_id ? "INPATIENT" : "OUTPATIENT (OPD)"}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">QR STATUS</span>
+                <p className="font-bold text-emerald-700 uppercase">ACTIVE & ASSIGNED</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Plus}
+                onClick={() => setSuccessPatient(null)}
+              >
+                REGISTER ANOTHER PATIENT
+              </Button>
+              {successPatient.id && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={FileText}
+                  onClick={() => navigate(`/hospital/patients/${successPatient.id}`)}
+                >
+                  VIEW PATIENT PROFILE
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => navigate("/hospital/dashboard")}
+              >
+                RETURN TO DASHBOARD
+              </Button>
+            </div>
           </div>
         )}
 
-        {/* =================================================
-            FORM
-        ================================================= */}
-
-        <form
-          onSubmit={handleSubmit}
-          className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
-        >
-
-          {/* HEADER */}
-
-          <div className="border-b border-slate-200 bg-slate-50 p-5 md:p-6">
-
-            <div className="flex items-center gap-3">
-
-              <div className="rounded-xl bg-cyan-100 p-3">
-                <UserPlus className="h-5 w-5 text-cyan-700" />
-              </div>
-
-              <div>
-
-                <h2 className="font-bold text-slate-900">
-                  Patient Information
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Enter patient and attending doctor details.
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          <div className="space-y-8 p-5 md:p-6">
-
-            {/* =================================================
-                BASIC INFORMATION
-            ================================================= */}
-
-            <section>
-
-              <div className="mb-4">
-
-                <h3 className="font-semibold text-slate-900">
-                  Basic Information
-                </h3>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Identity and demographic information.
-                </p>
-
-              </div>
-
-              <div className="grid gap-5 md:grid-cols-2">
-
-                {/* Patient ID */}
-
-                <div>
-
-                  <label className="mb-2 block text-sm font-semibold text-slate-700">
-                    Patient ID
+        {/* Main Form */}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* STEP 1: PATIENT ESSENTIAL DETAILS */}
+          <Card>
+            <CardHeader
+              title="1. PATIENT INFORMATION"
+              subtitle="ESSENTIAL PATIENT DEMOGRAPHICS REQUIRED FOR HOSPITAL IDENTIFICATION"
+            />
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Full Name */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="full_name"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    PATIENT FULL NAME <span className="text-rose-500">*</span>
                   </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="full_name"
+                      type="text"
+                      required
+                      value={form.full_name}
+                      onChange={(e) => handleFieldChange("full_name", e.target.value)}
+                      placeholder="E.G. ANKUSH SINGH"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-900 font-bold uppercase placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
+                    />
+                  </div>
+                </div>
 
+                {/* Age */}
+                <div>
+                  <label
+                    htmlFor="age"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    AGE (YEARS) <span className="text-rose-500">*</span>
+                  </label>
                   <input
+                    id="age"
                     type="text"
-                    value="Auto-generated"
-                    disabled
-                    className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700"
-                  />
-
-                  <p className="mt-2 text-xs text-slate-500">
-                    Assigned automatically after registration.
-                  </p>
-
-                </div>
-
-                {/* First Name */}
-
-                <div>
-
-                  <label
-                    htmlFor="first_name"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    First Name
-                    <span className="ml-1 text-red-500">
-                      *
-                    </span>
-                  </label>
-
-                  <input
-                    id="first_name"
-                    name="first_name"
-                    value={form.first_name}
-                    onChange={handleChange}
-                    placeholder="Enter first name"
                     required
-                    maxLength={100}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                    value={form.age}
+                    onChange={(e) => handleFieldChange("age", e.target.value)}
+                    placeholder="E.G. 34"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
                   />
-
-                </div>
-
-                {/* Last Name */}
-
-                <div>
-
-                  <label
-                    htmlFor="last_name"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
-                  >
-                    Last Name
-                    <span className="ml-1 text-red-500">
-                      *
-                    </span>
-                  </label>
-
-                  <input
-                    id="last_name"
-                    name="last_name"
-                    value={form.last_name}
-                    onChange={handleChange}
-                    placeholder="Enter last name"
-                    required
-                    maxLength={100}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-
-                </div>
-
-                {/* Date */}
-
-                <div>
-
-                  <label
-                    htmlFor="date_of_birth"
-                    className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700"
-                  >
-                    <CalendarDays className="h-4 w-4 text-slate-400" />
-                    Date of Birth
-                  </label>
-
-                  <input
-                    id="date_of_birth"
-                    name="date_of_birth"
-                    type="date"
-                    value={form.date_of_birth}
-                    onChange={handleChange}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-
                 </div>
 
                 {/* Gender */}
-
                 <div>
-
                   <label
                     htmlFor="gender"
-                    className="mb-2 block text-sm font-semibold text-slate-700"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
                   >
-                    Gender
+                    GENDER <span className="text-rose-500">*</span>
                   </label>
-
                   <select
                     id="gender"
-                    name="gender"
-                    value={form.gender}
-                    onChange={handleChange}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  >
-
-                    <option value="">
-                      Select gender
-                    </option>
-
-                    <option value="Male">
-                      Male
-                    </option>
-
-                    <option value="Female">
-                      Female
-                    </option>
-
-                    <option value="Other">
-                      Other
-                    </option>
-
-                  </select>
-
-                </div>
-
-                {/* Weight */}
-
-                <div>
-
-                  <label
-                    htmlFor="weight_kg"
-                    className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700"
-                  >
-                    <Weight className="h-4 w-4 text-slate-400" />
-                    Weight (kg)
-                  </label>
-
-                  <input
-                    id="weight_kg"
-                    name="weight_kg"
-                    type="number"
-                    min="0.1"
-                    max="500"
-                    step="0.1"
-                    value={form.weight_kg}
-                    onChange={handleChange}
-                    placeholder="e.g. 72.5"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-
-                </div>
-
-                {/* =================================================
-                    DOCTOR
-                ================================================= */}
-
-                <div className="md:col-span-2">
-
-                  <label
-                    htmlFor="doctor_id"
-                    className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700"
-                  >
-
-                    <Stethoscope className="h-4 w-4 text-cyan-600" />
-
-                    Attending Doctor
-
-                    <span className="text-red-500">
-                      *
-                    </span>
-
-                  </label>
-
-                  <select
-                    id="doctor_id"
-                    name="doctor_id"
-                    value={form.doctor_id}
-                    onChange={handleChange}
                     required
-                    disabled={doctorsLoading}
-                    className="w-full rounded-xl border border-cyan-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                    value={form.gender}
+                    onChange={(e) => handleFieldChange("gender", e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
                   >
-
-                    <option value="">
-                      {doctorsLoading
-                        ? "Loading registered doctors..."
-                        : doctorOptions.length === 0
-                          ? "No active doctors registered"
-                          : "Select attending doctor"}
-                    </option>
-
-                    {doctorOptions.map(
-                      (doctor) => (
-                        <option
-                          key={doctor.id}
-                          value={doctor.id}
-                        >
-                          {doctor.full_name}
-                          {" • "}
-                          {doctor.username}
-                        </option>
-                      ),
-                    )}
-
-                  </select>
-
-                  <p className="mt-2 text-xs text-slate-500">
-                    Doctors are loaded automatically from
-                    active Doctor accounts in Staff Management.
-                  </p>
-
-                  {selectedDoctor && (
-                    <div className="mt-3 rounded-xl border border-cyan-200 bg-cyan-50 p-3">
-
-                      <p className="text-xs font-bold uppercase tracking-wide text-cyan-700">
-                        Selected Doctor
-                      </p>
-
-                      <p className="mt-1 font-semibold text-cyan-900">
-                        {selectedDoctor.full_name}
-                      </p>
-
-                      <p className="mt-1 text-xs text-cyan-700">
-                        Username:
-                        {" "}
-                        {selectedDoctor.username}
-                      </p>
-
-                    </div>
-                  )}
-
-                </div>
-
-              </div>
-
-            </section>
-
-            {/* =================================================
-                CONTACT INFORMATION
-            ================================================= */}
-
-            <section className="border-t border-slate-100 pt-8">
-
-              <div className="mb-4">
-                <h3 className="font-semibold text-slate-900">
-                  Contact Information
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Optional patient contact and emergency contact details.
-                </p>
-              </div>
-
-              <div className="grid gap-5 md:grid-cols-2">
-
-                <div>
-                  <label htmlFor="mobile_number" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Mobile Number
-                  </label>
-                  <input
-                    id="mobile_number"
-                    name="mobile_number"
-                    type="tel"
-                    value={form.mobile_number}
-                    onChange={handleChange}
-                    maxLength={20}
-                    placeholder="Enter mobile number"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="email" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Email Address
-                  </label>
-                  <input
-                    id="email"
-                    name="email"
-                    type="email"
-                    value={form.email}
-                    onChange={handleChange}
-                    maxLength={255}
-                    placeholder="patient@example.com"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label htmlFor="address" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Address
-                  </label>
-                  <textarea
-                    id="address"
-                    name="address"
-                    rows={2}
-                    value={form.address}
-                    onChange={handleChange}
-                    maxLength={1000}
-                    placeholder="Enter patient's residential address"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="emergency_contact_name" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Emergency Contact Name
-                  </label>
-                  <input
-                    id="emergency_contact_name"
-                    name="emergency_contact_name"
-                    value={form.emergency_contact_name}
-                    onChange={handleChange}
-                    maxLength={150}
-                    placeholder="Contact person's name"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="emergency_contact_number" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Emergency Contact Number
-                  </label>
-                  <input
-                    id="emergency_contact_number"
-                    name="emergency_contact_number"
-                    type="tel"
-                    value={form.emergency_contact_number}
-                    onChange={handleChange}
-                    maxLength={20}
-                    placeholder="Enter emergency contact number"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="emergency_contact_relationship" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Relationship to Patient
-                  </label>
-                  <input
-                    id="emergency_contact_relationship"
-                    name="emergency_contact_relationship"
-                    value={form.emergency_contact_relationship}
-                    onChange={handleChange}
-                    maxLength={80}
-                    placeholder="e.g. Parent, spouse, sibling"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="preferred_language" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Preferred Language
-                  </label>
-                  <input
-                    id="preferred_language"
-                    name="preferred_language"
-                    value={form.preferred_language}
-                    onChange={handleChange}
-                    maxLength={80}
-                    placeholder="e.g. Marathi, Hindi, English"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-              </div>
-            </section>
-
-            {/* =================================================
-                VISIT INFORMATION
-            ================================================= */}
-
-            <section className="border-t border-slate-100 pt-8">
-
-              <div className="mb-4">
-                <h3 className="font-semibold text-slate-900">
-                  Visit Information
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Optional reason for visit, symptoms, and medical history.
-                </p>
-              </div>
-
-              <div className="grid gap-5 md:grid-cols-2">
-
-                <div>
-                  <label htmlFor="problem_category" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Main Problem / Department
-                  </label>
-                  <select
-                    id="problem_category"
-                    name="problem_category"
-                    value={form.problem_category}
-                    onChange={handleChange}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  >
-                    <option value="">Select a problem or department</option>
-                    {PROBLEM_CATEGORIES.map((category) => (
-                      <option key={category} value={category}>{category}</option>
+                    {GENDER_OPTIONS.map((g) => (
+                      <option key={g} value={g} className="uppercase font-bold">
+                        {g}
+                      </option>
                     ))}
                   </select>
                 </div>
 
-                <div>
-                  <label htmlFor="symptom_duration" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Symptom Duration
+                {/* Mobile Number */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="mobile_number"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    MOBILE NUMBER <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    id="symptom_duration"
-                    name="symptom_duration"
-                    value={form.symptom_duration}
-                    onChange={handleChange}
-                    maxLength={100}
-                    placeholder="e.g. 3 days, 2 weeks"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="mobile_number"
+                      type="text"
+                      required
+                      value={form.mobile_number}
+                      onChange={(e) => handleFieldChange("mobile_number", e.target.value)}
+                      placeholder="E.G. 9876543210"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-900 font-bold placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
+                    />
+                  </div>
                 </div>
+              </div>
+            </div>
+          </Card>
 
-                <div>
-                  <label htmlFor="symptom_severity" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Reported Symptom Severity
+          {/* STEP 2: MEDICAL COMPLAINT & SYMPTOMS */}
+          <Card>
+            <CardHeader
+              title="2. MEDICAL INFORMATION & SYMPTOMS"
+              subtitle="PRIMARY MEDICAL REASON FOR VISIT AND PRESENTING CLINICAL SYMPTOMS"
+            />
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Problem Category */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="problem_category"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    PROBLEM CATEGORY <span className="text-rose-500">*</span>
                   </label>
                   <select
-                    id="symptom_severity"
-                    name="symptom_severity"
-                    value={form.symptom_severity}
-                    onChange={handleChange}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                    id="problem_category"
+                    required
+                    value={form.problem_category}
+                    onChange={(e) => handleFieldChange("problem_category", e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
                   >
-                    <option value="">Not specified</option>
-                    <option value="Mild">Mild</option>
-                    <option value="Moderate">Moderate</option>
-                    <option value="Severe">Severe</option>
+                    <option value="" disabled className="text-slate-400">
+                      SELECT PRIMARY MEDICAL CATEGORY
+                    </option>
+                    {PROBLEM_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat} className="uppercase font-bold">
+                        {cat}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                <div>
-                  <label htmlFor="chief_complaint" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Chief Complaint
+                {/* Chief Complaint / Symptoms */}
+                <div className="md:col-span-2">
+                  <label
+                    htmlFor="chief_complaint"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    CHIEF COMPLAINT / SYMPTOMS <span className="text-rose-500">*</span>
                   </label>
                   <textarea
                     id="chief_complaint"
-                    name="chief_complaint"
+                    required
                     rows={2}
                     value={form.chief_complaint}
-                    onChange={handleChange}
-                    maxLength={1500}
-                    placeholder="Describe the main reason for this visit"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                    onChange={(e) => handleFieldChange("chief_complaint", e.target.value)}
+                    placeholder="DESCRIBE PRESENTING COMPLAINTS AND SYMPTOMS (E.G. CHEST PAIN AND SHORTNESS OF BREATH)"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-900 font-bold uppercase placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition leading-relaxed resize-none"
                   />
                 </div>
 
-                <div className="md:col-span-2">
-                  <label htmlFor="visit_notes" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Visit Notes
-                  </label>
-                  <textarea
-                    id="visit_notes"
-                    name="visit_notes"
-                    rows={3}
-                    value={form.visit_notes}
-                    onChange={handleChange}
-                    maxLength={3000}
-                    placeholder="Add any relevant details shared by the patient"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
+                {/* Duration of Symptoms */}
                 <div>
-                  <label htmlFor="medical_history_notes" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Previous Medical History
+                  <label
+                    htmlFor="symptom_duration"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    DURATION OF SYMPTOMS (OPTIONAL)
                   </label>
-                  <textarea
-                    id="medical_history_notes"
-                    name="medical_history_notes"
-                    rows={3}
-                    value={form.medical_history_notes}
-                    onChange={handleChange}
-                    maxLength={3000}
-                    placeholder="Previous conditions or relevant history (optional)"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="current_medication_notes" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Current Medications
-                  </label>
-                  <textarea
-                    id="current_medication_notes"
-                    name="current_medication_notes"
-                    rows={3}
-                    value={form.current_medication_notes}
-                    onChange={handleChange}
-                    maxLength={3000}
-                    placeholder="List medicines currently taken, if provided"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <label htmlFor="allergy_notes" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Allergies
-                  </label>
-                  <textarea
-                    id="allergy_notes"
-                    name="allergy_notes"
-                    rows={2}
-                    value={form.allergy_notes}
-                    onChange={handleChange}
-                    maxLength={2000}
-                    placeholder="Known allergies or 'Not reported' (optional)"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-              </div>
-
-              {/* DOCTOR RECOMMENDATIONS */}
-              <div className="mt-6 rounded-2xl border border-cyan-200 bg-cyan-50/50 p-4 md:p-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h4 className="font-semibold text-slate-900">
-                      Doctor Recommendations
-                    </h4>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Find available doctors using the selected problem and the doctor's configured specialties and expertise.
-                    </p>
+                  <div className="relative">
+                    <Clock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="symptom_duration"
+                      type="text"
+                      value={form.symptom_duration}
+                      onChange={(e) => handleFieldChange("symptom_duration", e.target.value)}
+                      placeholder="E.G. 2 DAYS, 3 WEEKS"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-900 font-bold uppercase placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition"
+                    />
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={recommendDoctors}
-                    disabled={recommendationLoading || doctorsLoading}
-                    className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {recommendationLoading ? (
-                      <>
-                        <LoaderCircle className="h-4 w-4 animate-spin" />
-                        Finding doctors...
-                      </>
-                    ) : (
-                      <>
-                        <Stethoscope className="h-4 w-4" />
-                        Find Recommended Doctors
-                      </>
-                    )}
-                  </button>
                 </div>
 
-                {recommendationMessage && (
-                  <p
-                    role={recommendationError ? "alert" : "status"}
-                    className={`mt-3 rounded-xl p-3 text-sm ${
-                      recommendationError
-                        ? "border border-amber-200 bg-amber-50 text-amber-800"
-                        : "border border-emerald-200 bg-emerald-50 text-emerald-800"
-                    }`}
-                  >
-                    {recommendationMessage}
-                  </p>
-                )}
-
-                {recommendedDoctors.length > 0 && (
-                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                    {recommendedDoctors.map((doctor) => {
-                      const isSelected =
-                        String(form.doctor_id) === String(doctor.doctor_id)
-                      const specializations = Array.isArray(doctor.specializations)
-                        ? doctor.specializations
-                        : []
-                      const languages = Array.isArray(doctor.languages)
-                        ? doctor.languages
-                        : []
-                      const matchReasons = Array.isArray(doctor.match_reasons)
-                        ? doctor.match_reasons
-                        : []
-
+                {/* Severity */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    SEVERITY LEVEL <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {SEVERITY_LEVELS.map((sev) => {
+                      const isSelected = form.symptom_severity === sev
                       return (
-                        <article
-                          key={doctor.doctor_id}
-                          className={`rounded-xl border p-4 ${
+                        <button
+                          key={sev}
+                          type="button"
+                          onClick={() => handleFieldChange("symptom_severity", sev)}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition uppercase tracking-wider ${
                             isSelected
-                              ? "border-cyan-400 bg-white ring-2 ring-cyan-100"
-                              : "border-slate-200 bg-white"
+                              ? sev === "SEVERE"
+                                ? "bg-rose-600 text-white border-rose-600 shadow-xs"
+                                : sev === "MODERATE"
+                                ? "bg-amber-600 text-white border-amber-600 shadow-xs"
+                                : "bg-sky-600 text-white border-sky-600 shadow-xs"
+                              : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
                           }`}
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <h5 className="font-semibold text-slate-900">
-                                {doctor.full_name}
-                              </h5>
-                              {doctor.qualifications && (
-                                <p className="mt-1 text-xs text-slate-500">
-                                  {doctor.qualifications}
-                                </p>
-                              )}
-                            </div>
-                            <span className="shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-xs font-bold text-cyan-800">
-                              {Number(doctor.match_score) || 0}% keyword match
-                            </span>
-                          </div>
-
-                          <div className="mt-3 space-y-1 text-sm text-slate-600">
-                            <p>
-                              <span className="font-semibold text-slate-700">Specialties: </span>
-                              {specializations.length > 0
-                                ? specializations.join(", ")
-                                : "Not listed"}
-                            </p>
-                            {Number(doctor.experience_years) > 0 && (
-                              <p>
-                                <span className="font-semibold text-slate-700">Experience: </span>
-                                {doctor.experience_years} years
-                              </p>
-                            )}
-                            {languages.length > 0 && (
-                              <p>
-                                <span className="font-semibold text-slate-700">Languages: </span>
-                                {languages.join(", ")}
-                              </p>
-                            )}
-                          </div>
-
-                          {matchReasons.length > 0 && (
-                            <div className="mt-3 flex flex-wrap gap-1.5">
-                              {matchReasons.map((reason, index) => (
-                                <span
-                                  key={`${doctor.doctor_id}-${index}`}
-                                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"
-                                >
-                                  {reason}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => chooseRecommendedDoctor(doctor)}
-                            className={`mt-4 w-full rounded-lg px-3 py-2.5 text-sm font-semibold transition ${
-                              isSelected
-                                ? "bg-emerald-100 text-emerald-800"
-                                : "bg-cyan-700 text-white hover:bg-cyan-800"
-                            }`}
-                          >
-                            {isSelected ? "Selected Attending Doctor" : "Choose This Doctor"}
-                          </button>
-                        </article>
+                          {sev}
+                        </button>
                       )
                     })}
                   </div>
-                )}
-
-                <p className="mt-3 text-xs leading-5 text-slate-500">
-                  Recommendations are based on profile keyword overlap. The match percentage is not a diagnosis or a measure of clinical suitability. Confirm the appropriate doctor before registration.
-                </p>
+                </div>
               </div>
-            </section>
-
-            {/* =================================================
-                OPTIONAL CLINICAL OBSERVATIONS
-            ================================================= */}
-
-            <section className="border-t border-slate-100 pt-8">
-
-              <div className="mb-4">
-                <h3 className="font-semibold text-slate-900">
-                  Clinical Observations (Optional)
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Enter measurements only when they are available. These fields are not required for registration.
-                </p>
-              </div>
-
-              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-
-                <div>
-                  <label htmlFor="blood_pressure" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Blood Pressure
-                  </label>
-                  <input
-                    id="blood_pressure"
-                    name="blood_pressure"
-                    value={form.blood_pressure}
-                    onChange={handleChange}
-                    maxLength={30}
-                    placeholder="e.g. 120/80 mmHg"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="pulse" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Pulse (bpm)
-                  </label>
-                  <input
-                    id="pulse"
-                    name="pulse"
-                    type="number"
-                    min="0"
-                    max="300"
-                    value={form.pulse}
-                    onChange={handleChange}
-                    placeholder="e.g. 72"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="temperature_c" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Temperature (°C)
-                  </label>
-                  <input
-                    id="temperature_c"
-                    name="temperature_c"
-                    type="number"
-                    min="25"
-                    max="45"
-                    step="0.1"
-                    value={form.temperature_c}
-                    onChange={handleChange}
-                    placeholder="e.g. 36.8"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="spo2_percent" className="mb-2 block text-sm font-semibold text-slate-700">
-                    SpO₂ (%)
-                  </label>
-                  <input
-                    id="spo2_percent"
-                    name="spo2_percent"
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={form.spo2_percent}
-                    onChange={handleChange}
-                    placeholder="e.g. 98"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="height_cm" className="mb-2 block text-sm font-semibold text-slate-700">
-                    Height (cm)
-                  </label>
-                  <input
-                    id="height_cm"
-                    name="height_cm"
-                    type="number"
-                    min="1"
-                    max="300"
-                    step="0.1"
-                    value={form.height_cm}
-                    onChange={handleChange}
-                    placeholder="e.g. 170"
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </div>
-
-              </div>
-            </section>
-
-            {/* =================================================
-                ADMISSION
-            ================================================= */}
-
-            <section className="border-t border-slate-100 pt-8">
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-
-                <label className="flex cursor-pointer items-start gap-3">
-
-                  <input
-                    type="checkbox"
-                    name="admit_patient"
-                    checked={form.admit_patient}
-                    onChange={handleChange}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
-                  />
-
-                  <span>
-
-                    <span className="block text-sm font-semibold text-slate-800">
-                      Admit Patient
-                    </span>
-
-                    <span className="mt-1 block text-sm leading-5 text-slate-500">
-                      Select this option to assign the patient
-                      to a real ward and available bed.
-                    </span>
-
-                  </span>
-
-                </label>
-
-              </div>
-
-              {/* Ward / Bed */}
-
-              {form.admit_patient && (
-
-                <div className="mt-5 rounded-2xl border border-cyan-100 bg-cyan-50/40 p-5">
-
-                  <div className="mb-5 flex items-center gap-3">
-
-                    <div className="rounded-xl bg-cyan-100 p-2">
-
-                      <BedDouble className="h-5 w-5 text-cyan-700" />
-
-                    </div>
-
-                    <div>
-
-                      <h3 className="font-semibold text-slate-900">
-                        Hospital Location
-                      </h3>
-
-                      <p className="mt-1 text-sm text-slate-500">
-                        Select the ward first, then choose
-                        an available bed.
-                      </p>
-
-                    </div>
-
-                  </div>
-
-                  <div className="grid gap-5 md:grid-cols-2">
-
-                    {/* Ward */}
-
-                    <div>
-
-                      <label
-                        htmlFor="ward_id"
-                        className="mb-2 block text-sm font-semibold text-slate-700"
-                      >
-                        Ward
-                        <span className="ml-1 text-red-500">
-                          *
-                        </span>
-                      </label>
-
-                      <select
-                        id="ward_id"
-                        name="ward_id"
-                        value={form.ward_id}
-                        onChange={handleChange}
-                        required
-                        disabled={wardsLoading}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 disabled:bg-slate-100"
-                      >
-
-                        <option value="">
-                          {wardsLoading
-                            ? "Loading wards..."
-                            : "Select a ward"}
-                        </option>
-
-                        {wards.map(
-                          (ward) => (
-                            <option
-                              key={ward.id}
-                              value={ward.id}
-                              disabled={
-                                Number(
-                                  ward.available_beds,
-                                ) === 0
-                              }
-                            >
-                              {ward.name}
-                              {" • "}
-                              {ward.available_beds}
-                              {" available"}
-                            </option>
-                          ),
-                        )}
-
-                      </select>
-
-                    </div>
-
-                    {/* Bed */}
-
-                    <div>
-
-                      <label
-                        htmlFor="bed_id"
-                        className="mb-2 block text-sm font-semibold text-slate-700"
-                      >
-                        Available Bed
-                        <span className="ml-1 text-red-500">
-                          *
-                        </span>
-                      </label>
-
-                      <select
-                        id="bed_id"
-                        name="bed_id"
-                        value={form.bed_id}
-                        onChange={handleChange}
-                        required
-                        disabled={
-                          !form.ward_id ||
-                          bedsLoading
-                        }
-                        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 disabled:bg-slate-100"
-                      >
-
-                        <option value="">
-                          {!form.ward_id
-                            ? "Select ward first"
-                            : bedsLoading
-                              ? "Loading beds..."
-                              : beds.length === 0
-                                ? "No available beds"
-                                : "Select available bed"}
-                        </option>
-
-                        {beds.map(
-                          (bed) => (
-                            <option
-                              key={bed.id}
-                              value={bed.id}
-                            >
-                              {bed.bed_number}
-                              {" • "}
-                              Available
-                            </option>
-                          ),
-                        )}
-
-                      </select>
-
-                    </div>
-
-                  </div>
-
-                  {/* Selected location */}
-
-                  {selectedWard && selectedBed && (
-
-                    <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-
-                      <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">
-                        Selected Location
-                      </p>
-
-                      <p className="mt-1 font-semibold text-emerald-900">
-                        {selectedWard.name}
-                        {" • "}
-                        {selectedBed.bed_number}
-                      </p>
-
-                    </div>
-
-                  )}
-
-                </div>
-              )}
-
-            </section>
-
-          </div>
-
-          {/* =================================================
-              ACTIONS
-          ================================================= */}
-
-          <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-slate-50 p-5 sm:flex-row sm:justify-end md:p-6">
-
+            </div>
+          </Card>
+
+          {/* COLLAPSIBLE SECTION: ADDITIONAL INFORMATION */}
+          <div className="rounded-2xl border border-slate-200/90 bg-white overflow-hidden shadow-xs">
             <button
               type="button"
-              onClick={handleCancel}
-              disabled={loading}
-              className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              onClick={() => setShowAdditionalInfo((prev) => !prev)}
+              className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50 transition"
             >
-              Cancel
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center font-bold">
+                  {showAdditionalInfo ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                </div>
+                <div>
+                  <h4 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
+                    ADDITIONAL INFORMATION (OPTIONAL)
+                  </h4>
+                  <p className="text-[11px] text-slate-500 uppercase tracking-wide">
+                    ADDRESS, EMAIL, EMERGENCY CONTACTS, DETAILED CLINICAL HISTORY & VITALS
+                  </p>
+                </div>
+              </div>
+              <span className="text-[11px] font-bold text-sky-700 px-3 py-1 bg-sky-50 rounded-lg uppercase tracking-wider">
+                {showAdditionalInfo ? "COLLAPSE" : "+ EXPAND"}
+              </span>
             </button>
 
-            <button
-              type="submit"
-              disabled={
-                loading ||
-                doctorsLoading ||
-                doctors.length === 0
-              }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            {showAdditionalInfo && (
+              <div className="p-6 pt-2 border-t border-slate-100 space-y-5 bg-slate-50/30">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Address */}
+                  <div className="md:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      RESIDENTIAL ADDRESS
+                    </label>
+                    <input
+                      type="text"
+                      value={form.address}
+                      onChange={(e) => handleFieldChange("address", e.target.value)}
+                      placeholder="E.G. 124 PARK AVENUE, NEW DELHI"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
 
-              {loading ? (
-                <>
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                  Registering...
-                </>
-              ) : (
-                <>
-                  <UserPlus className="h-4 w-4" />
-                  Register Patient
-                </>
-              )}
+                  {/* Email (Normalized Lowercase) */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      EMAIL ADDRESS (NORMALIZED LOWERCASE)
+                    </label>
+                    <input
+                      type="email"
+                      value={form.email}
+                      onChange={(e) => handleFieldChange("email", e.target.value)}
+                      placeholder="patient@example.com"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-900 font-bold lowercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
 
-            </button>
+                  {/* Preferred Language */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      PREFERRED LANGUAGE
+                    </label>
+                    <input
+                      type="text"
+                      value={form.preferred_language}
+                      onChange={(e) => handleFieldChange("preferred_language", e.target.value)}
+                      placeholder="E.G. ENGLISH, HINDI, MARATHI"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
 
+                  {/* Emergency Contact Name */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      EMERGENCY CONTACT NAME
+                    </label>
+                    <input
+                      type="text"
+                      value={form.emergency_contact_name}
+                      onChange={(e) => handleFieldChange("emergency_contact_name", e.target.value)}
+                      placeholder="E.G. SITA SHARMA"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+
+                  {/* Emergency Contact Number */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      EMERGENCY CONTACT NUMBER
+                    </label>
+                    <input
+                      type="text"
+                      value={form.emergency_contact_number}
+                      onChange={(e) => handleFieldChange("emergency_contact_number", e.target.value)}
+                      placeholder="E.G. 9876543211"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-900 font-bold placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+
+                  {/* Emergency Relationship */}
+                  <div className="md:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      EMERGENCY CONTACT RELATIONSHIP
+                    </label>
+                    <input
+                      type="text"
+                      value={form.emergency_contact_relationship}
+                      onChange={(e) => handleFieldChange("emergency_contact_relationship", e.target.value)}
+                      placeholder="E.G. SPOUSE, SIBLING, PARENT"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                    />
+                  </div>
+
+                  {/* Medical History */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      MEDICAL HISTORY NOTES
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={form.medical_history_notes}
+                      onChange={(e) => handleFieldChange("medical_history_notes", e.target.value)}
+                      placeholder="E.G. TYPE 2 DIABETES, HYPERTENSION"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none"
+                    />
+                  </div>
+
+                  {/* Current Medications */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      CURRENT MEDICATIONS
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={form.current_medication_notes}
+                      onChange={(e) => handleFieldChange("current_medication_notes", e.target.value)}
+                      placeholder="E.G. METFORMIN 500MG, TELMISARTAN 40MG"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none"
+                    />
+                  </div>
+
+                  {/* Known Allergies */}
+                  <div className="md:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      KNOWN ALLERGIES
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={form.allergy_notes}
+                      onChange={(e) => handleFieldChange("allergy_notes", e.target.value)}
+                      placeholder="E.G. PENICILLIN, NSAIDS, SULFA DRUGS"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-900 font-bold uppercase placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Vitals Sub-grid */}
+                <div className="pt-2 border-t border-slate-200/80">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    CLINICAL OBSERVATIONS & VITALS
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-500 uppercase">BP</span>
+                      <input
+                        type="text"
+                        value={form.blood_pressure}
+                        onChange={(e) => handleFieldChange("blood_pressure", e.target.value)}
+                        placeholder="120/80"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 text-center uppercase"
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-500 uppercase">PULSE</span>
+                      <input
+                        type="number"
+                        value={form.pulse}
+                        onChange={(e) => handleFieldChange("pulse", e.target.value)}
+                        placeholder="72"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 text-center"
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-500 uppercase">TEMP (°C)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={form.temperature_c}
+                        onChange={(e) => handleFieldChange("temperature_c", e.target.value)}
+                        placeholder="37.0"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 text-center"
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-500 uppercase">SPO2 (%)</span>
+                      <input
+                        type="number"
+                        value={form.spo2_percent}
+                        onChange={(e) => handleFieldChange("spo2_percent", e.target.value)}
+                        placeholder="98"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 text-center"
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-500 uppercase">WEIGHT (KG)</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={form.weight_kg}
+                        onChange={(e) => handleFieldChange("weight_kg", e.target.value)}
+                        placeholder="70"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 text-center"
+                      />
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-500 uppercase">HEIGHT (CM)</span>
+                      <input
+                        type="number"
+                        value={form.height_cm}
+                        onChange={(e) => handleFieldChange("height_cm", e.target.value)}
+                        placeholder="175"
+                        className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 text-center"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
+          {/* STEP 3: CAREMATCH DOCTOR RECOMMENDATIONS */}
+          <Card>
+            <CardHeader
+              title="3. CAREMATCH DOCTOR RECOMMENDATIONS"
+              subtitle="AUTOMATIC SPECIALIST MATCHING POWERED BY PATIENT SYMPTOMS & CLINICAL COMPLAINT"
+            />
+            <div className="p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
+                    RECOMMENDED ATTENDING PHYSICIANS
+                  </h4>
+                  <p className="text-[11px] text-slate-500 uppercase tracking-wide">
+                    MATCHING DOCTORS DERIVED FROM CLINICAL COMPLAINT & SPECIALTY TAXONOMY
+                  </p>
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  icon={Sparkles}
+                  loading={recommendationLoading}
+                  onClick={recommendDoctors}
+                  className="shrink-0"
+                >
+                  FIND RECOMMENDED DOCTORS
+                </Button>
+              </div>
+
+              {/* Status / Notice */}
+              {recommendationMessage && (
+                <div
+                  className={`p-3 rounded-xl text-xs uppercase tracking-wide font-bold flex items-center gap-2 ${
+                    recommendationError
+                      ? "bg-amber-50 text-amber-800 border border-amber-200"
+                      : "bg-sky-50 text-sky-800 border border-sky-200"
+                  }`}
+                >
+                  <Info className="w-4 h-4 shrink-0" />
+                  <span>{recommendationMessage}</span>
+                </div>
+              )}
+
+              {/* Recommendations Grid */}
+              {recommendationLoading ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <LoaderCircle className="w-8 h-8 animate-spin text-sky-600 mx-auto" />
+                  <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    ANALYZING COMPLAINT & RETRIEVING DOCTOR RECOMMENDATIONS...
+                  </p>
+                </div>
+              ) : recommendedDoctors.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  {recommendedDoctors.map((doc) => {
+                    const isSelected = String(form.doctor_id) === String(doc.doctor_id)
+                    const specializations = Array.isArray(doc.specializations)
+                      ? doc.specializations
+                      : []
+                    const matchReasons = Array.isArray(doc.match_reasons)
+                      ? doc.match_reasons
+                      : []
+
+                    return (
+                      <div
+                        key={doc.doctor_id}
+                        onClick={() => selectDoctor(doc.doctor_id)}
+                        className={`p-4 rounded-2xl border transition-all cursor-pointer relative space-y-3 ${
+                          isSelected
+                            ? "bg-sky-50/70 border-sky-500 ring-2 ring-sky-500/20 shadow-sm"
+                            : "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
+                                isSelected
+                                  ? "bg-sky-600 text-white"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              <Stethoscope className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h5 className="text-sm font-black text-slate-900 uppercase">
+                                DR. {doc.full_name}
+                              </h5>
+                              <p className="text-[11px] font-bold text-sky-700 uppercase">
+                                {specializations.join(", ") || "GENERAL MEDICINE"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 uppercase tracking-wider">
+                            {doc.match_score || 85}% MATCH
+                          </span>
+                        </div>
+
+                        {/* Match Reason & Availability */}
+                        <div className="text-[11px] text-slate-600 bg-slate-50 p-2.5 rounded-xl border border-slate-100 uppercase space-y-1.5">
+                          <p className="font-bold text-slate-700 leading-snug">
+                            REASON:{" "}
+                            <span className="font-medium text-slate-600">
+                              {matchReasons.length > 0
+                                ? matchReasons.join(" · ")
+                                : "MATCHES SELECTED PROBLEM CATEGORY"}
+                            </span>
+                          </p>
+                          {doc.is_available !== false && (
+                            <p className="font-bold text-emerald-700 flex items-center gap-1.5 pt-0.5 border-t border-slate-200/60">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
+                              AVAILABLE FOR IMMEDIATE CONSULTATION
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Action / Select Button */}
+                        <div className="flex justify-end pt-1">
+                          {isSelected ? (
+                            <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-bold uppercase tracking-wider shadow-xs">
+                              <Check className="w-3.5 h-3.5" />
+                              SELECTED ATTENDING DOCTOR
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-slate-700 text-xs font-bold uppercase hover:bg-slate-50 tracking-wider">
+                              ASSIGN DOCTOR
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
+
+              {/* Manual Selection Dropdown Fallback */}
+              <div className="pt-2 border-t border-slate-100">
+                <label
+                  htmlFor="manual_doctor_select"
+                  className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5"
+                >
+                  MANUAL ATTENDING DOCTOR SELECTION
+                </label>
+                <select
+                  id="manual_doctor_select"
+                  value={form.doctor_id}
+                  onChange={(e) => selectDoctor(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                >
+                  <option value="" disabled className="text-slate-400">
+                    SELECT FROM ALL REGISTERED HOSPITAL DOCTORS
+                  </option>
+                  {allDoctorOptions.map((doc) => (
+                    <option key={doc.id || doc._id} value={doc.id || doc._id} className="uppercase font-bold">
+                      DR. {doc.full_name}
+                    </option>
+                  ))}
+                </select>
+                {selectedDoctorObj && (
+                  <p className="text-[11px] font-bold text-emerald-700 mt-1 uppercase flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    ASSIGNED ATTENDING DOCTOR: DR. {selectedDoctorObj.full_name}
+                  </p>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* STEP 4: ADMISSION TYPE (OUTPATIENT VS INPATIENT) */}
+          <Card>
+            <CardHeader
+              title="4. HOSPITAL ADMISSION & BED ALLOCATION"
+              subtitle="CHOOSE OUTPATIENT OPD OR ALLOCATE INPATIENT WARD AND BED"
+            />
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  ADMISSION TYPE <span className="text-rose-500">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        admit_patient: false,
+                        ward_id: "",
+                        bed_id: "",
+                      }))
+                    }
+                    className={`p-4 rounded-2xl border text-left transition flex items-center gap-3 ${
+                      !form.admit_patient
+                        ? "bg-sky-50/70 border-sky-500 ring-2 ring-sky-500/20 text-sky-950 shadow-xs"
+                        : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
+                        !form.admit_patient ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      <User className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black uppercase">OUTPATIENT (OPD)</div>
+                      <div className="text-[11px] text-slate-500 uppercase">DAY CONSULTATION ONLY</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({
+                        ...prev,
+                        admit_patient: true,
+                      }))
+                    }
+                    className={`p-4 rounded-2xl border text-left transition flex items-center gap-3 ${
+                      form.admit_patient
+                        ? "bg-indigo-50/70 border-indigo-500 ring-2 ring-indigo-500/20 text-indigo-950 shadow-xs"
+                        : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div
+                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
+                        form.admit_patient ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      <BedDouble className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black uppercase">INPATIENT (IPD)</div>
+                      <div className="text-[11px] text-slate-500 uppercase">BED ALLOCATION REQUIRED</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Inpatient Ward & Bed Selection */}
+              {form.admit_patient && (
+                <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-100 space-y-4 pt-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-indigo-950 uppercase">
+                    <Building2 className="w-4 h-4 text-indigo-600" />
+                    <span>INPATIENT BED ALLOCATION DETAILS</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Ward Dropdown */}
+                    <div>
+                      <label
+                        htmlFor="ward_select"
+                        className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                      >
+                        SELECT WARD <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="ward_select"
+                        required={form.admit_patient}
+                        value={form.ward_id}
+                        onChange={(e) => {
+                          handleFieldChange("ward_id", e.target.value)
+                          handleFieldChange("bed_id", "")
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                      >
+                        <option value="" disabled className="text-slate-400">
+                          {wardsLoading ? "LOADING WARDS..." : "SELECT WARD"}
+                        </option>
+                        {wards.map((ward) => (
+                          <option key={ward.id} value={ward.id} className="uppercase font-bold">
+                            {ward.name} ({ward.code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Bed Dropdown */}
+                    <div>
+                      <label
+                        htmlFor="bed_select"
+                        className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                      >
+                        SELECT AVAILABLE BED <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="bed_select"
+                        required={form.admit_patient}
+                        disabled={!form.ward_id || bedsLoading}
+                        value={form.bed_id}
+                        onChange={(e) => handleFieldChange("bed_id", e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:opacity-50"
+                      >
+                        <option value="" disabled className="text-slate-400">
+                          {bedsLoading
+                            ? "LOADING AVAILABLE BEDS..."
+                            : !form.ward_id
+                            ? "SELECT WARD FIRST"
+                            : beds.length === 0
+                            ? "NO UNOCCUPIED BEDS AVAILABLE"
+                            : "SELECT BED"}
+                        </option>
+                        {beds.map((bed) => (
+                          <option key={bed.id} value={bed.id} className="uppercase font-bold">
+                            BED {bed.bed_number}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* SUBMIT ACTIONS */}
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleCancel}
+            >
+              CANCEL
+            </Button>
+
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              loading={loading}
+              icon={UserCheck}
+              className="px-8 font-black uppercase tracking-wider"
+            >
+              REGISTER PATIENT
+            </Button>
+          </div>
         </form>
-
-        {/* =================================================
-            FOOTER
-        ================================================= */}
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-
-          <p className="text-sm font-semibold text-slate-800">
-            Patient registration
-          </p>
-
-          <p className="mt-1 text-sm leading-6 text-slate-500">
-            Patient records are stored in the SmartMedChart
-            shared database and are available to authorized
-            clinical users.
-          </p>
-
-        </div>
-
       </div>
-
     </MainLayout>
   )
 }

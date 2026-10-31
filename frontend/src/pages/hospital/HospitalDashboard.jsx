@@ -51,7 +51,6 @@ export default function HospitalDashboard() {
 
   // Search & Filter & Sort
   const [search, setSearch] = useState("")
-  const [statusFilter, setStatusFilter] = useState("ALL") // ALL, ACTIVE, DISCHARGED
   const [sortBy, setSortBy] = useState("name") // name, id, dob
   const [sortOrder, setSortOrder] = useState("asc")
   const [currentPage, setCurrentPage] = useState(1)
@@ -66,7 +65,8 @@ export default function HospitalDashboard() {
         : Array.isArray(response.data)
         ? response.data
         : []
-      setPatients(hideTestPatients(list))
+      const activeList = list.filter((p) => Boolean(p.is_active) && p.lifecycle_status !== "DISCHARGED")
+      setPatients(hideTestPatients(activeList))
     } catch (err) {
       setError(
         err?.response?.data?.detail || "Unable to load hospital patient directory."
@@ -82,10 +82,9 @@ export default function HospitalDashboard() {
 
   // KPI Metrics
   const metrics = useMemo(() => {
-    const total = patients.length
-    const active = patients.filter((p) => Boolean(p.is_active)).length
-    const discharged = total - active
-    return { total, active, discharged }
+    const active = patients.filter((p) => Boolean(p.is_active) && p.lifecycle_status !== "DISCHARGED").length
+    const withBed = patients.filter((p) => Boolean(p.bed_id)).length
+    return { active, withBed }
   }, [patients])
 
   // Filtering & Sorting
@@ -103,11 +102,7 @@ export default function HospitalDashboard() {
       )
     }
 
-    if (statusFilter === "ACTIVE") {
-      result = result.filter((p) => Boolean(p.is_active))
-    } else if (statusFilter === "DISCHARGED") {
-      result = result.filter((p) => !p.is_active)
-    }
+    result = result.filter((p) => Boolean(p.is_active) && p.lifecycle_status !== "DISCHARGED")
 
     result.sort((a, b) => {
       let comp = 0
@@ -124,7 +119,7 @@ export default function HospitalDashboard() {
     })
 
     return result
-  }, [patients, search, statusFilter, sortBy, sortOrder])
+  }, [patients, search, sortBy, sortOrder])
 
   const totalPages = Math.ceil(filteredPatients.length / ITEMS_PER_PAGE) || 1
   const paginatedPatients = useMemo(() => {
@@ -167,12 +162,12 @@ export default function HospitalDashboard() {
 
             <div className="flex flex-wrap items-center gap-3">
               <Button
-                variant="primary"
+                variant="secondary"
                 icon={UserPlus}
-                className="bg-white text-sky-900 hover:bg-sky-50 shadow-md border-0 font-bold"
-                onClick={() => navigate("/hospital/patients/add")}
+                className="bg-white text-sky-900 hover:bg-sky-50 border border-sky-200/80 shadow-md font-bold text-sm"
+                onClick={() => navigate("/hospital/patients/new")}
               >
-                Admit Patient
+                Register Patient
               </Button>
               <Button
                 variant="outline"
@@ -206,27 +201,20 @@ export default function HospitalDashboard() {
         )}
 
         {/* KPI Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <StatCard
-            title="Total Registered"
-            value={metrics.total}
-            subtitle="Lifetime Hospital Records"
-            icon={Users}
-            color="sky"
-          />
-          <StatCard
-            title="Active Admissions"
+            title="Active Inpatients"
             value={metrics.active}
             subtitle="Currently in Hospital Care"
             icon={Activity}
             color="emerald"
           />
           <StatCard
-            title="Discharged Records"
-            value={metrics.discharged}
-            subtitle="Completed Treatments"
-            icon={CheckCircle2}
-            color="slate"
+            title="Assigned Ward Beds"
+            value={metrics.withBed}
+            subtitle="Occupied Ward Beds"
+            icon={Users}
+            color="sky"
           />
         </div>
 
@@ -260,32 +248,11 @@ export default function HospitalDashboard() {
               )}
             </div>
 
-            {/* Lifecycle Tabs */}
-            <div className="flex items-center gap-1.5">
-              {[
-                { id: "ALL", label: "All Patients" },
-                { id: "ACTIVE", label: "Active Inpatients" },
-                { id: "DISCHARGED", label: "Discharged" },
-              ].map((tab) => {
-                const active = statusFilter === tab.id
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => {
-                      setStatusFilter(tab.id)
-                      setCurrentPage(1)
-                    }}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                      active
-                        ? "bg-sky-600 text-white shadow-xs"
-                        : "bg-slate-100 text-slate-600 hover:bg-slate-200/70"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                )
-              })}
+            {/* Active Inpatients Count Pill */}
+            <div className="flex items-center gap-2">
+              <span className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-sky-600 text-white shadow-xs">
+                Active Inpatients ({filteredPatients.length})
+              </span>
             </div>
           </div>
         </Card>
@@ -305,7 +272,7 @@ export default function HospitalDashboard() {
                   setSearch("")
                   setStatusFilter("ALL")
                 } else {
-                  navigate("/hospital/patients/add")
+                  navigate("/hospital/patients/new")
                 }
               }}
             />
@@ -400,11 +367,11 @@ export default function HospitalDashboard() {
                           {/* Status */}
                           <td className="py-3.5 px-4 whitespace-nowrap">
                             <Badge
-                              variant={patient.is_active ? "success" : "neutral"}
+                              variant="success"
                               size="sm"
-                              dot={Boolean(patient.is_active)}
+                              dot
                             >
-                              {patient.is_active ? "Active Inpatient" : "Discharged"}
+                              Active Inpatient
                             </Badge>
                           </td>
 

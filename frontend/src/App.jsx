@@ -25,6 +25,7 @@ import PatientManagement from "./pages/admin/PatientManagement"
 import WardBedManagement from "./pages/admin/WardBedManagement"
 import DoctorProfiles from "./pages/admin/DoctorProfiles";
 import MedicationMonitoring from "./pages/admin/MedicationMonitoring";
+import PharmacyManagement from "./pages/admin/PharmacyManagement";
 // =====================================================
 // NURSE
 // =====================================================
@@ -47,6 +48,7 @@ import CreatePrescription from "./pages/doctor/CreatePrescription"
 import EditPrescription from "./pages/doctor/EditPrescription"
 import Prescriptions from "./pages/doctor/Prescriptions"
 import DoctorAI from "./pages/doctor/DoctorAI"
+import DoctorOnRound from "./pages/doctor/DoctorOnRound"
 
 // =====================================================
 // HOSPITAL
@@ -288,6 +290,21 @@ export default function App() {
       />
 
       <Route
+        path="/doctor/on-round"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "doctor",
+              ]}
+            >
+              <DoctorOnRound />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/doctor/prescriptions"
         element={
           <ProtectedRoute>
@@ -399,6 +416,21 @@ export default function App() {
 
       <Route
         path="/nurse/qr"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "nurse",
+              ]}
+            >
+              <QRScanner />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/nurse/scanner"
         element={
           <ProtectedRoute>
             <RoleRoute
@@ -528,6 +560,41 @@ export default function App() {
       />
 
       <Route
+        path="/admin/patients/discharged"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+              ]}
+            >
+              <PatientManagement defaultTab="discharged" />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/hospital/discharged"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+                "hospital",
+                "hospital_staff",
+                "receptionist",
+              ]}
+            >
+              <PatientManagement defaultTab="discharged" />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
         path="/admin/ward-bed-management"
         element={
           <ProtectedRoute>
@@ -558,19 +625,43 @@ export default function App() {
   }
       />
 
+      <Route
+        path="/admin/pharmacy"
+        element={
+          <ProtectedRoute>
+            <RoleRoute
+              allowedRoles={[
+                "admin",
+                "administrator",
+                "pharmacist",
+              ]}
+            >
+              <PharmacyManagement />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      />
+
+
 
       {/* =================================================
           HOSPITAL PORTAL
       ================================================= */}
       <Route
         path="/receptionist/counter"
-        element={
-          <ProtectedRoute>
-            <RoleRoute allowedRoles={["receptionist"]}>
-              <CareMatch />
-            </RoleRoute>
-          </ProtectedRoute>
-        }
+        element={<Navigate to="/hospital/patients/new" replace />}
+      />
+      <Route
+        path="/hospital/intake"
+        element={<Navigate to="/hospital/patients/new" replace />}
+      />
+      <Route
+        path="/hospital/carematch"
+        element={<Navigate to="/hospital/patients/new" replace />}
+      />
+      <Route
+        path="/hospital/patients/add"
+        element={<Navigate to="/hospital/patients/new" replace />}
       />
       <Route
         path="/hospital/dashboard"

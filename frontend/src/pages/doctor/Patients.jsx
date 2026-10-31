@@ -47,7 +47,6 @@ export default function Patients() {
 
   const [patients, setPatients] = useState([])
   const [search, setSearch] = useState("")
-  const [filterStatus, setFilterStatus] = useState("all") // 'all', 'active', 'discharged'
   const [sortBy, setSortBy] = useState("name_asc") // 'name_asc', 'name_desc', 'id_asc'
   const [viewMode, setViewMode] = useState("table") // 'table', 'grid'
   const [currentPage, setCurrentPage] = useState(1)
@@ -65,7 +64,10 @@ export default function Patients() {
     try {
       const data = await getDoctorPatients(currentSearch)
       const raw = Array.isArray(data) ? data : []
-      setPatients(hideTestPatients(raw))
+      const visible = hideTestPatients(raw).filter(
+        (p) => Boolean(p.is_active) && p.lifecycle_status !== "DISCHARGED"
+      )
+      setPatients(visible)
     } catch (requestError) {
       setError(
         requestError?.response?.data?.detail ||
@@ -83,13 +85,9 @@ export default function Patients() {
 
   // Filtering & Sorting
   const filteredPatients = useMemo(() => {
-    let list = patients
-
-    if (filterStatus === "active") {
-      list = list.filter((p) => p.is_active)
-    } else if (filterStatus === "discharged") {
-      list = list.filter((p) => !p.is_active)
-    }
+    let list = patients.filter(
+      (p) => Boolean(p.is_active) && p.lifecycle_status !== "DISCHARGED"
+    )
 
     if (search.trim()) {
       const q = search.trim().toLowerCase()
@@ -112,7 +110,7 @@ export default function Patients() {
       if (sortBy === "id_asc") return (a.patient_id || "").localeCompare(b.patient_id || "")
       return 0
     })
-  }, [patients, filterStatus, search, sortBy])
+  }, [patients, search, sortBy])
 
   // Pagination slice
   const paginatedPatients = useMemo(() => {
@@ -122,8 +120,8 @@ export default function Patients() {
 
   const totalPages = Math.ceil(filteredPatients.length / pageSize) || 1
 
-  const activeCount = useMemo(() => patients.filter((p) => p.is_active).length, [patients])
-  const dischargedCount = Math.max(0, patients.length - activeCount)
+  const activeCount = patients.length
+  const assignedBedCount = useMemo(() => patients.filter((p) => Boolean(p.bed_id)).length, [patients])
 
   if (loading) {
     return (
@@ -190,28 +188,21 @@ export default function Patients() {
         )}
 
         {/* Aggregate KPI Stat Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard
-            title="Total Assigned Patients"
-            value={patients.length}
-            description="All active and past records"
-            icon={Users}
-            variant="sky"
-          />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <StatCard
             title="Active Inpatients"
             value={activeCount}
-            description="Currently in active care"
+            description="Under active clinical care"
             icon={UserRound}
             variant="emerald"
             badge="In Hospital"
           />
           <StatCard
-            title="Discharged Records"
-            value={dischargedCount}
-            description="Treatment concluded"
-            icon={CheckCircle2}
-            variant="neutral"
+            title="Ward Bed Admitted"
+            value={assignedBedCount}
+            description="Patients with assigned beds"
+            icon={Building2}
+            variant="sky"
           />
         </div>
 
@@ -283,51 +274,11 @@ export default function Patients() {
             </div>
           </div>
 
-          {/* Status Filter Pills */}
-          <div className="flex items-center gap-1.5 pt-2 border-t border-slate-100">
-            <span className="text-xs text-slate-400 font-semibold mr-1">Status:</span>
-            <button
-              type="button"
-              onClick={() => {
-                setFilterStatus("all")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
-                filterStatus === "all"
-                  ? "bg-slate-900 text-white shadow-xs"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              All ({patients.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setFilterStatus("active")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
-                filterStatus === "active"
-                  ? "bg-emerald-600 text-white shadow-xs"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
+          {/* Active Inpatient Status Banner */}
+          <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+            <span className="px-3 py-1 rounded-xl text-xs font-bold bg-emerald-600 text-white shadow-xs">
               Active Inpatients ({activeCount})
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setFilterStatus("discharged")
-                setCurrentPage(1)
-              }}
-              className={`px-3 py-1 rounded-xl text-xs font-bold transition ${
-                filterStatus === "discharged"
-                  ? "bg-slate-700 text-white shadow-xs"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              Discharged ({dischargedCount})
-            </button>
+            </span>
           </div>
         </div>
 
@@ -401,11 +352,11 @@ export default function Patients() {
 
                         <td className="py-3.5 px-4">
                           <Badge
-                            variant={patient.is_active ? "success" : "neutral"}
+                            variant="success"
                             size="sm"
                             dot
                           >
-                            {patient.is_active ? "Active Inpatient" : "Discharged"}
+                            Active Inpatient
                           </Badge>
                         </td>
 
@@ -483,11 +434,11 @@ export default function Patients() {
                       </div>
 
                       <Badge
-                        variant={patient.is_active ? "success" : "neutral"}
+                        variant="success"
                         size="sm"
                         dot
                       >
-                        {patient.is_active ? "Active" : "Discharged"}
+                        Active Inpatient
                       </Badge>
                     </div>
 

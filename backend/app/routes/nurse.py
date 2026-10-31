@@ -91,18 +91,21 @@ def _get_primary_assigned_nurse(patient_id: int) -> tuple[Optional[int], Optiona
 
 
 def _schedule_context(schedule):
+    if schedule.get("status") in ("CANCELLED", "DISCHARGED"):
+        return None
+
     item = _by_id(
         "prescription_items",
         schedule.get("prescription_item_id"),
     )
-    if not item:
+    if not item or item.get("status") in ("CANCELLED", "DISCHARGED"):
         return None
 
     prescription = _by_id(
         "prescriptions",
         item.get("prescription_id"),
     )
-    if not prescription:
+    if not prescription or prescription.get("status") in ("CANCELLED", "DISCHARGED"):
         return None
 
     patient = _by_id(
@@ -115,6 +118,9 @@ def _schedule_context(schedule):
     )
 
     if patient is None or medicine is None:
+        return None
+
+    if not (patient.get("is_active") in (True, 1)) or patient.get("lifecycle_status") == "DISCHARGED":
         return None
 
     return item, prescription, patient, medicine
@@ -226,6 +232,7 @@ def get_nurse_assigned_patients(
         mongo_db.patients.find({
             "_id": {"$in": assigned_patient_ids},
             "is_active": {"$in": [1, True]},
+            "lifecycle_status": {"$ne": "DISCHARGED"},
         }).sort([("last_name", 1), ("first_name", 1)])
     )
 
@@ -288,6 +295,7 @@ def get_nurse_patient_details(
     p = mongo_db.patients.find_one({
         "$or": [{"_id": int(patient_id)}, {"id": int(patient_id)}],
         "is_active": {"$in": [1, True]},
+        "lifecycle_status": {"$ne": "DISCHARGED"},
     })
     if not p:
         raise HTTPException(status_code=404, detail="Patient not found or inactive.")

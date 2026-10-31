@@ -155,9 +155,13 @@ export async function dischargePatient(
   patientId,
   payload = {},
 ) {
+  const body =
+    typeof payload === "string"
+      ? { discharge_reason: payload }
+      : payload || {}
   const response = await api.post(
     `/api/admin/patients/${patientId}/discharge`,
-    payload,
+    body,
   )
 
   return response.data
@@ -499,3 +503,8 @@ export const saveCareMatchDoctorProfile = async (doctorId, payload) => {
 // Add CareMatch functions to the default service object
 adminService.getCareMatchDoctors = getCareMatchDoctors;
 adminService.saveCareMatchDoctorProfile = saveCareMatchDoctorProfile;
+
+export async function readmitPatient(patientId, data = {}) {
+  const response = await api.post(`/api/admin/patients/${patientId}/readmit`, data)
+  return response.data
+}

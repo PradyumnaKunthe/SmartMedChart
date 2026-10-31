@@ -14,6 +14,7 @@ from app.routes.hospital import router as hospital_router
 from app.routes.allergies import router as allergies_router
 from app.routes.carematch import router as carematch_router
 from app.routes.monitoring import router as monitoring_router
+from app.routes.pharmacy import router as pharmacy_router
 
 
 app = FastAPI(
@@ -58,6 +59,7 @@ app.include_router(admin_router)
 app.include_router(allergies_router)
 app.include_router(carematch_router)
 app.include_router(monitoring_router)
+app.include_router(pharmacy_router)
 
 
 # =========================================================

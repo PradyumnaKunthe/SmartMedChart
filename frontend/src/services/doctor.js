@@ -186,3 +186,29 @@ export async function deletePatientAllergy(
 
   return response.data
 }
+
+// ======================================================
+// DOCTOR ON-ROUND SYSTEM
+// ======================================================
+
+export async function verifyDoctorRoundQR(qrToken) {
+  const response = await api.post("/api/doctor/rounds/verify-qr", {
+    qr_token: qrToken,
+  })
+  return response.data
+}
+
+export async function getDoctorRoundPatients() {
+  const response = await api.get("/api/doctor/rounds/patients")
+  return response.data
+}
+
+export async function saveDoctorRoundAssessment(data) {
+  const response = await api.post("/api/doctor/rounds/assessments", data)
+  return response.data
+}
+
+export async function getDoctorPatientAssessments(patientId) {
+  const response = await api.get(`/api/doctor/patients/${patientId}/assessments`)
+  return response.data
+}
