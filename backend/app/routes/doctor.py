@@ -122,6 +122,34 @@ def get_doctor_patient_or_404(patient_id: int, current_user):
     return patient
 
 
+def get_doctor_patient_history_or_404(patient_id: int, current_user):
+    """
+    Verify that the patient exists and has at least one clinical
+    encounter linked to the logged-in doctor (active or discharged).
+    """
+    patient = mongo_db.patients.find_one({
+        "$or": [{"_id": patient_id}, {"id": patient_id}],
+    })
+
+    if patient is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Patient is not assigned to this doctor.",
+        )
+
+    encounter = mongo_db.encounters.find_one({
+        "patient_id": patient_id,
+        "doctor_id": current_user.id,
+    })
+
+    if encounter is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Patient is not assigned to this doctor.",
+        )
+
+    return patient
+
 # =========================================================
 # MEDICATION SCHEDULE GENERATION
 # =========================================================
@@ -948,7 +976,7 @@ def get_prescription_history(
     patient_id: int,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
-    get_doctor_patient_or_404(
+    get_doctor_patient_history_or_404(
         patient_id,
         current_user,
     )

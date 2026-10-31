@@ -353,7 +353,25 @@ def verify_medication(
         else "Patient and medication verified (Covering Nurse Coverage). Clinical override justification required upon administration."
     )
 
+    # Check whether the latest verification record has already been consumed by an administration
+    already_administered = False
     if verification is not None:
+        v_target_id = verification.get("id", verification.get("_id"))
+        already_administered = (
+            mongo_db.medication_administrations.find_one({
+                "$or": [
+                    {"verification_id": v_target_id},
+                    {
+                        "verification_id": int(v_target_id)
+                        if isinstance(v_target_id, (int, str)) and str(v_target_id).isdigit()
+                        else v_target_id
+                    },
+                ]
+            })
+            is not None
+        )
+
+    if verification is not None and not already_administered:
         mongo_db.qr_verifications.update_one(
             {"_id": verification["_id"]},
             {

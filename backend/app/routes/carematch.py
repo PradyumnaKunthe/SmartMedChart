@@ -289,9 +289,14 @@ def recommend_doctors(
     This is a routing aid, not a diagnosis.
     """
 
-    reason = str(
-        request.get("visit_reason") or ""
-    ).strip()
+    raw_reason = ""
+    for field in ("visit_reason", "chief_complaint", "problem_category"):
+        val = request.get(field)
+        if val is not None and str(val).strip():
+            raw_reason = str(val).strip()
+            break
+
+    reason = raw_reason
 
     if not reason:
         raise HTTPException(
