@@ -1,26 +1,20 @@
-from datetime import datetime, timezone
+
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, func, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
-from app.database import get_db
-from app.models import (
-    Bed,
-    Encounter,
-    NursePatientAssignment,
-    Patient,
-    PatientBilling,
-    Role,
-    User,
-    Ward,
-)
+from app.mongo_client import mongo_db
 from app.schemas.admin import (
     AssignmentCreateRequest,
     StaffCreateRequest,
 )
-from app.security import hash_password, require_permission
+from app.security import (
+    get_current_user,
+    hash_password,
+    require_permission,
+)
 
 
 router = APIRouter(
@@ -30,12 +24,60 @@ router = APIRouter(
 
 
 # =========================================================
-# HELPERS
+# COMMON HELPERS
 # =========================================================
 
-def require_admin_permission(
-    current_user: User,
-):
+def admin_mongo_now():
+    return datetime.utcnow().isoformat(timespec="microseconds")
+
+
+def mongo_bool(value):
+    return value is True or value == 1 or str(value).lower() in (
+        "true", "1", "yes"
+    )
+
+
+def active_filter():
+    return {"$in": [True, 1]}
+
+
+def next_admin_mongo_id(collection_name: str) -> int:
+    """
+    Generate sequential numeric IDs while preserving
+    existing SQLite IDs already migrated to MongoDB.
+    """
+    collection = mongo_db[collection_name]
+
+    latest = collection.find_one(
+        {},
+        sort=[("_id", -1)],
+        projection={"_id": 1},
+    )
+
+    maximum = (
+        int(latest["_id"])
+        if latest and isinstance(latest["_id"], int)
+        else 0
+    )
+
+    counters = mongo_db["_id_sequences"]
+
+    counters.update_one(
+        {"_id": collection_name},
+        {"$max": {"value": maximum}},
+        upsert=True,
+    )
+
+    result = counters.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"value": 1}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+    return int(result["value"])
+
+
+def require_admin_permission(current_user):
     permission_names = {
         permission.name
         for permission in current_user.role.permissions
@@ -48,27 +90,33 @@ def require_admin_permission(
         )
 
 
-def serialize_staff(user: User):
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "full_name": user.full_name,
-        "role": user.role.name,
-        "is_active": user.is_active,
-        "created_at": user.created_at,
+def require_ward_read_permission(
+    current_user=Depends(get_current_user),
+):
+    permission_names = {
+        permission.name
+        for permission in current_user.role.permissions
     }
 
-
-def get_role(
-    db: Session,
-    role_name: str,
-):
-    role = db.scalar(
-        select(Role).where(
-            Role.name == role_name
+    if not (
+        {"MANAGE_SYSTEM", "REGISTER_PATIENT"}
+        & permission_names
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Permission required to view "
+                "hospital wards and beds."
+            ),
         )
-    )
+
+    return current_user
+
+
+def get_role(role_name: str):
+    role = mongo_db.roles.find_one({
+        "name": role_name
+    })
 
     if role is None:
         raise HTTPException(
@@ -79,26 +127,117 @@ def get_role(
     return role
 
 
+def serialize_staff(user):
+    role = mongo_db.roles.find_one({
+        "_id": user.get("role_id")
+    })
+
+    return {
+        "id": user.get("id"),
+        "username": user.get("username"),
+        "email": user.get("email"),
+        "full_name": user.get("full_name"),
+        "role": role.get("name") if role else None,
+        "is_active": mongo_bool(user.get("is_active")),
+        "created_at": user.get("created_at"),
+    }
+
+
+def serialize_patient(patient):
+    return {
+        "id": patient.get("id"),
+        "patient_id": patient.get("patient_id"),
+        "first_name": patient.get("first_name"),
+        "last_name": patient.get("last_name"),
+        "full_name": (
+            f"{patient.get('first_name', '')} "
+            f"{patient.get('last_name', '')}"
+        ).strip(),
+        "date_of_birth": patient.get("date_of_birth"),
+        "gender": patient.get("gender"),
+        "weight_kg": patient.get("weight_kg"),
+        "ward_id": patient.get("ward_id"),
+        "bed_id": patient.get("bed_id"),
+        "is_active": mongo_bool(patient.get("is_active")),
+        "qr_is_active": mongo_bool(patient.get("qr_is_active")),
+    }
+
+
+def serialize_workload_patient(patient):
+    data = serialize_patient(patient)
+    data["mobile_number"] = patient.get("mobile_number")
+    return data
+
+
+def serialize_billing(billing):
+    if billing is None:
+        return {
+            "bill_status": "PENDING",
+            "bill_amount": None,
+            "paid_at": None,
+            "paid_by": None,
+        }
+
+    amount = billing.get("bill_amount")
+
+    return {
+        "id": billing.get("id"),
+        "bill_status": billing.get("bill_status"),
+        "bill_amount": (
+            float(amount) if amount is not None else None
+        ),
+        "paid_at": billing.get("paid_at"),
+        "paid_by": billing.get("paid_by"),
+        "created_at": billing.get("created_at"),
+        "updated_at": billing.get("updated_at"),
+    }
+
+
+def serialize_encounter(encounter):
+    if encounter is None:
+        return None
+
+    doctor = None
+
+    if encounter.get("doctor_id") is not None:
+        doctor = mongo_db.users.find_one({
+            "_id": encounter["doctor_id"]
+        })
+
+    return {
+        "id": encounter.get("id"),
+        "patient_id": encounter.get("patient_id"),
+        "doctor_id": encounter.get("doctor_id"),
+        "doctor_name": (
+            doctor.get("full_name") if doctor else None
+        ),
+        "encounter_type": encounter.get("encounter_type"),
+        "status": encounter.get("status"),
+        "admitted_at": encounter.get("admitted_at"),
+        "discharged_at": encounter.get("discharged_at"),
+        "discharge_reason": encounter.get("discharge_reason"),
+        "discharged_by": encounter.get("discharged_by"),
+        "created_at": encounter.get("created_at"),
+        "updated_at": encounter.get("updated_at"),
+    }
+
+
 # =========================================================
-# STAFF
+# STAFF MANAGEMENT
 # =========================================================
 
 @router.get("/staff")
 def get_staff(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    users = db.scalars(
-        select(User)
-        .order_by(
-            User.full_name,
-            User.username,
-        )
-    ).all()
+    users = list(
+        mongo_db.users.find({}).sort([
+            ("full_name", 1),
+            ("username", 1),
+        ])
+    )
 
     return {
         "staff": [
@@ -110,28 +249,18 @@ def get_staff(
 
 @router.get("/nurses")
 def get_nurses(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    nurse_role = get_role(
-        db,
-        "Nurse",
-    )
+    nurse_role = get_role("Nurse")
 
-    nurses = db.scalars(
-        select(User)
-        .where(
-            User.role_id == nurse_role.id,
-            User.is_active.is_(True),
-        )
-        .order_by(
-            User.full_name
-        )
-    ).all()
+    nurses = list(
+        mongo_db.users.find({
+            "role_id": nurse_role["id"],
+            "is_active": active_filter(),
+        }).sort("full_name", 1)
+    )
 
     return {
         "nurses": [
@@ -143,28 +272,18 @@ def get_nurses(
 
 @router.get("/doctors")
 def get_doctors(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    doctor_role = get_role(
-        db,
-        "Doctor",
-    )
+    doctor_role = get_role("Doctor")
 
-    doctors = db.scalars(
-        select(User)
-        .where(
-            User.role_id == doctor_role.id,
-            User.is_active.is_(True),
-        )
-        .order_by(
-            User.full_name
-        )
-    ).all()
+    doctors = list(
+        mongo_db.users.find({
+            "role_id": doctor_role["id"],
+            "is_active": active_filter(),
+        }).sort("full_name", 1)
+    )
 
     return {
         "doctors": [
@@ -177,22 +296,21 @@ def get_doctors(
 @router.post("/staff")
 def create_staff(
     request: StaffCreateRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
     role_name = request.role.strip().lower()
 
-    if role_name == "nurse":
-        actual_role_name = "Nurse"
-    elif role_name == "doctor":
-        actual_role_name = "Doctor"
-    elif role_name == "receptionist":
-        actual_role_name = "Receptionist"
-    else:
+    allowed_roles = {
+        "nurse": "Nurse",
+        "doctor": "Doctor",
+        "receptionist": "Receptionist",
+    }
+
+    actual_role_name = allowed_roles.get(role_name)
+
+    if actual_role_name is None:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -201,56 +319,41 @@ def create_staff(
             ),
         )
 
-    existing_username = db.scalar(
-        select(User).where(
-            User.username == request.username.strip()
-        )
-    )
+    username = request.username.strip()
+    email = request.email.strip()
 
-    if existing_username is not None:
+    if mongo_db.users.find_one({"username": username}):
         raise HTTPException(
             status_code=409,
             detail="Username already exists.",
         )
 
-    existing_email = db.scalar(
-        select(User).where(
-            User.email == request.email.strip()
-        )
-    )
-
-    if existing_email is not None:
+    if mongo_db.users.find_one({"email": email}):
         raise HTTPException(
             status_code=409,
             detail="Email already exists.",
         )
 
-    role = get_role(
-        db,
-        actual_role_name,
-    )
+    role = get_role(actual_role_name)
+    now = admin_mongo_now()
+    user_id = next_admin_mongo_id("users")
 
-    user = User(
-        username=request.username.strip(),
-        email=request.email.strip(),
-        password_hash=hash_password(
-            request.password
-        ),
-        full_name=request.full_name.strip(),
-        role_id=role.id,
-        is_active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-
-    db.add(user)
+    user = {
+        "_id": user_id,
+        "id": user_id,
+        "username": username,
+        "email": email,
+        "password_hash": hash_password(request.password),
+        "full_name": request.full_name.strip(),
+        "role_id": role["id"],
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+    }
 
     try:
-        db.commit()
-        db.refresh(user)
-    except IntegrityError as exc:
-        db.rollback()
-
+        mongo_db.users.insert_one(user)
+    except DuplicateKeyError as exc:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -260,10 +363,7 @@ def create_staff(
         ) from exc
 
     return {
-        "message": (
-            f"{actual_role_name} account "
-            "created successfully."
-        ),
+        "message": f"{actual_role_name} account created successfully.",
         "staff": serialize_staff(user),
     }
 
@@ -274,36 +374,33 @@ def create_staff(
 
 @router.get("/patients")
 def get_patients(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    patients = db.scalars(
-        select(Patient)
-        .where(
-            Patient.is_active.is_(True)
-        )
-        .order_by(
-            Patient.first_name,
-            Patient.last_name,
-        )
-    ).all()
+    patients = list(
+        mongo_db.patients.find({
+            "is_active": active_filter()
+        }).sort([
+            ("first_name", 1),
+            ("last_name", 1),
+        ])
+    )
 
     return {
         "patients": [
             {
-                "id": patient.id,
-                "patient_id": patient.patient_id,
-                "first_name": patient.first_name,
-                "last_name": patient.last_name,
+                "id": patient["id"],
+                "patient_id": patient.get("patient_id"),
+                "first_name": patient.get("first_name"),
+                "last_name": patient.get("last_name"),
                 "full_name": (
-                    f"{patient.first_name} "
-                    f"{patient.last_name}"
+                    f"{patient.get('first_name', '')} "
+                    f"{patient.get('last_name', '')}"
                 ).strip(),
-                "is_active": patient.is_active,
+                "is_active": mongo_bool(
+                    patient.get("is_active")
+                ),
             }
             for patient in patients
         ]
@@ -311,91 +408,69 @@ def get_patients(
 
 
 # =========================================================
-# ASSIGNMENTS
+# NURSE-PATIENT ASSIGNMENTS
 # =========================================================
 
 @router.get("/assignments")
 def get_assignments(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    rows = db.execute(
-        select(
-            NursePatientAssignment,
-            User,
-            Patient,
-        )
-        .join(
-            User,
-            User.id
-            == NursePatientAssignment.nurse_id,
-        )
-        .join(
-            Patient,
-            Patient.id
-            == NursePatientAssignment.patient_id,
-        )
-        .where(
-            NursePatientAssignment.is_active.is_(True),
-        )
-        .order_by(
-            desc(
-                NursePatientAssignment.assigned_at
-            ),
-        )
-    ).all()
+    rows = list(
+        mongo_db.nurse_patient_assignments.find({
+            "is_active": active_filter()
+        }).sort("assigned_at", -1)
+    )
 
-    return {
-        "assignments": [
-            {
-                "id": assignment.id,
-                "nurse_id": nurse.id,
-                "nurse_name": nurse.full_name,
-                "nurse_username": nurse.username,
-                "patient_id": patient.id,
-                "patient_code": patient.patient_id,
-                "patient_name": (
-                    f"{patient.first_name} "
-                    f"{patient.last_name}"
-                ).strip(),
-                "assigned_at": assignment.assigned_at,
-                "is_active": assignment.is_active,
-            }
-            for (
-                assignment,
-                nurse,
-                patient,
-            ) in rows
-        ]
-    }
+    result = []
+
+    for assignment in rows:
+        nurse = mongo_db.users.find_one({
+            "_id": assignment["nurse_id"]
+        })
+
+        patient = mongo_db.patients.find_one({
+            "_id": assignment["patient_id"]
+        })
+
+        if nurse is None or patient is None:
+            continue
+
+        result.append({
+            "id": assignment["id"],
+            "nurse_id": nurse["id"],
+            "nurse_name": nurse.get("full_name"),
+            "nurse_username": nurse.get("username"),
+            "patient_id": patient["id"],
+            "patient_code": patient.get("patient_id"),
+            "patient_name": (
+                f"{patient.get('first_name', '')} "
+                f"{patient.get('last_name', '')}"
+            ).strip(),
+            "assigned_at": assignment.get("assigned_at"),
+            "is_active": mongo_bool(
+                assignment.get("is_active")
+            ),
+        })
+
+    return {"assignments": result}
 
 
 @router.post("/assignments")
 def create_assignment(
     request: AssignmentCreateRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    nurse_role = get_role(
-        db,
-        "Nurse",
-    )
+    nurse_role = get_role("Nurse")
 
-    nurse = db.scalar(
-        select(User).where(
-            User.id == request.nurse_id,
-            User.role_id == nurse_role.id,
-            User.is_active.is_(True),
-        )
-    )
+    nurse = mongo_db.users.find_one({
+        "_id": request.nurse_id,
+        "role_id": nurse_role["id"],
+        "is_active": active_filter(),
+    })
 
     if nurse is None:
         raise HTTPException(
@@ -403,12 +478,10 @@ def create_assignment(
             detail="Active nurse not found.",
         )
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == request.patient_id,
-            Patient.is_active.is_(True),
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": request.patient_id,
+        "is_active": active_filter(),
+    })
 
     if patient is None:
         raise HTTPException(
@@ -416,92 +489,75 @@ def create_assignment(
             detail="Active patient not found.",
         )
 
-    existing = db.scalar(
-        select(
-            NursePatientAssignment
-        ).where(
-            NursePatientAssignment.nurse_id
-            == nurse.id,
-            NursePatientAssignment.patient_id
-            == patient.id,
-        )
-    )
+    existing = mongo_db.nurse_patient_assignments.find_one({
+        "nurse_id": nurse["id"],
+        "patient_id": patient["id"],
+    })
+
+    now = admin_mongo_now()
 
     if existing is not None:
-
-        if existing.is_active:
+        if mongo_bool(existing.get("is_active")):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This patient is already "
-                    "assigned to this nurse."
+                    "This patient is already assigned "
+                    "to this nurse."
                 ),
             )
 
-        existing.is_active = True
-        existing.assigned_at = datetime.utcnow()
-
-        db.commit()
-        db.refresh(existing)
+        mongo_db.nurse_patient_assignments.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "is_active": True,
+                "assigned_at": now,
+            }},
+        )
 
         return {
-            "message": (
-                "Patient assignment "
-                "reactivated successfully."
-            ),
+            "message": "Patient assignment reactivated successfully.",
             "assignment": {
-                "id": existing.id,
-                "nurse_id": nurse.id,
-                "nurse_name": nurse.full_name,
-                "patient_id": patient.id,
+                "id": existing["id"],
+                "nurse_id": nurse["id"],
+                "nurse_name": nurse.get("full_name"),
+                "patient_id": patient["id"],
                 "patient_name": (
-                    f"{patient.first_name} "
-                    f"{patient.last_name}"
+                    f"{patient.get('first_name', '')} "
+                    f"{patient.get('last_name', '')}"
                 ).strip(),
-                "patient_code": patient.patient_id,
-                "is_active": existing.is_active,
+                "patient_code": patient.get("patient_id"),
+                "is_active": True,
             },
         }
 
-    assignment = NursePatientAssignment(
-        nurse_id=nurse.id,
-        patient_id=patient.id,
-        assigned_at=datetime.utcnow(),
-        is_active=True,
+    assignment_id = next_admin_mongo_id(
+        "nurse_patient_assignments"
     )
 
-    db.add(assignment)
+    assignment = {
+        "_id": assignment_id,
+        "id": assignment_id,
+        "nurse_id": nurse["id"],
+        "patient_id": patient["id"],
+        "assigned_at": now,
+        "is_active": True,
+    }
 
-    try:
-        db.commit()
-        db.refresh(assignment)
-
-    except IntegrityError as exc:
-        db.rollback()
-
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This nurse-patient assignment "
-                "already exists."
-            ),
-        ) from exc
+    mongo_db.nurse_patient_assignments.insert_one(assignment)
 
     return {
-        "message": (
-            "Patient assigned to nurse successfully."
-        ),
+        "message": "Patient assigned to nurse successfully.",
         "assignment": {
-            "id": assignment.id,
-            "nurse_id": nurse.id,
-            "nurse_name": nurse.full_name,
-            "patient_id": patient.id,
+            "id": assignment_id,
+            "nurse_id": nurse["id"],
+            "nurse_name": nurse.get("full_name"),
+            "patient_id": patient["id"],
             "patient_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
+                f"{patient.get('first_name', '')} "
+                f"{patient.get('last_name', '')}"
             ).strip(),
-            "patient_code": patient.patient_id,
-            "is_active": assignment.is_active,
+            "patient_code": patient.get("patient_id"),
+            "is_active": True,
         },
     }
 
@@ -509,21 +565,13 @@ def create_assignment(
 @router.delete("/assignments/{assignment_id}")
 def deactivate_assignment(
     assignment_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    assignment = db.scalar(
-        select(
-            NursePatientAssignment
-        ).where(
-            NursePatientAssignment.id
-            == assignment_id,
-        )
-    )
+    assignment = mongo_db.nurse_patient_assignments.find_one({
+        "_id": assignment_id
+    })
 
     if assignment is None:
         raise HTTPException(
@@ -531,15 +579,13 @@ def deactivate_assignment(
             detail="Assignment not found.",
         )
 
-    assignment.is_active = False
-
-    db.commit()
+    mongo_db.nurse_patient_assignments.update_one(
+        {"_id": assignment_id},
+        {"$set": {"is_active": False}},
+    )
 
     return {
-        "message": (
-            "Patient assignment "
-            "removed successfully."
-        ),
+        "message": "Patient assignment removed successfully.",
         "assignment_id": assignment_id,
     }
 
@@ -550,113 +596,75 @@ def deactivate_assignment(
 
 @router.get("/doctor-assignments")
 def get_doctor_assignments(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
-    """
-    Return active doctor-patient assignments.
-
-    Doctor assignments are stored on the ACTIVE Encounter
-    through Encounter.doctor_id.
-    """
     require_admin_permission(current_user)
 
-    rows = db.execute(
-        select(
-            Encounter,
-            User,
-            Patient,
-        )
-        .join(
-            User,
-            User.id == Encounter.doctor_id,
-        )
-        .join(
-            Patient,
-            Patient.id == Encounter.patient_id,
-        )
-        .where(
-            Encounter.doctor_id.is_not(None),
-            Encounter.status == "ACTIVE",
-            Patient.is_active.is_(True),
-            User.is_active.is_(True),
-        )
-        .order_by(
-            desc(Encounter.created_at)
-        )
-    ).all()
+    encounters = list(
+        mongo_db.encounters.find({
+            "doctor_id": {"$ne": None},
+            "status": "ACTIVE",
+        }).sort("created_at", -1)
+    )
 
-    return {
-        "assignments": [
-            {
-                "id": encounter.id,
-                "doctor_id": doctor.id,
-                "doctor_name": doctor.full_name,
-                "doctor_username": doctor.username,
-                "patient_id": patient.id,
-                "patient_code": patient.patient_id,
-                "patient_name": (
-                    f"{patient.first_name} "
-                    f"{patient.last_name}"
-                ).strip(),
-                "encounter_type": encounter.encounter_type,
-                "encounter_status": encounter.status,
-                "assigned_at": encounter.created_at,
-            }
-            for (
-                encounter,
-                doctor,
-                patient,
-            ) in rows
-        ]
-    }
+    result = []
+
+    for encounter in encounters:
+        doctor = mongo_db.users.find_one({
+            "_id": encounter.get("doctor_id"),
+            "is_active": active_filter(),
+        })
+
+        patient = mongo_db.patients.find_one({
+            "_id": encounter["patient_id"],
+            "is_active": active_filter(),
+        })
+
+        if doctor is None or patient is None:
+            continue
+
+        result.append({
+            "id": encounter["id"],
+            "doctor_id": doctor["id"],
+            "doctor_name": doctor.get("full_name"),
+            "doctor_username": doctor.get("username"),
+            "patient_id": patient["id"],
+            "patient_code": patient.get("patient_id"),
+            "patient_name": (
+                f"{patient.get('first_name', '')} "
+                f"{patient.get('last_name', '')}"
+            ).strip(),
+            "encounter_type": encounter.get("encounter_type"),
+            "encounter_status": encounter.get("status"),
+            "assigned_at": encounter.get("created_at"),
+        })
+
+    return {"assignments": result}
 
 
 @router.post("/doctor-assignments")
 def assign_patient_to_doctor(
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
-    """
-    Assign an active patient to an active doctor.
-
-    The assignment is stored on the patient's ACTIVE
-    encounter through Encounter.doctor_id.
-    """
     require_admin_permission(current_user)
 
-    doctor_id = request.get("doctor_id")
-    patient_id = request.get("patient_id")
-
     try:
-        doctor_id = int(doctor_id)
-        patient_id = int(patient_id)
+        doctor_id = int(request.get("doctor_id"))
+        patient_id = int(request.get("patient_id"))
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "doctor_id and patient_id are "
-                "required integers."
-            ),
+            detail="doctor_id and patient_id are required integers.",
         ) from exc
 
-    doctor_role = get_role(
-        db,
-        "Doctor",
-    )
+    doctor_role = get_role("Doctor")
 
-    doctor = db.scalar(
-        select(User).where(
-            User.id == doctor_id,
-            User.role_id == doctor_role.id,
-            User.is_active.is_(True),
-        )
-    )
+    doctor = mongo_db.users.find_one({
+        "_id": doctor_id,
+        "role_id": doctor_role["id"],
+        "is_active": active_filter(),
+    })
 
     if doctor is None:
         raise HTTPException(
@@ -664,12 +672,10 @@ def assign_patient_to_doctor(
             detail="Active doctor not found.",
         )
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id,
+        "is_active": active_filter(),
+    })
 
     if patient is None:
         raise HTTPException(
@@ -677,104 +683,87 @@ def assign_patient_to_doctor(
             detail="Active patient not found.",
         )
 
-    now = datetime.utcnow()
+    now = admin_mongo_now()
 
-    encounter = db.scalar(
-        select(Encounter)
-        .where(
-            Encounter.patient_id == patient.id,
-            Encounter.status == "ACTIVE",
-        )
-        .order_by(
-            desc(Encounter.created_at)
-        )
+    encounter = mongo_db.encounters.find_one(
+        {
+            "patient_id": patient_id,
+            "status": "ACTIVE",
+        },
+        sort=[("created_at", -1)],
     )
 
     if encounter is None:
+        encounter_id = next_admin_mongo_id("encounters")
+
         encounter_type = (
             "INPATIENT"
-            if patient.bed_id is not None
+            if patient.get("bed_id") is not None
             else "OPD"
         )
 
-        encounter = Encounter(
-            patient_id=patient.id,
-            doctor_id=doctor.id,
-            encounter_type=encounter_type,
-            status="ACTIVE",
-            admitted_at=(
-                now
-                if encounter_type == "INPATIENT"
-                else None
+        encounter = {
+            "_id": encounter_id,
+            "id": encounter_id,
+            "patient_id": patient_id,
+            "doctor_id": doctor_id,
+            "encounter_type": encounter_type,
+            "status": "ACTIVE",
+            "admitted_at": (
+                now if encounter_type == "INPATIENT" else None
             ),
-            created_at=now,
-            updated_at=now,
-        )
+            "discharged_at": None,
+            "discharge_reason": None,
+            "discharged_by": None,
+            "created_at": now,
+            "updated_at": now,
+        }
 
-        db.add(encounter)
+        mongo_db.encounters.insert_one(encounter)
 
     else:
-        encounter.doctor_id = doctor.id
-        encounter.updated_at = now
+        mongo_db.encounters.update_one(
+            {"_id": encounter["_id"]},
+            {"$set": {
+                "doctor_id": doctor_id,
+                "updated_at": now,
+            }},
+        )
 
-    try:
-        db.commit()
-        db.refresh(encounter)
-
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Patient could not be assigned "
-                "to the selected doctor."
-            ),
-        ) from exc
+        encounter["doctor_id"] = doctor_id
+        encounter["updated_at"] = now
 
     return {
-        "message": (
-            "Patient assigned to doctor successfully."
-        ),
+        "message": "Patient assigned to doctor successfully.",
         "assignment": {
-            "id": encounter.id,
-            "doctor_id": doctor.id,
-            "doctor_name": doctor.full_name,
-            "doctor_username": doctor.username,
-            "patient_id": patient.id,
-            "patient_code": patient.patient_id,
+            "id": encounter["id"],
+            "doctor_id": doctor["id"],
+            "doctor_name": doctor.get("full_name"),
+            "doctor_username": doctor.get("username"),
+            "patient_id": patient["id"],
+            "patient_code": patient.get("patient_id"),
             "patient_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
+                f"{patient.get('first_name', '')} "
+                f"{patient.get('last_name', '')}"
             ).strip(),
-            "encounter_type": encounter.encounter_type,
-            "encounter_status": encounter.status,
-            "assigned_at": encounter.created_at,
+            "encounter_type": encounter.get("encounter_type"),
+            "encounter_status": encounter.get("status"),
+            "assigned_at": encounter.get("created_at"),
         },
     }
 
 
-@router.delete(
-    "/doctor-assignments/{encounter_id}"
-)
+@router.delete("/doctor-assignments/{encounter_id}")
 def remove_patient_from_doctor(
     encounter_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
-    """
-    Remove the current doctor assignment while preserving
-    the encounter as historical clinical data.
-    """
     require_admin_permission(current_user)
 
-    encounter = db.scalar(
-        select(Encounter).where(
-            Encounter.id == encounter_id,
-            Encounter.status == "ACTIVE",
-        )
-    )
+    encounter = mongo_db.encounters.find_one({
+        "_id": encounter_id,
+        "status": "ACTIVE",
+    })
 
     if encounter is None:
         raise HTTPException(
@@ -782,112 +771,78 @@ def remove_patient_from_doctor(
             detail="Active doctor assignment not found.",
         )
 
-    encounter.doctor_id = None
-    encounter.updated_at = datetime.utcnow()
-
-    db.commit()
+    mongo_db.encounters.update_one(
+        {"_id": encounter_id},
+        {"$set": {
+            "doctor_id": None,
+            "updated_at": admin_mongo_now(),
+        }},
+    )
 
     return {
-        "message": (
-            "Patient removed from doctor assignment."
-        ),
+        "message": "Patient removed from doctor assignment.",
         "encounter_id": encounter_id,
     }
-
 
 
 # =========================================================
 # STAFF WORKLOAD
 # =========================================================
 
-def serialize_workload_patient(patient: Patient) -> dict:
-    return {
-        "id": patient.id,
-        "patient_id": patient.patient_id,
-        "full_name": (
-            f"{patient.first_name} {patient.last_name}"
-        ).strip(),
-        "first_name": patient.first_name,
-        "last_name": patient.last_name,
-        "date_of_birth": patient.date_of_birth,
-        "gender": patient.gender,
-        "weight_kg": (
-            float(patient.weight_kg)
-            if patient.weight_kg is not None
-            else None
-        ),
-        "ward_id": patient.ward_id,
-        "bed_id": patient.bed_id,
-        "is_active": patient.is_active,
-    }
-
-
 @router.get("/workload/nurses")
 def get_nurse_workload(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
-    """Return all active registered nurses with their active patient workload."""
-
     require_admin_permission(current_user)
 
-    nurse_role = get_role(db, "Nurse")
+    nurse_role = get_role("Nurse")
 
-    nurses = db.scalars(
-        select(User)
-        .where(
-            User.role_id == nurse_role.id,
-            User.is_active.is_(True),
-        )
-        .order_by(User.full_name, User.username)
-    ).all()
+    nurses = list(
+        mongo_db.users.find({
+            "role_id": nurse_role["id"],
+            "is_active": active_filter(),
+        }).sort([
+            ("full_name", 1),
+            ("username", 1),
+        ])
+    )
 
     result = []
 
     for nurse in nurses:
-        assignments = db.scalars(
-            select(NursePatientAssignment)
-            .where(
-                NursePatientAssignment.nurse_id == nurse.id,
-                NursePatientAssignment.is_active.is_(True),
-            )
-            .order_by(
-                desc(NursePatientAssignment.assigned_at)
-            )
-        ).all()
+        assignments = list(
+            mongo_db.nurse_patient_assignments.find({
+                "nurse_id": nurse["id"],
+                "is_active": active_filter(),
+            }).sort("assigned_at", -1)
+        )
 
         patients = []
 
         for assignment in assignments:
-            patient = db.scalar(
-                select(Patient).where(
-                    Patient.id == assignment.patient_id,
-                    Patient.is_active.is_(True),
-                )
-            )
+            patient = mongo_db.patients.find_one({
+                "_id": assignment["patient_id"],
+                "is_active": active_filter(),
+            })
 
             if patient is None:
                 continue
 
             patient_data = serialize_workload_patient(patient)
-            patient_data["assignment_id"] = assignment.id
-            patient_data["assigned_at"] = assignment.assigned_at
+            patient_data["assignment_id"] = assignment["id"]
+            patient_data["assigned_at"] = assignment.get("assigned_at")
             patients.append(patient_data)
 
-        result.append(
-            {
-                "id": nurse.id,
-                "full_name": nurse.full_name,
-                "username": nurse.username,
-                "email": nurse.email,
-                "role": "Nurse",
-                "is_active": nurse.is_active,
-                "patient_count": len(patients),
-                "patients": patients,
-            }
-        )
+        result.append({
+            "id": nurse["id"],
+            "full_name": nurse.get("full_name"),
+            "username": nurse.get("username"),
+            "email": nurse.get("email"),
+            "role": "Nurse",
+            "is_active": mongo_bool(nurse.get("is_active")),
+            "patient_count": len(patients),
+            "patients": patients,
+        })
 
     return {
         "count": len(result),
@@ -897,77 +852,72 @@ def get_nurse_workload(
 
 @router.get("/workload/doctors")
 def get_doctor_workload(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_USERS")
-    ),
+    current_user=Depends(require_permission("MANAGE_USERS")),
 ):
-    """Return all active registered doctors with patients on active encounters."""
-
     require_admin_permission(current_user)
 
-    doctor_role = get_role(db, "Doctor")
+    doctor_role = get_role("Doctor")
 
-    doctors = db.scalars(
-        select(User)
-        .where(
-            User.role_id == doctor_role.id,
-            User.is_active.is_(True),
-        )
-        .order_by(User.full_name, User.username)
-    ).all()
+    doctors = list(
+        mongo_db.users.find({
+            "role_id": doctor_role["id"],
+            "is_active": active_filter(),
+        }).sort([
+            ("full_name", 1),
+            ("username", 1),
+        ])
+    )
 
     result = []
 
     for doctor in doctors:
-        encounters = db.scalars(
-            select(Encounter)
-            .where(
-                Encounter.doctor_id == doctor.id,
-                Encounter.status == "ACTIVE",
-            )
-            .order_by(desc(Encounter.created_at))
-        ).all()
+        encounters = list(
+            mongo_db.encounters.find({
+                "doctor_id": doctor["id"],
+                "status": "ACTIVE",
+            }).sort("created_at", -1)
+        )
 
         patients = []
         seen_patient_ids = set()
 
         for encounter in encounters:
-            if encounter.patient_id in seen_patient_ids:
+            patient_id = encounter["patient_id"]
+
+            if patient_id in seen_patient_ids:
                 continue
 
-            patient = db.scalar(
-                select(Patient).where(
-                    Patient.id == encounter.patient_id,
-                    Patient.is_active.is_(True),
-                )
-            )
+            patient = mongo_db.patients.find_one({
+                "_id": patient_id,
+                "is_active": active_filter(),
+            })
 
             if patient is None:
                 continue
 
-            seen_patient_ids.add(patient.id)
+            seen_patient_ids.add(patient_id)
 
             patient_data = serialize_workload_patient(patient)
-            patient_data["encounter_id"] = encounter.id
-            patient_data["encounter_type"] = encounter.encounter_type
-            patient_data["encounter_status"] = encounter.status
-            patient_data["admitted_at"] = encounter.admitted_at
-            patient_data["encounter_created_at"] = encounter.created_at
+            patient_data["encounter_id"] = encounter["id"]
+            patient_data["encounter_type"] = encounter.get("encounter_type")
+            patient_data["encounter_status"] = encounter.get("status")
+            patient_data["admitted_at"] = encounter.get("admitted_at")
+            patient_data["encounter_created_at"] = encounter.get(
+                "created_at"
+            )
+
             patients.append(patient_data)
 
-        result.append(
-            {
-                "id": doctor.id,
-                "full_name": doctor.full_name,
-                "username": doctor.username,
-                "email": doctor.email,
-                "role": "Doctor",
-                "is_active": doctor.is_active,
-                "patient_count": len(patients),
-                "patients": patients,
-            }
-        )
+        result.append({
+            "id": doctor["id"],
+            "full_name": doctor.get("full_name"),
+            "username": doctor.get("username"),
+            "email": doctor.get("email"),
+            "role": "Doctor",
+            "is_active": mongo_bool(doctor.get("is_active")),
+            "patient_count": len(patients),
+            "patients": patients,
+        })
 
     return {
         "count": len(result),
@@ -979,136 +929,48 @@ def get_doctor_workload(
 # PATIENT LIFECYCLE MANAGEMENT
 # =========================================================
 
-def serialize_billing(
-    billing: PatientBilling | None,
-):
-    if billing is None:
-        return {
-            "bill_status": "PENDING",
-            "bill_amount": None,
-            "paid_at": None,
-            "paid_by": None,
-        }
-
-    return {
-        "id": billing.id,
-        "bill_status": billing.bill_status,
-        "bill_amount": (
-            float(billing.bill_amount)
-            if billing.bill_amount is not None
-            else None
-        ),
-        "paid_at": billing.paid_at,
-        "paid_by": billing.paid_by,
-        "created_at": billing.created_at,
-        "updated_at": billing.updated_at,
-    }
-
-
-def serialize_encounter(
-    encounter: Encounter,
-):
-    return {
-        "id": encounter.id,
-        "patient_id": encounter.patient_id,
-        "doctor_id": encounter.doctor_id,
-        "doctor_name": (
-            encounter.doctor.full_name
-            if encounter.doctor is not None
-            else None
-        ),
-        "encounter_type": encounter.encounter_type,
-        "status": encounter.status,
-        "admitted_at": encounter.admitted_at,
-        "discharged_at": encounter.discharged_at,
-        "discharge_reason": encounter.discharge_reason,
-        "discharged_by": encounter.discharged_by,
-        "created_at": encounter.created_at,
-        "updated_at": encounter.updated_at,
-    }
-
-
 @router.get("/patients/lifecycle")
 def get_patient_lifecycle(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    active_patients = db.scalars(
-        select(Patient)
-        .where(
-            Patient.is_active.is_(True)
-        )
-        .order_by(
-            Patient.first_name,
-            Patient.last_name,
-        )
-    ).all()
+    active_patients = list(
+        mongo_db.patients.find({
+            "is_active": active_filter()
+        }).sort([
+            ("first_name", 1),
+            ("last_name", 1),
+        ])
+    )
 
-    discharged_patients = db.scalars(
-        select(Patient)
-        .where(
-            Patient.is_active.is_(False)
-        )
-        .order_by(
-            desc(Patient.updated_at)
-        )
-    ).all()
+    discharged_patients = list(
+        mongo_db.patients.find({
+            "is_active": {"$in": [False, 0]}
+        }).sort("updated_at", -1)
+    )
 
-    def patient_summary(
-        patient: Patient,
-    ):
-        billing = db.scalar(
-            select(PatientBilling).where(
-                PatientBilling.patient_id
-                == patient.id
-            )
+    def patient_summary(patient):
+        billing = mongo_db.patient_billing.find_one({
+            "patient_id": patient["id"]
+        })
+
+        active_encounter = mongo_db.encounters.find_one(
+            {
+                "patient_id": patient["id"],
+                "status": "ACTIVE",
+            },
+            sort=[("created_at", -1)],
         )
 
-        active_encounter = db.scalar(
-            select(Encounter)
-            .where(
-                Encounter.patient_id
-                == patient.id,
-                Encounter.status == "ACTIVE",
-            )
-            .order_by(
-                desc(Encounter.created_at)
-            )
-        )
+        data = serialize_patient(patient)
 
-        return {
-            "id": patient.id,
-            "patient_id": patient.patient_id,
-            "first_name": patient.first_name,
-            "last_name": patient.last_name,
-            "full_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
-            ).strip(),
-            "date_of_birth": patient.date_of_birth,
-            "gender": patient.gender,
-            "weight_kg": (
-                float(patient.weight_kg)
-                if patient.weight_kg is not None
-                else None
+        data.update({
+            "billing": serialize_billing(billing),
+            "active_encounter": serialize_encounter(
+                active_encounter
             ),
-            "ward_id": patient.ward_id,
-            "bed_id": patient.bed_id,
-            "is_active": patient.is_active,
-            "qr_is_active": patient.qr_is_active,
-            "billing": serialize_billing(
-                billing
-            ),
-            "active_encounter": (
-                serialize_encounter(
-                    active_encounter
-                )
-                if active_encounter
-                else None
-            ),
-        }
+        })
+
+        return data
 
     return {
         "active": [
@@ -1126,22 +988,15 @@ def get_patient_lifecycle(
     }
 
 
-@router.post(
-    "/patients/{patient_id}/billing"
-)
+@router.post("/patients/{patient_id}/billing")
 def create_or_update_patient_bill(
     patient_id: int,
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id
+    })
 
     if patient is None:
         raise HTTPException(
@@ -1156,82 +1011,78 @@ def create_or_update_patient_bill(
     else:
         try:
             bill_amount = float(amount)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "bill_amount must be "
-                    "a valid number."
-                ),
-            )
+                detail="bill_amount must be a valid number.",
+            ) from exc
 
         if bill_amount < 0:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "bill_amount cannot be negative."
-                ),
+                detail="bill_amount cannot be negative.",
             )
 
-    billing = db.scalar(
-        select(PatientBilling).where(
-            PatientBilling.patient_id
-            == patient.id
-        )
-    )
+    billing = mongo_db.patient_billing.find_one({
+        "patient_id": patient_id
+    })
+
+    now = admin_mongo_now()
 
     if billing is None:
+        billing_id = next_admin_mongo_id("patient_billing")
 
-        billing = PatientBilling(
-            patient_id=patient.id,
-            bill_status="PENDING",
-            bill_amount=bill_amount,
-        )
+        billing = {
+            "_id": billing_id,
+            "id": billing_id,
+            "patient_id": patient_id,
+            "bill_status": "PENDING",
+            "bill_amount": bill_amount,
+            "paid_at": None,
+            "paid_by": None,
+            "created_at": now,
+            "updated_at": now,
+        }
 
-        db.add(billing)
+        mongo_db.patient_billing.insert_one(billing)
 
     else:
-
-        if billing.bill_status == "PAID":
+        if billing.get("bill_status") == "PAID":
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "The patient's bill is "
-                    "already marked as paid."
+                    "The patient's bill is already "
+                    "marked as paid."
                 ),
             )
 
-        billing.bill_amount = bill_amount
-        billing.bill_status = "PENDING"
+        mongo_db.patient_billing.update_one(
+            {"_id": billing["_id"]},
+            {"$set": {
+                "bill_amount": bill_amount,
+                "bill_status": "PENDING",
+                "updated_at": now,
+            }},
+        )
 
-    db.commit()
-    db.refresh(billing)
+        billing["bill_amount"] = bill_amount
+        billing["bill_status"] = "PENDING"
+        billing["updated_at"] = now
 
     return {
-        "message": (
-            "Patient bill updated successfully."
-        ),
-        "billing": serialize_billing(
-            billing
-        ),
+        "message": "Patient bill updated successfully.",
+        "billing": serialize_billing(billing),
     }
 
 
-@router.post(
-    "/patients/{patient_id}/billing/paid"
-)
+@router.post("/patients/{patient_id}/billing/paid")
 def mark_patient_bill_paid(
     patient_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id
+    })
 
     if patient is None:
         raise HTTPException(
@@ -1239,79 +1090,76 @@ def mark_patient_bill_paid(
             detail="Patient not found.",
         )
 
-    if not patient.is_active:
+    if not mongo_bool(patient.get("is_active")):
         raise HTTPException(
             status_code=409,
             detail=(
-                "Cannot update billing for "
-                "a discharged patient."
+                "Cannot update billing for a discharged patient."
             ),
         )
 
-    billing = db.scalar(
-        select(PatientBilling).where(
-            PatientBilling.patient_id
-            == patient.id
-        )
-    )
+    billing = mongo_db.patient_billing.find_one({
+        "patient_id": patient_id
+    })
+
+    now = admin_mongo_now()
 
     if billing is None:
+        billing_id = next_admin_mongo_id("patient_billing")
 
-        billing = PatientBilling(
-            patient_id=patient.id,
-            bill_status="PAID",
-            paid_at=datetime.utcnow(),
-            paid_by=current_user.id,
-        )
+        billing = {
+            "_id": billing_id,
+            "id": billing_id,
+            "patient_id": patient_id,
+            "bill_status": "PAID",
+            "bill_amount": None,
+            "paid_at": now,
+            "paid_by": current_user.id,
+            "created_at": now,
+            "updated_at": now,
+        }
 
-        db.add(billing)
+        mongo_db.patient_billing.insert_one(billing)
 
     else:
-
-        if billing.bill_status == "PAID":
+        if billing.get("bill_status") == "PAID":
             return {
-                "message": (
-                    "Patient bill is already "
-                    "marked as paid."
-                ),
-                "billing": serialize_billing(
-                    billing
-                ),
+                "message": "Patient bill is already marked as paid.",
+                "billing": serialize_billing(billing),
             }
 
-        billing.bill_status = "PAID"
-        billing.paid_at = datetime.utcnow()
-        billing.paid_by = current_user.id
+        mongo_db.patient_billing.update_one(
+            {"_id": billing["_id"]},
+            {"$set": {
+                "bill_status": "PAID",
+                "paid_at": now,
+                "paid_by": current_user.id,
+                "updated_at": now,
+            }},
+        )
 
-    db.commit()
-    db.refresh(billing)
+        billing.update({
+            "bill_status": "PAID",
+            "paid_at": now,
+            "paid_by": current_user.id,
+            "updated_at": now,
+        })
 
     return {
-        "message": (
-            "Patient bill marked as paid."
-        ),
-        "billing": serialize_billing(
-            billing
-        ),
+        "message": "Patient bill marked as paid.",
+        "billing": serialize_billing(billing),
     }
 
 
-@router.post(
-    "/patients/{patient_id}/discharge"
-)
+@router.post("/patients/{patient_id}/discharge")
 def discharge_patient(
     patient_id: int,
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id
+    })
 
     if patient is None:
         raise HTTPException(
@@ -1319,155 +1167,105 @@ def discharge_patient(
             detail="Patient not found.",
         )
 
-    if not patient.is_active:
+    if not mongo_bool(patient.get("is_active")):
         raise HTTPException(
             status_code=409,
             detail="Patient is already discharged.",
         )
 
-    billing = db.scalar(
-        select(PatientBilling).where(
-            PatientBilling.patient_id
-            == patient.id
-        )
-    )
+    billing = mongo_db.patient_billing.find_one({
+        "patient_id": patient_id
+    })
 
-    if (
-        billing is None
-        or billing.bill_status != "PAID"
-    ):
+    if billing is None or billing.get("bill_status") != "PAID":
         raise HTTPException(
             status_code=409,
             detail=(
-                "Patient cannot be discharged "
-                "until the bill is marked as paid."
+                "Patient cannot be discharged until "
+                "the bill is marked as paid."
             ),
         )
 
-    discharge_reason = request.get(
-        "discharge_reason"
-    )
+    discharge_reason = request.get("discharge_reason")
 
     if discharge_reason is not None:
-        discharge_reason = str(
-            discharge_reason
-        ).strip() or None
+        discharge_reason = str(discharge_reason).strip() or None
 
-    now = datetime.utcnow()
+    now = admin_mongo_now()
 
-    # -----------------------------------------------------
-    # Close active encounters
-    # -----------------------------------------------------
+    encounter_result = mongo_db.encounters.update_many(
+        {
+            "patient_id": patient_id,
+            "status": "ACTIVE",
+        },
+        {"$set": {
+            "status": "DISCHARGED",
+            "discharged_at": now,
+            "discharge_reason": discharge_reason,
+            "discharged_by": current_user.id,
+            "updated_at": now,
+        }},
+    )
 
-    encounters = db.scalars(
-        select(Encounter).where(
-            Encounter.patient_id == patient.id,
-            Encounter.status == "ACTIVE",
-        )
-    ).all()
+    assignment_result = mongo_db.nurse_patient_assignments.update_many(
+        {
+            "patient_id": patient_id,
+            "is_active": active_filter(),
+        },
+        {"$set": {"is_active": False}},
+    )
 
-    for encounter in encounters:
-        encounter.status = "DISCHARGED"
-        encounter.discharged_at = now
-        encounter.discharge_reason = (
-            discharge_reason
-        )
-        encounter.discharged_by = (
-            current_user.id
-        )
+    released_bed_id = patient.get("bed_id")
 
-    # -----------------------------------------------------
-    # Close nurse assignments
-    # -----------------------------------------------------
-
-    assignments = db.scalars(
-        select(NursePatientAssignment).where(
-            NursePatientAssignment.patient_id
-            == patient.id,
-            NursePatientAssignment.is_active.is_(
-                True
-            ),
-        )
-    ).all()
-
-    for assignment in assignments:
-        assignment.is_active = False
-
-    # -----------------------------------------------------
-    # Release bed
-    # -----------------------------------------------------
-
-    released_bed_id = patient.bed_id
-
-    if patient.bed_id is not None:
-
-        bed = db.scalar(
-            select(Bed).where(
-                Bed.id == patient.bed_id
-            )
+    if released_bed_id is not None:
+        mongo_db.beds.update_one(
+            {"_id": released_bed_id},
+            {"$set": {
+                "is_occupied": False,
+                "updated_at": now,
+            }},
         )
 
-        if bed is not None:
-            bed.is_occupied = False
-            bed.updated_at = now
-
-    # -----------------------------------------------------
-    # Deactivate patient + QR
-    # -----------------------------------------------------
-
-    patient.is_active = False
-    patient.qr_is_active = False
-    patient.updated_at = now
-
-    db.commit()
-    db.refresh(patient)
+    mongo_db.patients.update_one(
+        {"_id": patient_id},
+        {"$set": {
+            "is_active": False,
+            "qr_is_active": False,
+            "updated_at": now,
+        }},
+    )
 
     return {
-        "message": (
-            "Patient discharged successfully."
-        ),
+        "message": "Patient discharged successfully.",
         "patient": {
-            "id": patient.id,
-            "patient_id": patient.patient_id,
+            "id": patient["id"],
+            "patient_id": patient.get("patient_id"),
             "full_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
+                f"{patient.get('first_name', '')} "
+                f"{patient.get('last_name', '')}"
             ).strip(),
-            "is_active": patient.is_active,
-            "qr_is_active": patient.qr_is_active,
+            "is_active": False,
+            "qr_is_active": False,
         },
         "discharge": {
             "discharged_at": now,
             "discharged_by": current_user.id,
-            "discharge_reason": (
-                discharge_reason
-            ),
+            "discharge_reason": discharge_reason,
         },
         "released_bed_id": released_bed_id,
-        "closed_assignments": len(
-            assignments
-        ),
-        "closed_encounters": len(
-            encounters
-        ),
+        "closed_assignments": assignment_result.modified_count,
+        "closed_encounters": encounter_result.modified_count,
     }
 
 
-@router.get(
-    "/patients/{patient_id}/history"
-)
+@router.get("/patients/{patient_id}/history")
 def get_patient_history(
     patient_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id
+    })
 
     if patient is None:
         raise HTTPException(
@@ -1475,89 +1273,44 @@ def get_patient_history(
             detail="Patient not found.",
         )
 
-    billing = db.scalar(
-        select(PatientBilling).where(
-            PatientBilling.patient_id
-            == patient.id
-        )
+    billing = mongo_db.patient_billing.find_one({
+        "patient_id": patient_id
+    })
+
+    encounters = list(
+        mongo_db.encounters.find({
+            "patient_id": patient_id
+        }).sort("created_at", -1)
     )
 
-    encounters = db.scalars(
-        select(Encounter)
-        .where(
-            Encounter.patient_id == patient.id
-        )
-        .order_by(
-            desc(Encounter.created_at)
-        )
-    ).all()
-
-    assignments = db.scalars(
-        select(NursePatientAssignment)
-        .where(
-            NursePatientAssignment.patient_id
-            == patient.id
-        )
-        .order_by(
-            desc(
-                NursePatientAssignment.assigned_at
-            )
-        )
-    ).all()
+    assignments = list(
+        mongo_db.nurse_patient_assignments.find({
+            "patient_id": patient_id
+        }).sort("assigned_at", -1)
+    )
 
     assignment_history = []
 
     for assignment in assignments:
+        nurse = mongo_db.users.find_one({
+            "_id": assignment["nurse_id"]
+        })
 
-        nurse = db.scalar(
-            select(User).where(
-                User.id == assignment.nurse_id
-            )
-        )
-
-        assignment_history.append(
-            {
-                "id": assignment.id,
-                "nurse_id": assignment.nurse_id,
-                "nurse_name": (
-                    nurse.full_name
-                    if nurse is not None
-                    else None
-                ),
-                "assigned_at": (
-                    assignment.assigned_at
-                ),
-                "is_active": (
-                    assignment.is_active
-                ),
-            }
-        )
+        assignment_history.append({
+            "id": assignment["id"],
+            "nurse_id": assignment["nurse_id"],
+            "nurse_name": (
+                nurse.get("full_name") if nurse else None
+            ),
+            "assigned_at": assignment.get("assigned_at"),
+            "is_active": mongo_bool(
+                assignment.get("is_active")
+            ),
+        })
 
     return {
-        "patient": {
-            "id": patient.id,
-            "patient_id": patient.patient_id,
-            "first_name": patient.first_name,
-            "last_name": patient.last_name,
-            "full_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
-            ).strip(),
-            "date_of_birth": patient.date_of_birth,
-            "gender": patient.gender,
-            "weight_kg": (
-                float(patient.weight_kg)
-                if patient.weight_kg is not None
-                else None
-            ),
-            "is_active": patient.is_active,
-            "ward_id": patient.ward_id,
-            "bed_id": patient.bed_id,
-            "qr_is_active": patient.qr_is_active,
-        },
-        "billing": serialize_billing(
-            billing
-        ),
+        "patient": serialize_patient(patient),
+        "billing": serialize_billing(billing),
         "encounters": [
             serialize_encounter(encounter)
             for encounter in encounters
@@ -1572,70 +1325,38 @@ def get_patient_history(
 
 @router.get("/wards")
 def get_wards(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Fetch all active wards with bed statistics.
-    """
-
-    wards = db.scalars(
-        select(Ward)
-        .where(
-            Ward.is_active.is_(True)
-        )
-        .order_by(
-            Ward.id
-        )
-    ).all()
+    wards = list(
+        mongo_db.wards.find({
+            "is_active": active_filter()
+        }).sort("id", 1)
+    )
 
     result = []
 
     for ward in wards:
+        bed_filter = {
+            "ward_id": ward["id"],
+            "is_active": active_filter(),
+        }
 
-        total_beds = db.scalar(
-            select(
-                func.count(Bed.id)
-            ).where(
-                Bed.ward_id == ward.id,
-                Bed.is_active.is_(True),
-            )
-        ) or 0
+        total_beds = mongo_db.beds.count_documents(bed_filter)
 
-        occupied_beds = db.scalar(
-            select(
-                func.count(Bed.id)
-            ).where(
-                Bed.ward_id == ward.id,
-                Bed.is_active.is_(True),
-                Bed.is_occupied.is_(True),
-            )
-        ) or 0
+        occupied_beds = mongo_db.beds.count_documents({
+            **bed_filter,
+            "is_occupied": active_filter(),
+        })
 
-        available_beds = (
-            int(total_beds)
-            - int(occupied_beds)
-        )
-
-        result.append(
-            {
-                "id": ward.id,
-                "name": ward.name,
-                "code": ward.code,
-                "description": ward.description,
-                "total_beds": int(
-                    total_beds
-                ),
-                "occupied_beds": int(
-                    occupied_beds
-                ),
-                "available_beds": int(
-                    available_beds
-                ),
-            }
-        )
+        result.append({
+            "id": ward["id"],
+            "name": ward.get("name"),
+            "code": ward.get("code"),
+            "description": ward.get("description"),
+            "total_beds": total_beds,
+            "occupied_beds": occupied_beds,
+            "available_beds": total_beds - occupied_beds,
+        })
 
     return {
         "count": len(result),
@@ -1646,32 +1367,14 @@ def get_wards(
 @router.post("/wards")
 def create_ward(
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Create a new ward.
-    """
-
-    name = str(
-        request.get("name", "")
-    ).strip()
-
-    code = str(
-        request.get("code", "")
-    ).strip()
-
-    description = request.get(
-        "description"
-    )
+    name = str(request.get("name", "")).strip()
+    code = str(request.get("code", "")).strip()
+    description = request.get("description")
 
     if description is not None:
-        description = (
-            str(description).strip()
-            or None
-        )
+        description = str(description).strip() or None
 
     if not name:
         raise HTTPException(
@@ -1685,73 +1388,48 @@ def create_ward(
             detail="Ward code is required.",
         )
 
-    existing_name = db.scalar(
-        select(Ward).where(
-            Ward.name == name
-        )
-    )
-
-    if existing_name is not None:
+    if mongo_db.wards.find_one({"name": name}):
         raise HTTPException(
             status_code=409,
-            detail=(
-                "A ward with this name "
-                "already exists."
-            ),
+            detail="A ward with this name already exists.",
         )
 
-    existing_code = db.scalar(
-        select(Ward).where(
-            Ward.code == code
-        )
-    )
-
-    if existing_code is not None:
+    if mongo_db.wards.find_one({"code": code}):
         raise HTTPException(
             status_code=409,
-            detail=(
-                "A ward with this code "
-                "already exists."
-            ),
+            detail="A ward with this code already exists.",
         )
 
-    now = datetime.utcnow()
+    now = admin_mongo_now()
+    ward_id = next_admin_mongo_id("wards")
 
-    ward = Ward(
-        name=name,
-        code=code,
-        description=description,
-        is_active=True,
-        created_at=now,
-        updated_at=now,
-    )
+    ward = {
+        "_id": ward_id,
+        "id": ward_id,
+        "name": name,
+        "code": code,
+        "description": description,
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+    }
 
     try:
-
-        db.add(ward)
-        db.commit()
-        db.refresh(ward)
-
-    except IntegrityError as exc:
-
-        db.rollback()
-
+        mongo_db.wards.insert_one(ward)
+    except DuplicateKeyError as exc:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Unable to create ward because "
-                "the name or code already exists."
-            ),
+            detail="Ward name or code already exists.",
         ) from exc
 
     return {
         "message": "Ward created successfully.",
         "ward": {
-            "id": ward.id,
-            "name": ward.name,
-            "code": ward.code,
-            "description": ward.description,
-            "is_active": ward.is_active,
+            "id": ward_id,
+            "name": name,
+            "code": code,
+            "description": description,
+            "is_active": True,
             "total_beds": 0,
             "occupied_beds": 0,
             "available_beds": 0,
@@ -1763,29 +1441,15 @@ def create_ward(
 # BED MANAGEMENT
 # =========================================================
 
-@router.get(
-    "/wards/{ward_id}/beds"
-)
+@router.get("/wards/{ward_id}/beds")
 def get_ward_beds(
     ward_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Fetch all active beds belonging to a ward.
-
-    Occupied beds include the active
-    patient's name and Patient ID.
-    """
-
-    ward = db.scalar(
-        select(Ward).where(
-            Ward.id == ward_id,
-            Ward.is_active.is_(True),
-        )
-    )
+    ward = mongo_db.wards.find_one({
+        "_id": ward_id,
+        "is_active": active_filter(),
+    })
 
     if ward is None:
         raise HTTPException(
@@ -1793,104 +1457,73 @@ def get_ward_beds(
             detail="Ward not found.",
         )
 
-    beds = db.scalars(
-        select(Bed)
-        .where(
-            Bed.ward_id == ward.id,
-            Bed.is_active.is_(True),
-        )
-        .order_by(
-            Bed.bed_number
-        )
-    ).all()
+    beds = list(
+        mongo_db.beds.find({
+            "ward_id": ward_id,
+            "is_active": active_filter(),
+        }).sort("bed_number", 1)
+    )
 
     result = []
 
     for bed in beds:
+        patient = mongo_db.patients.find_one({
+            "bed_id": bed["id"],
+            "is_active": active_filter(),
+        })
 
-        patient = db.scalar(
-            select(Patient).where(
-                Patient.bed_id == bed.id,
-                Patient.is_active.is_(True),
-            )
-        )
+        occupied = mongo_bool(bed.get("is_occupied"))
 
-        result.append(
-            {
-                "id": bed.id,
-                "bed_number": bed.bed_number,
-                "ward_id": bed.ward_id,
-                "is_active": bed.is_active,
-                "is_occupied": bed.is_occupied,
-                "status": (
-                    "OCCUPIED"
-                    if bed.is_occupied
-                    else "AVAILABLE"
-                ),
-                "patient": (
-                    {
-                        "id": patient.id,
-                        "patient_id": (
-                            patient.patient_id
-                        ),
-                        "full_name": (
-                            f"{patient.first_name} "
-                            f"{patient.last_name}"
-                        ).strip(),
-                    }
-                    if patient is not None
-                    else None
-                ),
-            }
-        )
+        result.append({
+            "id": bed["id"],
+            "bed_number": bed.get("bed_number"),
+            "ward_id": bed.get("ward_id"),
+            "is_active": mongo_bool(bed.get("is_active")),
+            "is_occupied": occupied,
+            "status": "OCCUPIED" if occupied else "AVAILABLE",
+            "patient": (
+                {
+                    "id": patient["id"],
+                    "patient_id": patient.get("patient_id"),
+                    "full_name": (
+                        f"{patient.get('first_name', '')} "
+                        f"{patient.get('last_name', '')}"
+                    ).strip(),
+                }
+                if patient else None
+            ),
+        })
 
-    occupied = sum(
-        1
-        for bed in result
-        if bed["is_occupied"]
+    occupied_count = sum(
+        1 for bed in result if bed["is_occupied"]
     )
 
     return {
         "ward": {
-            "id": ward.id,
-            "name": ward.name,
-            "code": ward.code,
-            "description": (
-                ward.description
-            ),
+            "id": ward["id"],
+            "name": ward.get("name"),
+            "code": ward.get("code"),
+            "description": ward.get("description"),
         },
         "counts": {
             "total": len(result),
-            "occupied": occupied,
-            "available": (
-                len(result) - occupied
-            ),
+            "occupied": occupied_count,
+            "available": len(result) - occupied_count,
         },
         "beds": result,
     }
 
 
-@router.post(
-    "/wards/{ward_id}/beds"
-)
+@router.post("/wards/{ward_id}/beds")
 def create_bed(
     ward_id: int,
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Add a bed to an existing ward.
-    """
-
-    ward = db.scalar(
-        select(Ward).where(
-            Ward.id == ward_id,
-            Ward.is_active.is_(True),
-        )
-    )
+    ward = mongo_db.wards.find_one({
+        "_id": ward_id,
+        "is_active": active_filter(),
+    })
 
     if ward is None:
         raise HTTPException(
@@ -1898,9 +1531,7 @@ def create_bed(
             detail="Ward not found.",
         )
 
-    bed_number = str(
-        request.get("bed_number", "")
-    ).strip()
+    bed_number = str(request.get("bed_number", "")).strip()
 
     if not bed_number:
         raise HTTPException(
@@ -1908,74 +1539,73 @@ def create_bed(
             detail="Bed number is required.",
         )
 
-    existing_bed = db.scalar(
-        select(Bed).where(
-            Bed.ward_id == ward.id,
-            Bed.bed_number == bed_number,
-        )
-    )
+    existing_bed = mongo_db.beds.find_one({
+        "ward_id": ward_id,
+        "bed_number": bed_number,
+    })
+
+    now = admin_mongo_now()
 
     if existing_bed is not None:
-
-        if existing_bed.is_active:
+        if mongo_bool(existing_bed.get("is_active")):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "A bed with this number "
-                    "already exists in this ward."
+                    "A bed with this number already exists "
+                    "in this ward."
                 ),
             )
 
-        existing_bed.is_active = True
-        existing_bed.is_occupied = False
-        existing_bed.updated_at = datetime.utcnow()
+        assigned_patient = mongo_db.patients.find_one({
+            "bed_id": existing_bed["id"],
+            "is_active": active_filter(),
+        })
 
-        db.commit()
-        db.refresh(existing_bed)
+        if assigned_patient:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This bed is still assigned to an active patient."
+                ),
+            )
+
+        mongo_db.beds.update_one(
+            {"_id": existing_bed["_id"]},
+            {"$set": {
+                "is_active": True,
+                "is_occupied": False,
+                "updated_at": now,
+            }},
+        )
 
         return {
-            "message": (
-                "Bed reactivated successfully."
-            ),
+            "message": "Bed reactivated successfully.",
             "bed": {
-                "id": existing_bed.id,
-                "ward_id": (
-                    existing_bed.ward_id
-                ),
-                "bed_number": (
-                    existing_bed.bed_number
-                ),
-                "is_active": (
-                    existing_bed.is_active
-                ),
-                "is_occupied": (
-                    existing_bed.is_occupied
-                ),
+                "id": existing_bed["id"],
+                "ward_id": ward_id,
+                "bed_number": bed_number,
+                "is_active": True,
+                "is_occupied": False,
                 "status": "AVAILABLE",
             },
         }
 
-    now = datetime.utcnow()
+    bed_id = next_admin_mongo_id("beds")
 
-    bed = Bed(
-        ward_id=ward.id,
-        bed_number=bed_number,
-        is_active=True,
-        is_occupied=False,
-        created_at=now,
-        updated_at=now,
-    )
+    bed = {
+        "_id": bed_id,
+        "id": bed_id,
+        "ward_id": ward_id,
+        "bed_number": bed_number,
+        "is_active": True,
+        "is_occupied": False,
+        "created_at": now,
+        "updated_at": now,
+    }
 
     try:
-
-        db.add(bed)
-        db.commit()
-        db.refresh(bed)
-
-    except IntegrityError as exc:
-
-        db.rollback()
-
+        mongo_db.beds.insert_one(bed)
+    except DuplicateKeyError as exc:
         raise HTTPException(
             status_code=409,
             detail="Unable to create bed.",
@@ -1984,37 +1614,26 @@ def create_bed(
     return {
         "message": "Bed created successfully.",
         "bed": {
-            "id": bed.id,
-            "ward_id": bed.ward_id,
-            "bed_number": bed.bed_number,
-            "is_active": bed.is_active,
-            "is_occupied": bed.is_occupied,
+            "id": bed_id,
+            "ward_id": ward_id,
+            "bed_number": bed_number,
+            "is_active": True,
+            "is_occupied": False,
             "status": "AVAILABLE",
         },
     }
 
 
-@router.delete(
-    "/wards/{ward_id}/beds/{bed_id}"
-)
+@router.delete("/wards/{ward_id}/beds/{bed_id}")
 def deactivate_bed(
     ward_id: int,
     bed_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Deactivate an available bed.
-    """
-
-    bed = db.scalar(
-        select(Bed).where(
-            Bed.id == bed_id,
-            Bed.ward_id == ward_id,
-        )
-    )
+    bed = mongo_db.beds.find_one({
+        "_id": bed_id,
+        "ward_id": ward_id,
+    })
 
     if bed is None:
         raise HTTPException(
@@ -2022,7 +1641,15 @@ def deactivate_bed(
             detail="Bed not found.",
         )
 
-    if bed.is_occupied:
+    assigned_patient = mongo_db.patients.find_one({
+        "bed_id": bed_id,
+        "is_active": active_filter(),
+    })
+
+    if (
+        mongo_bool(bed.get("is_occupied"))
+        or assigned_patient is not None
+    ):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2031,16 +1658,17 @@ def deactivate_bed(
             ),
         )
 
-    bed.is_active = False
-    bed.updated_at = datetime.utcnow()
-
-    db.commit()
+    mongo_db.beds.update_one(
+        {"_id": bed_id},
+        {"$set": {
+            "is_active": False,
+            "updated_at": admin_mongo_now(),
+        }},
+    )
 
     return {
-        "message": (
-            "Bed deactivated successfully."
-        ),
-        "bed_id": bed.id,
+        "message": "Bed deactivated successfully.",
+        "bed_id": bed_id,
     }
 
 
@@ -2048,33 +1676,16 @@ def deactivate_bed(
 # PATIENT BED ASSIGNMENT
 # =========================================================
 
-@router.post(
-    "/patients/{patient_id}/assign-bed"
-)
+@router.post("/patients/{patient_id}/assign-bed")
 def assign_patient_bed(
     patient_id: int,
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Assign an active patient to an available bed.
-
-    Updates:
-    - Patient ward
-    - Patient bed
-    - Bed occupied state
-    - Active encounter
-    """
-
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id,
+        "is_active": active_filter(),
+    })
 
     if patient is None:
         raise HTTPException(
@@ -2082,27 +1693,19 @@ def assign_patient_bed(
             detail="Active patient not found.",
         )
 
-    ward_id = request.get("ward_id")
-    bed_id = request.get("bed_id")
-
     try:
-        ward_id = int(ward_id)
-        bed_id = int(bed_id)
-    except (TypeError, ValueError):
+        ward_id = int(request.get("ward_id"))
+        bed_id = int(request.get("bed_id"))
+    except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "ward_id and bed_id are "
-                "required integers."
-            ),
-        )
+            detail="ward_id and bed_id are required integers.",
+        ) from exc
 
-    ward = db.scalar(
-        select(Ward).where(
-            Ward.id == ward_id,
-            Ward.is_active.is_(True),
-        )
-    )
+    ward = mongo_db.wards.find_one({
+        "_id": ward_id,
+        "is_active": active_filter(),
+    })
 
     if ward is None:
         raise HTTPException(
@@ -2110,185 +1713,198 @@ def assign_patient_bed(
             detail="Ward not found or inactive.",
         )
 
-    bed = db.scalar(
-        select(Bed).where(
-            Bed.id == bed_id,
-            Bed.ward_id == ward.id,
-            Bed.is_active.is_(True),
-        )
-    )
+    bed = mongo_db.beds.find_one({
+        "_id": bed_id,
+        "ward_id": ward_id,
+        "is_active": active_filter(),
+    })
 
     if bed is None:
         raise HTTPException(
             status_code=404,
             detail=(
-                "Bed not found, inactive, or "
-                "not part of the selected ward."
+                "Bed not found, inactive, or not part "
+                "of the selected ward."
             ),
         )
 
-    if bed.is_occupied:
+    previous_bed_id = patient.get("bed_id")
 
-        existing_patient = db.scalar(
-            select(Patient).where(
-                Patient.bed_id == bed.id,
-                Patient.is_active.is_(True),
-            )
-        )
+    other_patient = mongo_db.patients.find_one({
+        "bed_id": bed_id,
+        "_id": {"$ne": patient_id},
+        "is_active": active_filter(),
+    })
 
-        if (
-            existing_patient is not None
-            and existing_patient.id
-            != patient.id
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "This bed is already assigned "
-                    "to another active patient."
-                ),
-            )
-
-    now = datetime.utcnow()
-
-    previous_bed_id = patient.bed_id
-
-    if (
-        previous_bed_id is not None
-        and previous_bed_id != bed.id
-    ):
-
-        previous_bed = db.scalar(
-            select(Bed).where(
-                Bed.id == previous_bed_id
-            )
-        )
-
-        if previous_bed is not None:
-            previous_bed.is_occupied = False
-            previous_bed.updated_at = now
-
-    patient.ward_id = ward.id
-    patient.bed_id = bed.id
-    patient.is_active = True
-    patient.updated_at = now
-
-    bed.is_occupied = True
-    bed.updated_at = now
-
-    encounter = db.scalar(
-        select(Encounter)
-        .where(
-            Encounter.patient_id == patient.id,
-            Encounter.status == "ACTIVE",
-        )
-        .order_by(
-            desc(
-                Encounter.created_at
-            )
-        )
-    )
-
-    if encounter is None:
-
-        encounter = Encounter(
-            patient_id=patient.id,
-            encounter_type="INPATIENT",
-            status="ACTIVE",
-            admitted_at=now,
-            created_at=now,
-            updated_at=now,
-        )
-
-        db.add(encounter)
-
-    else:
-
-        encounter.encounter_type = "INPATIENT"
-
-        if encounter.admitted_at is None:
-            encounter.admitted_at = now
-
-        encounter.updated_at = now
-
-    try:
-
-        db.commit()
-
-        db.refresh(patient)
-        db.refresh(bed)
-        db.refresh(encounter)
-
-    except IntegrityError as exc:
-
-        db.rollback()
-
+    if other_patient:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Bed assignment "
-                "could not be completed."
-            ),
+            detail="This bed is already assigned to another active patient.",
+        )
+
+    now = admin_mongo_now()
+    same_bed = previous_bed_id == bed_id
+
+    if same_bed:
+        mongo_db.beds.update_one(
+            {"_id": bed_id},
+            {"$set": {
+                "is_occupied": True,
+                "updated_at": now,
+            }},
+        )
+    else:
+        reservation = mongo_db.beds.update_one(
+            {
+                "_id": bed_id,
+                "ward_id": ward_id,
+                "is_active": active_filter(),
+                "is_occupied": {"$in": [False, 0]},
+            },
+            {"$set": {
+                "is_occupied": True,
+                "updated_at": now,
+            }},
+        )
+
+        if reservation.modified_count != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="This bed is already occupied or unavailable.",
+            )
+
+    try:
+        patient_update = mongo_db.patients.update_one(
+            {
+                "_id": patient_id,
+                "is_active": active_filter(),
+            },
+            {"$set": {
+                "ward_id": ward_id,
+                "bed_id": bed_id,
+                "updated_at": now,
+            }},
+        )
+
+        if patient_update.matched_count != 1:
+            raise RuntimeError("Patient bed update failed.")
+
+        encounter = mongo_db.encounters.find_one(
+            {
+                "patient_id": patient_id,
+                "status": "ACTIVE",
+            },
+            sort=[("created_at", -1)],
+        )
+
+        if encounter is None:
+            encounter_id = next_admin_mongo_id("encounters")
+
+            encounter = {
+                "_id": encounter_id,
+                "id": encounter_id,
+                "patient_id": patient_id,
+                "doctor_id": None,
+                "encounter_type": "INPATIENT",
+                "status": "ACTIVE",
+                "admitted_at": now,
+                "discharged_at": None,
+                "discharge_reason": None,
+                "discharged_by": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+
+            mongo_db.encounters.insert_one(encounter)
+
+        else:
+            encounter_updates = {
+                "encounter_type": "INPATIENT",
+                "updated_at": now,
+            }
+
+            if not encounter.get("admitted_at"):
+                encounter_updates["admitted_at"] = now
+
+            mongo_db.encounters.update_one(
+                {"_id": encounter["_id"]},
+                {"$set": encounter_updates},
+            )
+
+            encounter.update(encounter_updates)
+
+    except Exception as exc:
+        if not same_bed:
+            mongo_db.beds.update_one(
+                {"_id": bed_id},
+                {"$set": {
+                    "is_occupied": False,
+                    "updated_at": now,
+                }},
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Bed assignment could not be completed.",
         ) from exc
 
+    if previous_bed_id is not None and not same_bed:
+        mongo_db.beds.update_one(
+            {"_id": previous_bed_id},
+            {"$set": {
+                "is_occupied": False,
+                "updated_at": now,
+            }},
+        )
+
+    updated_patient = mongo_db.patients.find_one({
+        "_id": patient_id
+    })
+
     return {
-        "message": (
-            "Patient assigned to "
-            "bed successfully."
-        ),
+        "message": "Patient assigned to bed successfully.",
         "patient": {
-            "id": patient.id,
-            "patient_id": patient.patient_id,
+            "id": updated_patient["id"],
+            "patient_id": updated_patient.get("patient_id"),
             "full_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
+                f"{updated_patient.get('first_name', '')} "
+                f"{updated_patient.get('last_name', '')}"
             ).strip(),
-            "ward_id": patient.ward_id,
-            "bed_id": patient.bed_id,
-            "is_active": patient.is_active,
+            "ward_id": updated_patient.get("ward_id"),
+            "bed_id": updated_patient.get("bed_id"),
+            "is_active": mongo_bool(
+                updated_patient.get("is_active")
+            ),
         },
         "ward": {
-            "id": ward.id,
-            "name": ward.name,
-            "code": ward.code,
+            "id": ward["id"],
+            "name": ward.get("name"),
+            "code": ward.get("code"),
         },
         "bed": {
-            "id": bed.id,
-            "bed_number": bed.bed_number,
-            "is_occupied": bed.is_occupied,
+            "id": bed["id"],
+            "bed_number": bed.get("bed_number"),
+            "is_occupied": True,
         },
         "encounter": {
-            "id": encounter.id,
-            "encounter_type": (
-                encounter.encounter_type
-            ),
-            "status": encounter.status,
-            "admitted_at": encounter.admitted_at,
+            "id": encounter["id"],
+            "encounter_type": encounter.get("encounter_type"),
+            "status": encounter.get("status"),
+            "admitted_at": encounter.get("admitted_at"),
         },
         "previous_bed_id": previous_bed_id,
     }
 
 
-@router.post(
-    "/patients/{patient_id}/release-bed"
-)
+@router.post("/patients/{patient_id}/release-bed")
 def release_patient_bed(
     patient_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("MANAGE_SYSTEM")
-    ),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
-    """
-    Release an active patient's bed.
-    """
-
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id,
-            Patient.is_active.is_(True),
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id,
+        "is_active": active_filter(),
+    })
 
     if patient is None:
         raise HTTPException(
@@ -2296,37 +1912,45 @@ def release_patient_bed(
             detail="Active patient not found.",
         )
 
-    if patient.bed_id is None:
+    previous_bed_id = patient.get("bed_id")
+
+    if previous_bed_id is None:
         return {
-            "message": (
-                "Patient has no assigned bed."
-            ),
-            "patient_id": patient.id,
+            "message": "Patient has no assigned bed.",
+            "patient_id": patient["id"],
             "bed_id": None,
         }
 
-    bed = db.scalar(
-        select(Bed).where(
-            Bed.id == patient.bed_id
-        )
+    now = admin_mongo_now()
+
+    result = mongo_db.patients.update_one(
+        {
+            "_id": patient_id,
+            "bed_id": previous_bed_id,
+        },
+        {"$set": {
+            "bed_id": None,
+            "ward_id": None,
+            "updated_at": now,
+        }},
     )
 
-    previous_bed_id = patient.bed_id
+    if result.matched_count != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Patient bed assignment changed. Please retry.",
+        )
 
-    if bed is not None:
-        bed.is_occupied = False
-        bed.updated_at = datetime.utcnow()
-
-    patient.bed_id = None
-    patient.ward_id = None
-    patient.updated_at = datetime.utcnow()
-
-    db.commit()
+    mongo_db.beds.update_one(
+        {"_id": previous_bed_id},
+        {"$set": {
+            "is_occupied": False,
+            "updated_at": now,
+        }},
+    )
 
     return {
-        "message": (
-            "Patient bed released successfully."
-        ),
-        "patient_id": patient.id,
+        "message": "Patient bed released successfully.",
+        "patient_id": patient["id"],
         "released_bed_id": previous_bed_id,
     }

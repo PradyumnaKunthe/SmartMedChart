@@ -1,0 +1,81 @@
+{
+  "database": "smartmedchart",
+  "collections": {
+    "ai_predictions": {
+      "documents": 26,
+      "indexes": 1
+    },
+    "beds": {
+      "documents": 12,
+      "indexes": 1
+    },
+    "doctor_profiles": {
+      "documents": 1,
+      "indexes": 1
+    },
+    "encounters": {
+      "documents": 13,
+      "indexes": 1
+    },
+    "medication_administrations": {
+      "documents": 1,
+      "indexes": 1
+    },
+    "medication_schedules": {
+      "documents": 110,
+      "indexes": 1
+    },
+    "medicines": {
+      "documents": 5,
+      "indexes": 1
+    },
+    "nurse_patient_assignments": {
+      "documents": 10,
+      "indexes": 1
+    },
+    "patient_allergies": {
+      "documents": 8,
+      "indexes": 1
+    },
+    "patient_billing": {
+      "documents": 14,
+      "indexes": 1
+    },
+    "patients": {
+      "documents": 26,
+      "indexes": 1
+    },
+    "permissions": {
+      "documents": 18,
+      "indexes": 1
+    },
+    "prescription_items": {
+      "documents": 20,
+      "indexes": 1
+    },
+    "prescriptions": {
+      "documents": 20,
+      "indexes": 1
+    },
+    "qr_verifications": {
+      "documents": 17,
+      "indexes": 1
+    },
+    "role_permissions": {
+      "documents": 26,
+      "indexes": 1
+    },
+    "roles": {
+      "documents": 5,
+      "indexes": 1
+    },
+    "users": {
+      "documents": 14,
+      "indexes": 1
+    },
+    "wards": {
+      "documents": 3,
+      "indexes": 1
+    }
+  }
+}

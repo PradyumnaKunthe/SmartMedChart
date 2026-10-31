@@ -43,13 +43,39 @@ function todayString() {
 }
 
 const emptyForm = () => ({
+  // Basic information
   first_name: "",
   last_name: "",
   date_of_birth: "",
   gender: "",
   weight_kg: "",
+
+  // Contact information
+  mobile_number: "",
+  email: "",
+  address: "",
+  emergency_contact_name: "",
+  emergency_contact_number: "",
+  emergency_contact_relationship: "",
+  preferred_language: "",
+
+  // Visit information
   problem_category: "",
+  symptom_duration: "",
+  symptom_severity: "",
   visit_notes: "",
+  medical_history_notes: "",
+  current_medication_notes: "",
+  allergy_notes: "",
+
+  // Optional clinical observations
+  blood_pressure: "",
+  pulse: "",
+  temperature_c: "",
+  spo2_percent: "",
+  height_cm: "",
+
+  // Appointment
   appointment_date: todayString(),
   appointment_time: "",
 })
@@ -113,11 +139,19 @@ export default function CareMatch() {
   }
 
   function getVisitReason() {
-    return [
-      form.problem_category,
-      form.visit_notes.trim(),
-    ].filter(Boolean).join(". ")
-  }
+  return [
+    form.problem_category,
+    form.visit_notes.trim(),
+    form.symptom_duration
+      ? `Symptom duration: ${form.symptom_duration}`
+      : "",
+    form.symptom_severity
+      ? `Reported severity: ${form.symptom_severity}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(". ")
+}
 
   async function recommendDoctors() {
     if (!form.problem_category) {
@@ -133,8 +167,9 @@ export default function CareMatch() {
 
     try {
       const response = await api.post("/api/carematch/recommendations", {
-        visit_reason: getVisitReason(),
-      })
+  visit_reason: getVisitReason(),
+  preferred_language: form.preferred_language.trim(),
+})
 
       const list = Array.isArray(response.data?.recommendations)
         ? response.data.recommendations
@@ -235,12 +270,72 @@ export default function CareMatch() {
     setSubmitting(true)
 
     try {
+            // Prepare optional clinical observations
+      const clinicalObservations = {
+        blood_pressure: form.blood_pressure.trim() || undefined,
+        pulse: form.pulse ? Number(form.pulse) : undefined,
+        temperature_c: form.temperature_c
+          ? Number(form.temperature_c)
+          : undefined,
+        spo2_percent: form.spo2_percent
+          ? Number(form.spo2_percent)
+          : undefined,
+        height_cm: form.height_cm
+          ? Number(form.height_cm)
+          : undefined,
+      }
+
+      // Remove empty observation values
+      const filteredObservations = Object.fromEntries(
+        Object.entries(clinicalObservations).filter(
+          ([, value]) => value !== undefined
+        )
+      )
+
       const patientResponse = await api.post("/api/hospital/patients", {
+        // Basic information
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         date_of_birth: form.date_of_birth || null,
         gender: form.gender || null,
         weight_kg: form.weight_kg ? Number(form.weight_kg) : null,
+
+        // Contact information
+        mobile_number: form.mobile_number.trim() || null,
+        email: form.email.trim() || null,
+        address: form.address.trim() || null,
+
+        // Emergency contact
+        emergency_contact_name:
+          form.emergency_contact_name.trim() || null,
+        emergency_contact_number:
+          form.emergency_contact_number.trim() || null,
+        emergency_contact_relationship:
+          form.emergency_contact_relationship.trim() || null,
+
+        // Preferred language
+        preferred_language:
+          form.preferred_language.trim() || null,
+
+        // Patient visit information
+        problem_category: form.problem_category || null,
+        chief_complaint: form.problem_category || null,
+        symptom_duration: form.symptom_duration.trim() || null,
+        symptom_severity: form.symptom_severity || null,
+        visit_notes: form.visit_notes.trim() || null,
+        medical_history_notes:
+          form.medical_history_notes.trim() || null,
+        current_medication_notes:
+          form.current_medication_notes.trim() || null,
+        allergy_notes: form.allergy_notes.trim() || null,
+
+        // Clinical observations (optional)
+        clinical_observations:
+          Object.keys(filteredObservations).length > 0
+            ? filteredObservations
+            : null,
+
+        // Doctor and admission
         doctor_id: Number(selectedDoctor.doctor_id),
         is_admitted: false,
         ward_id: null,
@@ -384,6 +479,105 @@ export default function CareMatch() {
                 <input className={inputClass} type="number" min="0.1" max="500" step="0.1" name="weight_kg" value={form.weight_kg} onChange={updateField} disabled={Boolean(pendingRegistration)} placeholder="Optional" />
               </Field>
             </div>
+                        {/* CONTACT INFORMATION */}
+            <div className="mt-8 border-t border-slate-100 pt-6">
+              <h3 className="mb-4 font-semibold text-slate-900">
+                Contact & Emergency Information
+              </h3>
+
+              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+
+                <Field label="Mobile number">
+                  <input
+                    className={inputClass}
+                    type="tel"
+                    name="mobile_number"
+                    value={form.mobile_number}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={25}
+                    placeholder="Patient mobile number"
+                  />
+                </Field>
+
+                <Field label="Email address">
+                  <input
+                    className={inputClass}
+                    type="email"
+                    name="email"
+                    value={form.email}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={255}
+                    placeholder="patient@example.com"
+                  />
+                </Field>
+
+                <Field label="Preferred language">
+                  <input
+                    className={inputClass}
+                    name="preferred_language"
+                    value={form.preferred_language}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={60}
+                    placeholder="e.g. Marathi, Hindi, English"
+                  />
+                </Field>
+
+                <Field label="Emergency contact name">
+                  <input
+                    className={inputClass}
+                    name="emergency_contact_name"
+                    value={form.emergency_contact_name}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={150}
+                    placeholder="Emergency contact person's name"
+                  />
+                </Field>
+
+                <Field label="Emergency contact number">
+                  <input
+                    className={inputClass}
+                    type="tel"
+                    name="emergency_contact_number"
+                    value={form.emergency_contact_number}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={25}
+                    placeholder="Emergency mobile number"
+                  />
+                </Field>
+
+                <Field label="Relationship with patient">
+                  <input
+                    className={inputClass}
+                    name="emergency_contact_relationship"
+                    value={form.emergency_contact_relationship}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={60}
+                    placeholder="e.g. Father, Mother, Spouse"
+                  />
+                </Field>
+
+                <div className="sm:col-span-2 xl:col-span-3">
+                  <Field label="Residential address">
+                    <textarea
+                      className={inputClass}
+                      name="address"
+                      value={form.address}
+                      onChange={updateField}
+                      disabled={Boolean(pendingRegistration)}
+                      rows={3}
+                      placeholder="Enter patient's complete address"
+                    />
+                  </Field>
+                </div>
+
+              </div>
+            </div>
           </section>
 
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
@@ -407,6 +601,168 @@ export default function CareMatch() {
               <Field label="Additional details (optional)">
                 <textarea className={inputClass} name="visit_notes" value={form.visit_notes} onChange={updateField} rows={3} maxLength={1200} disabled={Boolean(pendingRegistration)} placeholder="Briefly record the concern reported by the patient..." />
               </Field>
+            </div>
+                        {/* SYMPTOMS AND MEDICAL HISTORY */}
+            <div className="mt-8 border-t border-slate-100 pt-6">
+              <h3 className="mb-4 font-semibold text-slate-900">
+                Symptoms & Medical Background
+              </h3>
+
+              <div className="grid gap-5 sm:grid-cols-2">
+
+                <Field label="How long has the patient had these symptoms?">
+                  <input
+                    className={inputClass}
+                    name="symptom_duration"
+                    value={form.symptom_duration}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    maxLength={100}
+                    placeholder="e.g. 3 days, 2 weeks"
+                  />
+                </Field>
+
+                <Field label="Symptom severity">
+                  <select
+                    className={inputClass}
+                    name="symptom_severity"
+                    value={form.symptom_severity}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                  >
+                    <option value="">Not specified</option>
+                    <option value="Mild">Mild</option>
+                    <option value="Moderate">Moderate</option>
+                    <option value="Severe">Severe</option>
+                  </select>
+                </Field>
+
+                <Field label="Previous medical history">
+                  <textarea
+                    className={inputClass}
+                    name="medical_history_notes"
+                    value={form.medical_history_notes}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    rows={3}
+                    placeholder="Previous illnesses, conditions or surgeries..."
+                  />
+                </Field>
+
+                <Field label="Current medications">
+                  <textarea
+                    className={inputClass}
+                    name="current_medication_notes"
+                    value={form.current_medication_notes}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    rows={3}
+                    placeholder="Medicines currently being taken..."
+                  />
+                </Field>
+
+                <div className="sm:col-span-2">
+                  <Field label="Known allergies">
+                    <textarea
+                      className={inputClass}
+                      name="allergy_notes"
+                      value={form.allergy_notes}
+                      onChange={updateField}
+                      disabled={Boolean(pendingRegistration)}
+                      rows={2}
+                      placeholder="Medicine, food or other known allergies. Enter 'Not known' if appropriate."
+                    />
+                  </Field>
+                </div>
+
+              </div>
+            </div>
+
+            {/* OPTIONAL CLINICAL OBSERVATIONS */}
+            <div className="mt-8 border-t border-slate-100 pt-6">
+              <div className="mb-4">
+                <h3 className="font-semibold text-slate-900">
+                  Clinical Observations
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Optional measurements. Leave blank when unavailable.
+                  Enter verified measurements only.
+                </p>
+              </div>
+
+              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+
+                <Field label="Blood pressure (mmHg)">
+                  <input
+                    className={inputClass}
+                    name="blood_pressure"
+                    value={form.blood_pressure}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    placeholder="e.g. 120/80"
+                  />
+                </Field>
+
+                <Field label="Pulse (bpm)">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="0"
+                    max="300"
+                    name="pulse"
+                    value={form.pulse}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    placeholder="Optional"
+                  />
+                </Field>
+
+                <Field label="Temperature (°C)">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="25"
+                    max="45"
+                    step="0.1"
+                    name="temperature_c"
+                    value={form.temperature_c}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    placeholder="Optional"
+                  />
+                </Field>
+
+                <Field label="SpO₂ (%)">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    name="spo2_percent"
+                    value={form.spo2_percent}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    placeholder="Optional"
+                  />
+                </Field>
+
+                <Field label="Height (cm)">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="30"
+                    max="250"
+                    step="0.1"
+                    name="height_cm"
+                    value={form.height_cm}
+                    onChange={updateField}
+                    disabled={Boolean(pendingRegistration)}
+                    placeholder="Optional"
+                  />
+                </Field>
+
+              </div>
             </div>
 
             <div className="mt-5 flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -486,6 +842,11 @@ export default function CareMatch() {
                         Experience: {experience} years
                         {doctor.consultation_fee != null ? ` · Fee ₹${doctor.consultation_fee}` : ""}
                       </p>
+                        {doctor.language_match && (
+                        <p className="mt-2 text-sm font-medium text-emerald-700">
+                          ✓ Supports patient's preferred language
+                        </p>
+                      )}
 
                       {doctor.match_reasons?.length > 0 && (
                         <p className="mt-3 text-xs text-indigo-700">

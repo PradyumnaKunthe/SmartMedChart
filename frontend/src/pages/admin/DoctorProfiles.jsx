@@ -343,87 +343,139 @@ export default function DoctorProfiles() {
     setError("");
   }
 
-  function updateField(name, value) {
-    setForm((current) => ({ ...current, [name]: value }));
-    setSuccess("");
+ 
+async function handleSubmit(event) {
+  event.preventDefault();
+  setError("");
+  setSuccess("");
+
+  if (!selectedDoctorId) {
+    setError("Select a doctor first.");
+    return;
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setError("");
-    setSuccess("");
+  const experience = Number(form.experience_years);
+  const fee =
+    form.consultation_fee.trim() === ""
+      ? null
+      : Number(form.consultation_fee);
 
-    if (!selectedDoctorId) {
-      setError("Select a doctor first.");
-      return;
-    }
+  if (
+    !Number.isInteger(experience) ||
+    experience < 0 ||
+    experience > 80
+  ) {
+    setError("Experience must be a whole number from 0 to 80.");
+    return;
+  }
 
-    const experience = Number(form.experience_years);
-    const fee =
-      form.consultation_fee.trim() === ""
-        ? null
-        : Number(form.consultation_fee);
+  if (fee !== null && (!Number.isFinite(fee) || fee < 0)) {
+    setError("Enter a valid consultation fee.");
+    return;
+  }
 
-    if (
-      !Number.isInteger(experience) ||
-      experience < 0 ||
-      experience > 80
-    ) {
-      setError("Experience must be a whole number from 0 to 80.");
-      return;
-    }
+  const payload = {
+    qualifications: form.qualifications.join(", "),
+    specializations: form.specializations,
+    experience_years: experience,
+    expertise_keywords: form.expertise_keywords,
+    languages: form.languages,
+    consultation_fee: fee,
+    available_days: form.available_days,
+    is_available: form.is_available,
+  };
 
-    if (fee !== null && (!Number.isFinite(fee) || fee < 0)) {
-      setError("Enter a valid consultation fee.");
-      return;
-    }
+  const savedDoctorId = String(selectedDoctorId);
+  const savedDoctorName =
+    selectedDoctor?.full_name || "the selected doctor";
 
-    const payload = {
-      // Backend currently expects qualifications as a string.
-      qualifications: form.qualifications.join(", "),
-      specializations: form.specializations,
-      experience_years: experience,
-      expertise_keywords: form.expertise_keywords,
-      languages: form.languages,
-      consultation_fee: fee,
-      available_days: form.available_days,
-      is_available: form.is_available,
-    };
+  setSaving(true);
 
-    setSaving(true);
+  try {
+    // Save current doctor's profile
+    const response = await saveCareMatchDoctorProfile(
+      Number(savedDoctorId),
+      payload,
+    );
 
+    // Immediately update the saved doctor locally
+    setDoctors((current) =>
+      current.map((doctor) =>
+        String(doctor.id) === savedDoctorId
+          ? {
+              ...doctor,
+              profile: response.profile,
+              profile_configured: true,
+            }
+          : doctor,
+      ),
+    );
+
+    // Refresh doctor list from backend
     try {
-      const response = await saveCareMatchDoctorProfile(
-        Number(selectedDoctorId),
-        payload,
+      const refreshedResponse = await getCareMatchDoctors();
+
+      const refreshedDoctors = Array.isArray(
+        refreshedResponse?.doctors
+      )
+        ? refreshedResponse.doctors
+        : [];
+
+      setDoctors(refreshedDoctors);
+
+      // Search for the next unconfigured doctor
+      const currentIndex = refreshedDoctors.findIndex(
+        (doctor) => String(doctor.id) === savedDoctorId
       );
 
-      setDoctors((current) =>
-        current.map((doctor) =>
-          String(doctor.id) === selectedDoctorId
-            ? {
-                ...doctor,
-                profile: response.profile,
-                profile_configured: true,
-              }
-            : doctor,
-        ),
+      const orderedDoctors = [
+        ...refreshedDoctors.slice(currentIndex + 1),
+        ...refreshedDoctors.slice(0, currentIndex + 1),
+      ];
+
+      const nextDoctor = orderedDoctors.find(
+        (doctor) =>
+          String(doctor.id) !== savedDoctorId &&
+          !doctor.profile_configured
       );
+
+      if (nextDoctor) {
+        // Automatically select next doctor
+        setSelectedDoctorId(String(nextDoctor.id));
+
+        // Start with a clean form
+        setForm(EMPTY_FORM);
+
+        setSuccess(
+          `Profile saved successfully for ${savedDoctorName}. Now complete ${nextDoctor.full_name}'s profile.`
+        );
+      } else {
+        // All profiles have been configured
+        setSelectedDoctorId(savedDoctorId);
+        setForm(profileToForm({ profile: response.profile }));
+
+        setSuccess(
+          `Profile saved successfully for ${savedDoctorName}. All registered doctors have configured profiles.`
+        );
+      }
+    } catch (refreshError) {
+      console.error("Doctor list refresh error:", refreshError);
 
       setForm(profileToForm({ profile: response.profile }));
 
       setSuccess(
-        `Doctor profile saved for ${selectedDoctor?.full_name || "the selected doctor"}.`,
+        `Profile saved successfully for ${savedDoctorName}, but the doctor list could not refresh. Please refresh the page.`
       );
-    } catch (requestError) {
-      setError(
-        requestError?.response?.data?.detail ||
-          "Could not save the profile. Check your permissions and MongoDB.",
-      );
-    } finally {
-      setSaving(false);
     }
+  } catch (requestError) {
+    setError(
+      requestError?.response?.data?.detail ||
+        "Could not save the profile. Check your permissions and MongoDB."
+    );
+  } finally {
+    setSaving(false);
   }
+}
 
   return (
     <MainLayout title="CareMatch Doctor Profiles">

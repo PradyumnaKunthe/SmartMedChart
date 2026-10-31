@@ -1,0 +1,36 @@
+[
+  {
+    "_id": {
+      "$oid": "6adcd4fbba9aac3e3b804558"
+    },
+    "doctor_id": 17,
+    "available_days": [
+      "Monday",
+      "Tuesday",
+      "Thursday",
+      "Friday"
+    ],
+    "consultation_fee": 800.0,
+    "created_at": {
+      "$date": "2026-10-24T15:55:39.402Z"
+    },
+    "experience_years": 12,
+    "expertise_keywords": [
+      "Chest Pain",
+      "Stroke"
+    ],
+    "is_available": true,
+    "languages": [
+      "English",
+      "Hindi"
+    ],
+    "qualifications": "MBBS",
+    "specializations": [
+      "Cardiology",
+      "General Medicine"
+    ],
+    "updated_at": {
+      "$date": "2026-10-30T06:17:36.401Z"
+    }
+  }
+]

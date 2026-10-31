@@ -1,0 +1,122 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "ward_id": 1,
+    "bed_number": "1",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:21:41.898009",
+    "updated_at": "2026-09-05 12:35:44.727721"
+  },
+  {
+    "_id": 2,
+    "id": 2,
+    "ward_id": 1,
+    "bed_number": "2",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:21:46.153308",
+    "updated_at": "2026-09-05 12:35:05.964994"
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "ward_id": 1,
+    "bed_number": "3",
+    "is_active": 1,
+    "is_occupied": 1,
+    "created_at": "2026-09-05 12:21:51.963053",
+    "updated_at": "2026-09-08 04:55:02.784753"
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "ward_id": 1,
+    "bed_number": "4",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:21:55.675943",
+    "updated_at": "2026-09-05 12:21:55.675943"
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "ward_id": 1,
+    "bed_number": "5",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:21:59.999111",
+    "updated_at": "2026-09-05 12:21:59.999111"
+  },
+  {
+    "_id": 6,
+    "id": 6,
+    "ward_id": 1,
+    "bed_number": "6",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:22:04.918740",
+    "updated_at": "2026-09-05 12:22:04.918740"
+  },
+  {
+    "_id": 7,
+    "id": 7,
+    "ward_id": 1,
+    "bed_number": "7",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:22:16.778725",
+    "updated_at": "2026-09-05 12:22:16.778725"
+  },
+  {
+    "_id": 8,
+    "id": 8,
+    "ward_id": 1,
+    "bed_number": "8",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:22:26.472417",
+    "updated_at": "2026-09-05 12:22:26.472417"
+  },
+  {
+    "_id": 9,
+    "id": 9,
+    "ward_id": 2,
+    "bed_number": "IC-1",
+    "is_active": 1,
+    "is_occupied": 1,
+    "created_at": "2026-09-05 12:23:28.671673",
+    "updated_at": "2026-09-05 12:33:26.168548"
+  },
+  {
+    "_id": 10,
+    "id": 10,
+    "ward_id": 2,
+    "bed_number": "IC-2",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:23:35.075420",
+    "updated_at": "2026-09-05 12:23:35.075420"
+  },
+  {
+    "_id": 11,
+    "id": 11,
+    "ward_id": 2,
+    "bed_number": "IC-3",
+    "is_active": 1,
+    "is_occupied": 1,
+    "created_at": "2026-09-05 12:23:40.798576",
+    "updated_at": "2026-09-07 11:45:20.271550"
+  },
+  {
+    "_id": 12,
+    "id": 12,
+    "ward_id": 2,
+    "bed_number": "IC-4",
+    "is_active": 1,
+    "is_occupied": 0,
+    "created_at": "2026-09-05 12:23:45.893581",
+    "updated_at": "2026-09-05 12:23:45.893581"
+  }
+]

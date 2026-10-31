@@ -1,23 +1,24 @@
 import os
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pwdlib import PasswordHash
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.models import Permission, Role, User
+from app.mongo_client import mongo_db
 
 
-load_dotenv()
-
+# Load backend environment variables
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_FILE)
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
     os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 )
@@ -25,34 +26,37 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
 if not JWT_SECRET_KEY:
     raise RuntimeError("JWT_SECRET_KEY is not configured.")
 
-
 password_hash = PasswordHash.recommended()
 
-# Reads Authorization: Bearer <token>
 bearer_scheme = HTTPBearer()
 
 
+# ==============================
+# PASSWORD FUNCTIONS
+# ==============================
+
 def hash_password(password: str) -> str:
-    """Create a secure password hash."""
     return password_hash.hash(password)
 
 
 def verify_password(
     plain_password: str,
-    hashed_password: str,
+    hashed_password: str
 ) -> bool:
-    """Verify a password against a stored hash."""
     return password_hash.verify(
         plain_password,
-        hashed_password,
+        hashed_password
     )
 
 
+# ==============================
+# JWT FUNCTIONS
+# ==============================
+
 def create_access_token(
     subject: str,
-    expires_minutes: int | None = None,
+    expires_minutes: int | None = None
 ) -> str:
-    """Create a signed JWT access token."""
 
     if expires_minutes is None:
         expires_minutes = JWT_ACCESS_TOKEN_EXPIRE_MINUTES
@@ -63,40 +67,38 @@ def create_access_token(
     payload = {
         "sub": subject,
         "iat": now,
-        "exp": expire,
+        "exp": expire
     }
 
     return jwt.encode(
         payload,
         JWT_SECRET_KEY,
-        algorithm=JWT_ALGORITHM,
+        algorithm=JWT_ALGORITHM
     )
 
 
 def decode_access_token(token: str) -> dict:
-    """Decode and validate a JWT access token."""
-
     try:
         return jwt.decode(
             token,
             JWT_SECRET_KEY,
-            algorithms=[JWT_ALGORITHM],
+            algorithms=[JWT_ALGORITHM]
         )
     except JWTError as exc:
-        raise ValueError("Invalid or expired access token.") from exc
+        raise ValueError(
+            "Invalid or expired access token."
+        ) from exc
 
+
+# ==============================
+# LOAD USER FROM MONGODB
+# ==============================
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(
         bearer_scheme
-    ),
-    db: Session = Depends(get_db),
-) -> User:
-    """
-    Extract the JWT from the Authorization header,
-    identify the user, and load that user from the database.
-    """
-
+    )
+):
     token = credentials.credentials
 
     try:
@@ -105,7 +107,7 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": "Bearer"}
         ) from exc
 
     subject = payload.get("sub")
@@ -113,8 +115,7 @@ def get_current_user(
     if subject is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token does not contain a user identifier.",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Token does not contain a user identifier."
         )
 
     try:
@@ -122,40 +123,86 @@ def get_current_user(
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user identifier in token.",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Invalid user identifier."
         ) from exc
 
-    user = db.scalar(
-        select(User).where(
-            User.id == user_id,
-            User.is_active.is_(True),
-        )
-    )
+    # Find user in MongoDB
+    user = mongo_db.users.find_one({
+        "_id": user_id,
+        "is_active": {"$in": [1, True]}
+    })
 
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive.",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="User not found or inactive."
         )
 
-    return user
+    # Find user's role
+    role = mongo_db.roles.find_one({
+        "_id": user["role_id"]
+    })
 
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User role not found."
+        )
+
+    # Find permissions assigned to role
+    role_permissions = list(
+        mongo_db.role_permissions.find({
+            "role_id": role["id"]
+        })
+    )
+
+    permission_ids = [
+        item["permission_id"]
+        for item in role_permissions
+    ]
+
+    permissions = list(
+        mongo_db.permissions.find({
+            "_id": {"$in": permission_ids}
+        })
+    )
+
+    # Build role object
+    role_object = SimpleNamespace(
+        id=role["id"],
+        name=role["name"],
+        permissions=[
+            SimpleNamespace(name=p["name"])
+            for p in permissions
+        ]
+    )
+
+    # Build user object
+    user_data = {
+        key: value
+        for key, value in user.items()
+        if key != "_id"
+    }
+
+    user_data["role"] = role_object
+
+    return SimpleNamespace(**user_data)
+
+
+# ==============================
+# ROLE AUTHORIZATION
+# ==============================
 
 def require_role(required_role: str):
-    """
-    Create a dependency that requires a specific user role.
-    """
 
     def role_dependency(
-        current_user: User = Depends(get_current_user),
-    ) -> User:
+        current_user=Depends(get_current_user)
+    ):
 
         if current_user.role.name != required_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient role permissions.",
+                detail="Insufficient role permissions."
             )
 
         return current_user
@@ -163,14 +210,15 @@ def require_role(required_role: str):
     return role_dependency
 
 
+# ==============================
+# PERMISSION AUTHORIZATION
+# ==============================
+
 def require_permission(required_permission: str):
-    """
-    Create a dependency that requires a specific permission.
-    """
 
     def permission_dependency(
-        current_user: User = Depends(get_current_user),
-    ) -> User:
+        current_user=Depends(get_current_user)
+    ):
 
         permission_names = {
             permission.name
@@ -180,7 +228,7 @@ def require_permission(required_permission: str):
         if required_permission not in permission_names:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions.",
+                detail="Insufficient permissions."
             )
 
         return current_user

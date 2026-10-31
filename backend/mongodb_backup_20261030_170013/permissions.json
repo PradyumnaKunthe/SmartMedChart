@@ -1,0 +1,146 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "name": "VIEW_PATIENT",
+    "description": "View patient information",
+    "created_at": "2026-08-25 14:16:15.116859",
+    "updated_at": "2026-08-25 14:16:15.116871"
+  },
+  {
+    "_id": 2,
+    "id": 2,
+    "name": "CREATE_PRESCRIPTION",
+    "description": "Create a medication prescription",
+    "created_at": "2026-08-25 14:16:15.116877",
+    "updated_at": "2026-08-25 14:16:15.116881"
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "name": "EDIT_PRESCRIPTION",
+    "description": "Modify an existing prescription",
+    "created_at": "2026-08-25 14:16:15.116885",
+    "updated_at": "2026-08-25 14:16:15.116889"
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "name": "STOP_PRESCRIPTION",
+    "description": "Stop an active prescription",
+    "created_at": "2026-08-25 14:16:15.116893",
+    "updated_at": "2026-08-25 14:16:15.116896"
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "name": "VIEW_MEDICATION_HISTORY",
+    "description": "View medication administration history",
+    "created_at": "2026-08-25 14:16:15.116900",
+    "updated_at": "2026-08-25 14:16:15.116904"
+  },
+  {
+    "_id": 6,
+    "id": 6,
+    "name": "VIEW_MEDICATION_SCHEDULE",
+    "description": "View medication schedules",
+    "created_at": "2026-08-25 14:16:15.116908",
+    "updated_at": "2026-08-25 14:16:15.116912"
+  },
+  {
+    "_id": 7,
+    "id": 7,
+    "name": "VERIFY_QR",
+    "description": "Verify a patient using QR",
+    "created_at": "2026-08-25 14:16:15.116916",
+    "updated_at": "2026-08-25 14:16:15.116919"
+  },
+  {
+    "_id": 8,
+    "id": 8,
+    "name": "ADMINISTER_MEDICATION",
+    "description": "Record medication administration",
+    "created_at": "2026-08-25 14:16:15.116923",
+    "updated_at": "2026-08-25 14:16:15.116927"
+  },
+  {
+    "_id": 9,
+    "id": 9,
+    "name": "VIEW_PRESCRIPTION",
+    "description": "View prescriptions",
+    "created_at": "2026-08-25 14:16:15.116931",
+    "updated_at": "2026-08-25 14:16:15.116935"
+  },
+  {
+    "_id": 10,
+    "id": 10,
+    "name": "MANAGE_MEDICINE",
+    "description": "Manage medicine information",
+    "created_at": "2026-08-25 14:16:15.116939",
+    "updated_at": "2026-08-25 14:16:15.116942"
+  },
+  {
+    "_id": 11,
+    "id": 11,
+    "name": "MANAGE_INVENTORY",
+    "description": "Manage medicine inventory",
+    "created_at": "2026-08-25 14:16:15.116947",
+    "updated_at": "2026-08-25 14:16:15.116973"
+  },
+  {
+    "_id": 12,
+    "id": 12,
+    "name": "MANAGE_USERS",
+    "description": "Create and manage users",
+    "created_at": "2026-08-25 14:16:15.116978",
+    "updated_at": "2026-08-25 14:16:15.116981"
+  },
+  {
+    "_id": 13,
+    "id": 13,
+    "name": "MANAGE_ROLES",
+    "description": "Manage user roles",
+    "created_at": "2026-08-25 14:16:15.116985",
+    "updated_at": "2026-08-25 14:16:15.116988"
+  },
+  {
+    "_id": 14,
+    "id": 14,
+    "name": "MANAGE_PERMISSIONS",
+    "description": "Manage permissions",
+    "created_at": "2026-08-25 14:16:15.116991",
+    "updated_at": "2026-08-25 14:16:15.116994"
+  },
+  {
+    "_id": 15,
+    "id": 15,
+    "name": "VIEW_REPORTS",
+    "description": "View hospital reports",
+    "created_at": "2026-08-25 14:16:15.116997",
+    "updated_at": "2026-08-25 14:16:15.117000"
+  },
+  {
+    "_id": 16,
+    "id": 16,
+    "name": "VIEW_AUDIT_LOG",
+    "description": "View audit logs",
+    "created_at": "2026-08-25 14:16:15.117003",
+    "updated_at": "2026-08-25 14:16:15.117006"
+  },
+  {
+    "_id": 17,
+    "id": 17,
+    "name": "MANAGE_SYSTEM",
+    "description": "Manage system settings",
+    "created_at": "2026-08-25 14:16:15.117009",
+    "updated_at": "2026-08-25 14:16:15.117012"
+  },
+  {
+    "_id": 18,
+    "id": 18,
+    "name": "REGISTER_PATIENT",
+    "description": "Register new patients and initiate encounters",
+    "created_at": "2026-10-24 16:10:28.541906",
+    "updated_at": "2026-10-24 16:10:28.541917"
+  }
+]

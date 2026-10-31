@@ -1,0 +1,202 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "patient_id": 1,
+    "doctor_id": 1,
+    "status": "ACTIVE",
+    "notes": "Test prescription for scheduling",
+    "created_at": "2026-08-25 16:11:54.929116",
+    "updated_at": "2026-08-25 16:11:54.929120"
+  },
+  {
+    "_id": 2,
+    "id": 2,
+    "patient_id": 2,
+    "doctor_id": 2,
+    "status": "STOPPED",
+    "notes": "Test prescription",
+    "created_at": "2026-08-25 16:26:24.407210",
+    "updated_at": "2026-08-30 14:20:36.298060"
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "patient_id": 3,
+    "doctor_id": 4,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-08-25 16:28:15.491620",
+    "updated_at": "2026-08-25 16:28:15.491626"
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "patient_id": 4,
+    "doctor_id": 6,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-08-25 16:29:46.839994",
+    "updated_at": "2026-08-25 16:29:46.840000"
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "patient_id": 5,
+    "doctor_id": 8,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-08-25 16:34:48.984280",
+    "updated_at": "2026-08-25 16:34:48.984287"
+  },
+  {
+    "_id": 6,
+    "id": 6,
+    "patient_id": 1,
+    "doctor_id": 11,
+    "status": "STOPPED",
+    "notes": "Doctor API test prescription",
+    "created_at": "2026-08-26 08:31:06.098265",
+    "updated_at": "2026-08-26 08:42:17.438146"
+  },
+  {
+    "_id": 7,
+    "id": 7,
+    "patient_id": 2,
+    "doctor_id": 11,
+    "status": "STOPPED",
+    "notes": null,
+    "created_at": "2026-08-30 14:09:43.454370",
+    "updated_at": "2026-08-30 14:20:29.640785"
+  },
+  {
+    "_id": 8,
+    "id": 8,
+    "patient_id": 2,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": "good boy",
+    "created_at": "2026-08-30 14:20:12.200932",
+    "updated_at": "2026-08-30 14:20:57.397020"
+  },
+  {
+    "_id": 9,
+    "id": 9,
+    "patient_id": 7,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-02 13:24:43.514634",
+    "updated_at": "2026-09-02 13:24:43.514661"
+  },
+  {
+    "_id": 10,
+    "id": 10,
+    "patient_id": 10,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-02 18:13:17.246692",
+    "updated_at": "2026-09-02 18:13:17.246703"
+  },
+  {
+    "_id": 11,
+    "id": 11,
+    "patient_id": 12,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 05:05:45.435775",
+    "updated_at": "2026-09-03 05:05:45.435803"
+  },
+  {
+    "_id": 12,
+    "id": 12,
+    "patient_id": 13,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 05:34:37.489650",
+    "updated_at": "2026-09-03 05:34:37.489664"
+  },
+  {
+    "_id": 13,
+    "id": 13,
+    "patient_id": 10,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 07:03:50.843694",
+    "updated_at": "2026-09-03 07:03:50.843706"
+  },
+  {
+    "_id": 14,
+    "id": 14,
+    "patient_id": 13,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 07:51:43.737928",
+    "updated_at": "2026-09-03 07:51:43.737942"
+  },
+  {
+    "_id": 15,
+    "id": 15,
+    "patient_id": 14,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 08:01:06.322920",
+    "updated_at": "2026-09-03 08:01:06.322956"
+  },
+  {
+    "_id": 16,
+    "id": 16,
+    "patient_id": 15,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 10:30:51.101510",
+    "updated_at": "2026-09-03 10:30:51.101522"
+  },
+  {
+    "_id": 17,
+    "id": 17,
+    "patient_id": 16,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 10:57:53.249039",
+    "updated_at": "2026-09-03 10:57:53.249051"
+  },
+  {
+    "_id": 18,
+    "id": 18,
+    "patient_id": 17,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 11:21:21.982587",
+    "updated_at": "2026-09-03 11:21:21.982603"
+  },
+  {
+    "_id": 19,
+    "id": 19,
+    "patient_id": 18,
+    "doctor_id": 11,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-03 11:32:06.131024",
+    "updated_at": "2026-09-03 11:32:06.131042"
+  },
+  {
+    "_id": 20,
+    "id": 20,
+    "patient_id": 13,
+    "doctor_id": 16,
+    "status": "ACTIVE",
+    "notes": null,
+    "created_at": "2026-09-08 05:01:18.264576",
+    "updated_at": "2026-09-08 05:01:18.264610"
+  }
+]

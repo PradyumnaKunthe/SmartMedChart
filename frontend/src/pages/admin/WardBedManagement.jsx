@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import {
   ArrowLeft,
   BedDouble,
@@ -466,6 +467,17 @@ export default function WardBedManagement() {
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-8 text-white">
       <div className="mx-auto max-w-7xl">
+        
+<div className="mb-5">
+  <Link
+    to="/admin/dashboard"
+    className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:border-cyan-500 hover:bg-slate-800 hover:text-white"
+  >
+    <ArrowLeft className="h-4 w-4" />
+    Back to Admin Dashboard
+  </Link>
+</div>
+
 
         {/* =================================================
             Header

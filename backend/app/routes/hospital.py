@@ -1,21 +1,13 @@
+
 from datetime import date, datetime
 from secrets import token_urlsafe
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, func, or_, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
-from app.database import get_db
-from app.models import (
-    Bed,
-    Encounter,
-    Patient,
-    PatientBilling,
-    Role,
-    User,
-    Ward,
-)
+from app.mongo_client import mongo_db
 from app.security import get_current_user, require_permission
 
 
@@ -25,259 +17,278 @@ router = APIRouter(
 )
 
 
-# =========================================================
+# =====================================================
 # HELPERS
-# =========================================================
+# =====================================================
 
-def generate_patient_qr_token() -> str:
-    """
-    Generate a secure opaque QR token for a patient.
-    """
-    return token_urlsafe(32)
+def now_string():
+    return datetime.utcnow().isoformat(timespec="microseconds")
 
 
-def generate_patient_id(db: Session) -> str:
-    """
-    Automatically generate a unique SmartMedChart Patient ID.
-
-    Format:
-        SMH-PUN-YYMMDD-XXXX
-    """
-    today = date.today()
-    date_code = today.strftime("%y%m%d")
-    prefix = f"SMH-PUN-{date_code}-"
-
-    sequence = 1
-
-    while True:
-        patient_code = f"{prefix}{sequence:04d}"
-
-        existing_patient = db.scalar(
-            select(Patient).where(
-                Patient.patient_id == patient_code
-            )
-        )
-
-        if existing_patient is None:
-            return patient_code
-
-        sequence += 1
+def as_bool(value):
+    return value is True or value == 1 or str(value).lower() in (
+        "true", "1", "yes"
+    )
 
 
-def parse_date_of_birth(value) -> date | None:
-    """
-    Convert a date value such as '1979-05-14'
-    into a Python date object.
-    """
+def parse_date_of_birth(value):
     if value is None or str(value).strip() == "":
         return None
 
-    if isinstance(value, date):
-        return value
-
     try:
-        return datetime.strptime(
-            str(value).strip(),
-            "%Y-%m-%d",
-        ).date()
-
+        return date.fromisoformat(str(value).strip()).isoformat()
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Invalid date_of_birth. "
-                "Use YYYY-MM-DD format."
-            ),
+            detail="Invalid date_of_birth. Use YYYY-MM-DD."
         )
 
 
 def parse_weight(value):
-    """
-    Convert weight to a numeric value.
-    """
     if value is None or str(value).strip() == "":
         return None
 
     try:
         weight = float(value)
-
     except (TypeError, ValueError):
         raise HTTPException(
             status_code=400,
-            detail="weight_kg must be a valid number.",
+            detail="weight_kg must be a valid number."
         )
 
     if weight <= 0 or weight > 500:
         raise HTTPException(
             status_code=400,
-            detail="weight_kg must be between 0 and 500.",
+            detail="weight_kg must be between 0 and 500."
         )
 
     return weight
 
 
-def parse_boolean(value, default=True) -> bool:
-    """
-    Safely convert incoming boolean-like values.
-    """
+def parse_boolean(value, default=True):
     if value is None:
         return default
 
     if isinstance(value, bool):
         return value
 
-    text = str(value).strip().lower()
+    value = str(value).strip().lower()
 
-    if text in {"true", "1", "yes", "y", "active"}:
+    if value in {"true", "1", "yes", "y", "active"}:
         return True
 
-    if text in {"false", "0", "no", "n", "inactive"}:
+    if value in {"false", "0", "no", "n", "inactive"}:
         return False
 
     raise HTTPException(
         status_code=400,
-        detail=f"Invalid boolean value: {value}",
+        detail="Invalid boolean value."
     )
 
 
-def patient_to_dict(patient: Patient) -> dict:
+def next_numeric_id(collection_name):
     """
-    Convert a Patient SQLAlchemy object into
-    a JSON-safe dictionary.
+    Allocate a new numeric ID safely using MongoDB counters.
+    Existing SQLite IDs remain unchanged.
     """
+    collection = mongo_db[collection_name]
+
+    latest = collection.find_one(
+        {},
+        sort=[("_id", -1)],
+        projection={"_id": 1}
+    )
+
+    maximum = int(latest["_id"]) if latest else 0
+
+    counters = mongo_db["_id_sequences"]
+
+    counters.update_one(
+        {"_id": collection_name},
+        {"$setOnInsert": {"value": maximum}},
+        upsert=True
+    )
+
+    counters.update_one(
+        {"_id": collection_name},
+        {"$max": {"value": maximum}}
+    )
+
+    result = counters.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"value": 1}},
+        return_document=ReturnDocument.AFTER
+    )
+
+    return int(result["value"])
+
+
+def ensure_patient_indexes():
+    mongo_db.patients.create_index(
+        [("patient_id", 1)],
+        unique=True,
+        name="uq_patients_patient_id"
+    )
+
+    mongo_db.patients.create_index(
+        [("qr_token", 1)],
+        unique=True,
+        name="uq_patients_qr_token",
+        partialFilterExpression={
+            "qr_token": {"$type": "string"}
+        }
+    )
+
+
+def generate_patient_id():
+    today = date.today()
+    prefix = f"SMH-PUN-{today.strftime('%y%m%d')}-"
+
+    last_patient = mongo_db.patients.find_one(
+        {
+            "patient_id": {
+                "$regex": "^" + re.escape(prefix)
+            }
+        },
+        sort=[("patient_id", -1)]
+    )
+
+    sequence = 1
+
+    if last_patient:
+        try:
+            sequence = (
+                int(last_patient["patient_id"].split("-")[-1]) + 1
+            )
+        except (ValueError, IndexError, KeyError):
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to generate patient ID."
+            )
+
+    return f"{prefix}{sequence:04d}"
+
+
+def generate_patient_qr_token():
+    return token_urlsafe(32)
+
+
+def optional_text(request, field, max_length=None):
+    value = request.get(field)
+
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    if not value:
+        return None
+
+    if max_length and len(value) > max_length:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field} cannot exceed {max_length} characters."
+        )
+
+    return value
+
+
+def patient_to_dict(patient):
     return {
-        "id": patient.id,
-        "patient_id": patient.patient_id,
-        "first_name": patient.first_name,
-        "last_name": patient.last_name,
+        "id": patient["id"],
+        "patient_id": patient["patient_id"],
+        "first_name": patient.get("first_name"),
+        "last_name": patient.get("last_name"),
         "full_name": (
-            f"{patient.first_name} "
-            f"{patient.last_name}"
+            f"{patient.get('first_name', '')} "
+            f"{patient.get('last_name', '')}"
         ).strip(),
-        "date_of_birth": patient.date_of_birth,
-        "gender": patient.gender,
-        "weight_kg": (
-            float(patient.weight_kg)
-            if patient.weight_kg is not None
-            else None
+        "date_of_birth": patient.get("date_of_birth"),
+        "gender": patient.get("gender"),
+        "weight_kg": patient.get("weight_kg"),
+        "mobile_number": patient.get("mobile_number"),
+        "email": patient.get("email"),
+        "address": patient.get("address"),
+        "emergency_contact_name": patient.get(
+            "emergency_contact_name"
         ),
-        "ward_id": patient.ward_id,
-        "bed_id": patient.bed_id,
-        "is_active": patient.is_active,
-        "qr_is_active": patient.qr_is_active,
-        "qr_generated_at": patient.qr_generated_at,
+        "emergency_contact_number": patient.get(
+            "emergency_contact_number"
+        ),
+        "emergency_contact_relationship": patient.get(
+            "emergency_contact_relationship"
+        ),
+        "preferred_language": patient.get("preferred_language"),
+        "ward_id": patient.get("ward_id"),
+        "bed_id": patient.get("bed_id"),
+        "is_active": as_bool(patient.get("is_active")),
+        "qr_is_active": as_bool(patient.get("qr_is_active")),
+        "qr_generated_at": patient.get("qr_generated_at"),
+        "created_at": patient.get("created_at"),
+        "updated_at": patient.get("updated_at"),
     }
 
 
-# =========================================================
+# =====================================================
 # HOSPITAL DASHBOARD
-# =========================================================
+# =====================================================
 
 @router.get("/dashboard")
 def get_hospital_dashboard(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("VIEW_PATIENT")
-    ),
+    current_user=Depends(require_permission("VIEW_PATIENT"))
 ):
-    """
-    Return patient statistics for the Hospital Portal.
-    """
-    total_patient_count = (
-        db.scalar(
-            select(func.count(Patient.id))
-        )
-        or 0
-    )
+    total = mongo_db.patients.count_documents({})
 
-    active_patient_count = (
-        db.scalar(
-            select(
-                func.count(Patient.id)
-            ).where(
-                Patient.is_active.is_(True)
-            )
-        )
-        or 0
-    )
-
-    inactive_patient_count = (
-        int(total_patient_count)
-        - int(active_patient_count)
-    )
+    active = mongo_db.patients.count_documents({
+        "is_active": {"$in": [True, 1]}
+    })
 
     return {
-        "message": (
-            "Hospital dashboard generated successfully."
-        ),
+        "message": "Hospital dashboard generated successfully.",
         "hospital": {
             "portal": "Hospital Data Portal",
             "status": "ACTIVE",
         },
         "patients": {
-            "total": int(total_patient_count),
-            "active": int(active_patient_count),
-            "inactive": int(inactive_patient_count),
+            "total": total,
+            "active": active,
+            "inactive": total - active,
         },
     }
 
 
-# =========================================================
+# =====================================================
 # LIST / SEARCH PATIENTS
-# =========================================================
+# =====================================================
 
 @router.get("/patients")
 def get_hospital_patients(
     search: str | None = None,
     active_only: bool = False,
     limit: int = 100,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("VIEW_PATIENT")
-    ),
+    current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
-    """
-    Fetch patients from the shared SmartMedChart database.
+    limit = max(1, min(limit, 500))
 
-    Supports searching by:
-    - Patient ID
-    - First name
-    - Last name
-    """
-    if limit < 1:
-        limit = 1
-
-    if limit > 500:
-        limit = 500
-
-    query = select(Patient)
+    query = {}
 
     if active_only:
-        query = query.where(
-            Patient.is_active.is_(True)
-        )
+        query["is_active"] = {"$in": [True, 1]}
 
-    if search:
-        search_value = search.strip()
+    if search and search.strip():
+        pattern = re.escape(search.strip())
 
-        if search_value:
-            pattern = f"%{search_value}%"
+        query["$or"] = [
+            {"patient_id": {"$regex": pattern, "$options": "i"}},
+            {"first_name": {"$regex": pattern, "$options": "i"}},
+            {"last_name": {"$regex": pattern, "$options": "i"}},
+        ]
 
-            query = query.where(
-                or_(
-                    Patient.patient_id.ilike(pattern),
-                    Patient.first_name.ilike(pattern),
-                    Patient.last_name.ilike(pattern),
-                )
-            )
-
-    query = (
-        query
-        .order_by(Patient.id.desc())
+    patients = list(
+        mongo_db.patients.find(query)
+        .sort("_id", -1)
         .limit(limit)
     )
-
-    patients = db.scalars(query).all()
 
     return {
         "count": len(patients),
@@ -288,257 +299,176 @@ def get_hospital_patients(
     }
 
 
-# =========================================================
-# GET ONE PATIENT - COMPLETE PROFILE
-# =========================================================
+# =====================================================
+# COMPLETE PATIENT PROFILE
+# =====================================================
 
 @router.get("/patients/{patient_id}")
 def get_hospital_patient(
     patient_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("VIEW_PATIENT")
-    ),
+    current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
-    """
-    Return the complete hospital patient profile.
-
-    Includes:
-    - Patient information
-    - Ward information
-    - Bed information
-    - Latest encounter
-    - Attending doctor
-    - Billing
-    """
-
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({"_id": patient_id})
 
     if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
+        raise HTTPException(404, "Patient not found.")
 
-    # -----------------------------------------------------
-    # Latest encounter
-    # -----------------------------------------------------
-    encounter = db.scalar(
-        select(Encounter)
-        .where(
-            Encounter.patient_id == patient.id
-        )
-        .order_by(
-            desc(Encounter.created_at)
-        )
+    encounter = mongo_db.encounters.find_one(
+        {"patient_id": patient_id},
+        sort=[("created_at", -1), ("_id", -1)]
     )
 
-    # -----------------------------------------------------
-    # Doctor
-    # -----------------------------------------------------
     doctor = None
-
-    if (
-        encounter is not None
-        and encounter.doctor_id is not None
-    ):
-        doctor = db.scalar(
-            select(User).where(
-                User.id == encounter.doctor_id
-            )
-        )
-
-    # -----------------------------------------------------
-    # Ward
-    # -----------------------------------------------------
     ward = None
-
-    if patient.ward_id is not None:
-        ward = db.scalar(
-            select(Ward).where(
-                Ward.id == patient.ward_id
-            )
-        )
-
-    # -----------------------------------------------------
-    # Bed
-    # -----------------------------------------------------
     bed = None
+    billing = None
 
-    if patient.bed_id is not None:
-        bed = db.scalar(
-            select(Bed).where(
-                Bed.id == patient.bed_id
-            )
-        )
+    if encounter and encounter.get("doctor_id") is not None:
+        doctor = mongo_db.users.find_one({
+            "_id": encounter["doctor_id"]
+        })
 
-    # -----------------------------------------------------
-    # Billing
-    # -----------------------------------------------------
-    billing = db.scalar(
-        select(PatientBilling)
-        .where(
-            PatientBilling.patient_id == patient.id
-        )
-        .order_by(
-            desc(PatientBilling.created_at)
-        )
+    if patient.get("ward_id") is not None:
+        ward = mongo_db.wards.find_one({
+            "_id": patient["ward_id"]
+        })
+
+    if patient.get("bed_id") is not None:
+        bed = mongo_db.beds.find_one({
+            "_id": patient["bed_id"]
+        })
+
+    billing = mongo_db.patient_billing.find_one(
+        {"patient_id": patient_id},
+        sort=[("created_at", -1), ("_id", -1)]
     )
 
-    return {
-        "patient": {
-            "id": patient.id,
-            "patient_id": patient.patient_id,
+    doctor_name = (
+        doctor.get("full_name")
+        if doctor
+        else None
+    )
 
-            "first_name": patient.first_name,
-            "last_name": patient.last_name,
+    result = patient_to_dict(patient)
 
-            "full_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
-            ).strip(),
+    result.update({
+        "ward": (
+            {
+                "id": ward["id"],
+                "name": ward.get("name"),
+                "code": ward.get("code"),
+                "description": ward.get("description"),
+                "is_active": as_bool(ward.get("is_active")),
+            }
+            if ward else None
+        ),
 
-            "date_of_birth": patient.date_of_birth,
-            "gender": patient.gender,
+        "bed": (
+            {
+                "id": bed["id"],
+                "bed_number": bed.get("bed_number"),
+                "ward_id": bed.get("ward_id"),
+                "is_active": as_bool(bed.get("is_active")),
+                "is_occupied": as_bool(bed.get("is_occupied")),
+            }
+            if bed else None
+        ),
 
-            "weight_kg": (
-                float(patient.weight_kg)
-                if patient.weight_kg is not None
-                else None
-            ),
+        "encounter": (
+            {
+                "id": encounter["id"],
+                "doctor_id": encounter.get("doctor_id"),
+                "doctor_name": doctor_name,
+                "encounter_type": encounter.get("encounter_type"),
+                "status": encounter.get("status"),
+                "admitted_at": encounter.get("admitted_at"),
+                "discharged_at": encounter.get("discharged_at"),
+                "discharge_reason": encounter.get("discharge_reason"),
+                "chief_complaint": encounter.get("chief_complaint"),
+                "symptom_duration": encounter.get("symptom_duration"),
+                "symptom_severity": encounter.get("symptom_severity"),
+                "visit_notes": encounter.get("visit_notes"),
+                "medical_history_notes": encounter.get(
+                    "medical_history_notes"
+                ),
+                "current_medication_notes": encounter.get(
+                    "current_medication_notes"
+                ),
+                "allergy_notes": encounter.get("allergy_notes"),
+                "clinical_observations": encounter.get(
+                    "clinical_observations"
+                ),
+            }
+            if encounter else None
+        ),
 
-            "ward_id": patient.ward_id,
-            "bed_id": patient.bed_id,
+        "doctor": (
+            {
+                "id": doctor["id"],
+                "full_name": doctor.get("full_name"),
+                "username": doctor.get("username"),
+                "email": doctor.get("email"),
+            }
+            if doctor else None
+        ),
 
-            "is_active": patient.is_active,
-            "qr_is_active": patient.qr_is_active,
-            "qr_generated_at": patient.qr_generated_at,
+        "billing": (
+            {
+                "id": billing["id"],
+                "bill_status": billing.get("bill_status"),
+                "bill_amount": billing.get("bill_amount"),
+                "paid_at": billing.get("paid_at"),
+                "paid_by": billing.get("paid_by"),
+                "created_at": billing.get("created_at"),
+                "updated_at": billing.get("updated_at"),
+            }
+            if billing else None
+        ),
+    })
 
-            "ward": (
-                {
-                    "id": ward.id,
-                    "name": ward.name,
-                    "code": ward.code,
-                    "description": ward.description,
-                    "is_active": ward.is_active,
-                }
-                if ward is not None
-                else None
-            ),
-
-            "bed": (
-                {
-                    "id": bed.id,
-                    "bed_number": bed.bed_number,
-                    "ward_id": bed.ward_id,
-                    "is_active": bed.is_active,
-                    "is_occupied": bed.is_occupied,
-                }
-                if bed is not None
-                else None
-            ),
-
-            "encounter": (
-                {
-                    "id": encounter.id,
-                    "doctor_id": encounter.doctor_id,
-                    "doctor_name": (
-                        doctor.full_name
-                        if doctor is not None
-                        else None
-                    ),
-                    "encounter_type": encounter.encounter_type,
-                    "status": encounter.status,
-                    "admitted_at": encounter.admitted_at,
-                    "discharged_at": encounter.discharged_at,
-                    "discharge_reason": encounter.discharge_reason,
-                }
-                if encounter is not None
-                else None
-            ),
-
-            "doctor": (
-                {
-                    "id": doctor.id,
-                    "full_name": doctor.full_name,
-                    "username": doctor.username,
-                    "email": doctor.email,
-                }
-                if doctor is not None
-                else None
-            ),
-
-            "billing": (
-                {
-                    "id": billing.id,
-                    "bill_status": billing.bill_status,
-                    "bill_amount": (
-                        float(billing.bill_amount)
-                        if billing.bill_amount is not None
-                        else None
-                    ),
-                    "paid_at": billing.paid_at,
-                    "paid_by": billing.paid_by,
-                    "created_at": billing.created_at,
-                    "updated_at": billing.updated_at,
-                }
-                if billing is not None
-                else None
-            ),
-        }
-    }
+    return {"patient": result}
 
 
-# =========================================================
-# LIST ACTIVE DOCTORS
-# =========================================================
+# =====================================================
+# ACTIVE DOCTORS
+# =====================================================
 
 @router.get("/doctors")
 def get_hospital_doctors(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-        require_permission("VIEW_PATIENT")
-    ),
+    current_user=Depends(require_permission("VIEW_PATIENT"))
 ):
-    """
-    Return all active registered doctors.
+    role = mongo_db.roles.find_one({"name": "Doctor"})
 
-    Doctors are automatically taken from the Staff
-    Management users table.
-    """
-    doctors = db.scalars(
-        select(User)
-        .join(Role, User.role_id == Role.id)
-        .where(
-            Role.name == "Doctor",
-            User.is_active.is_(True),
-        )
-        .order_by(User.full_name.asc())
-    ).all()
+    if role is None:
+        return {"count": 0, "doctors": []}
+
+    doctors = list(
+        mongo_db.users.find({
+            "role_id": role["id"],
+            "is_active": {"$in": [True, 1]},
+        }).sort("full_name", 1)
+    )
 
     return {
         "count": len(doctors),
         "doctors": [
             {
-                "id": doctor.id,
-                "full_name": doctor.full_name,
-                "username": doctor.username,
-                "email": doctor.email,
+                "id": doctor["id"],
+                "full_name": doctor.get("full_name"),
+                "username": doctor.get("username"),
+                "email": doctor.get("email"),
             }
             for doctor in doctors
         ],
     }
 
 
-# =========================================================
-# CREATE / REGISTER PATIENT
-# =========================================================
+# =====================================================
+# REGISTRATION PERMISSION
+# =====================================================
+
 def require_patient_registration_permission(
-    current_user: User = Depends(get_current_user),
+    current_user=Depends(get_current_user)
 ):
     permission_names = {
         permission.name
@@ -551,43 +481,131 @@ def require_patient_registration_permission(
     ):
         raise HTTPException(
             status_code=403,
-            detail="Patient registration permission required.",
+            detail="Patient registration permission required."
         )
 
     return current_user
+
+
+# =====================================================
+# ACTIVE WARDS
+# =====================================================
+
+@router.get("/wards")
+def get_registration_wards(
+    current_user=Depends(
+        require_patient_registration_permission
+    )
+):
+    wards = list(
+        mongo_db.wards.find({
+            "is_active": {"$in": [True, 1]}
+        }).sort("name", 1)
+    )
+
+    result = []
+
+    for ward in wards:
+        bed_query = {
+            "ward_id": ward["id"],
+            "is_active": {"$in": [True, 1]},
+        }
+
+        total = mongo_db.beds.count_documents(bed_query)
+
+        occupied = mongo_db.beds.count_documents({
+            **bed_query,
+            "is_occupied": {"$in": [True, 1]},
+        })
+
+        result.append({
+            "id": ward["id"],
+            "name": ward.get("name"),
+            "code": ward.get("code"),
+            "description": ward.get("description"),
+            "total_beds": total,
+            "occupied_beds": occupied,
+            "available_beds": total - occupied,
+        })
+
+    return {
+        "wards": result,
+        "count": len(result),
+    }
+
+
+# =====================================================
+# WARD BEDS
+# =====================================================
+
+@router.get("/wards/{ward_id}/beds")
+def get_registration_ward_beds(
+    ward_id: int,
+    current_user=Depends(
+        require_patient_registration_permission
+    )
+):
+    ward = mongo_db.wards.find_one({
+        "_id": ward_id,
+        "is_active": {"$in": [True, 1]},
+    })
+
+    if ward is None:
+        raise HTTPException(404, "Ward not found.")
+
+    beds = list(
+        mongo_db.beds.find({
+            "ward_id": ward_id,
+            "is_active": {"$in": [True, 1]},
+        }).sort("bed_number", 1)
+    )
+
+    bed_list = [
+        {
+            "id": bed["id"],
+            "bed_number": bed.get("bed_number"),
+            "ward_id": bed.get("ward_id"),
+            "is_active": as_bool(bed.get("is_active")),
+            "is_occupied": as_bool(bed.get("is_occupied")),
+            "status": (
+                "OCCUPIED"
+                if as_bool(bed.get("is_occupied"))
+                else "AVAILABLE"
+            ),
+        }
+        for bed in beds
+    ]
+
+    occupied = sum(
+        1 for bed in bed_list if bed["is_occupied"]
+    )
+
+    return {
+        "ward": {
+            "id": ward["id"],
+            "name": ward.get("name"),
+            "code": ward.get("code"),
+        },
+        "beds": bed_list,
+        "counts": {
+            "total": len(bed_list),
+            "occupied": occupied,
+            "available": len(bed_list) - occupied,
+        },
+    }
+
+
+# =====================================================
+# REGISTER PATIENT
+# =====================================================
+
 @router.post("/patients")
 def create_hospital_patient(
     request: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
-    require_patient_registration_permission
-),
+    current_user=Depends(
+        require_patient_registration_permission
+    ),
 ):
-    """
-    Register a new patient.
-
-    Automatically creates:
-    - Patient master record
-    - Initial Encounter
-    - Initial Billing record
-    - Active QR token
-
-    Patient ID is generated automatically.
-
-    Required:
-    - first_name
-    - last_name
-    - doctor_id
-
-    Optional admission:
-    - is_admitted
-    - ward_id
-    - bed_id
-    """
-
-    # -----------------------------------------------------
-    # Required fields
-    # -----------------------------------------------------
     required_fields = [
         "first_name",
         "last_name",
@@ -595,91 +613,113 @@ def create_hospital_patient(
     ]
 
     for field in required_fields:
-        value = request.get(field)
-
         if (
-            value is None
-            or str(value).strip() == ""
+            request.get(field) is None
+            or str(request.get(field)).strip() == ""
         ):
             raise HTTPException(
                 status_code=400,
-                detail=f"{field} is required.",
+                detail=f"{field} is required."
             )
 
-    # -----------------------------------------------------
-    # Basic values
-    # -----------------------------------------------------
-    first_name = str(
-        request["first_name"]
-    ).strip()
-
-    last_name = str(
-        request["last_name"]
-    ).strip()
+    first_name = str(request["first_name"]).strip()
+    last_name = str(request["last_name"]).strip()
 
     gender = request.get("gender")
+    gender = str(gender).strip() if gender else None
 
-    if gender is not None:
-        gender = str(gender).strip() or None
-
-    # -----------------------------------------------------
-    # Date of birth
-    # -----------------------------------------------------
-    date_of_birth = parse_date_of_birth(
+    dob = parse_date_of_birth(
         request.get("date_of_birth")
     )
 
-    # -----------------------------------------------------
-    # Weight
-    # -----------------------------------------------------
-    weight_kg = parse_weight(
+    weight = parse_weight(
         request.get("weight_kg")
     )
 
-    # -----------------------------------------------------
-    # Doctor
-    # -----------------------------------------------------
-    doctor_id = request.get("doctor_id")
+    mobile = optional_text(request, "mobile_number", 25)
+    email = optional_text(request, "email", 255)
+    address = optional_text(request, "address")
+
+    emergency_name = optional_text(
+        request, "emergency_contact_name", 150
+    )
+    emergency_number = optional_text(
+        request, "emergency_contact_number", 25
+    )
+    emergency_relationship = optional_text(
+        request, "emergency_contact_relationship", 60
+    )
+    preferred_language = optional_text(
+        request, "preferred_language", 60
+    )
+
+    chief_complaint = (
+        optional_text(request, "chief_complaint")
+        or optional_text(request, "problem_category")
+    )
+
+    symptom_duration = optional_text(
+        request, "symptom_duration", 100
+    )
+    symptom_severity = optional_text(
+        request, "symptom_severity", 30
+    )
+    visit_notes = optional_text(request, "visit_notes")
+    medical_history_notes = optional_text(
+        request, "medical_history_notes"
+    )
+    current_medication_notes = optional_text(
+        request, "current_medication_notes"
+    )
+    allergy_notes = optional_text(request, "allergy_notes")
+
+    clinical_observations = request.get(
+        "clinical_observations"
+    )
+
+    if clinical_observations in ("", None, {}):
+        clinical_observations = None
+    elif not isinstance(clinical_observations, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="clinical_observations must be a JSON object."
+        )
 
     try:
-        doctor_id = int(doctor_id)
-
+        doctor_id = int(request["doctor_id"])
     except (TypeError, ValueError):
         raise HTTPException(
             status_code=400,
-            detail="doctor_id must be a valid integer.",
+            detail="doctor_id must be a valid integer."
         )
 
-    doctor = db.scalar(
-        select(User)
-        .join(Role, User.role_id == Role.id)
-        .where(
-            User.id == doctor_id,
-            User.is_active.is_(True),
-            Role.name == "Doctor",
+    doctor_role = mongo_db.roles.find_one({
+        "name": "Doctor"
+    })
+
+    if doctor_role is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Doctor role is not configured."
         )
-    )
+
+    doctor = mongo_db.users.find_one({
+        "_id": doctor_id,
+        "role_id": doctor_role["id"],
+        "is_active": {"$in": [True, 1]},
+    })
 
     if doctor is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Selected doctor is not an active "
-                "registered doctor."
-            ),
+            detail="Selected doctor is not an active registered doctor."
         )
 
-    # -----------------------------------------------------
-    # Admission state
-    # -----------------------------------------------------
     is_admitted = parse_boolean(
         request.get("is_admitted"),
-        default=False,
+        default=False
     )
 
-    # -----------------------------------------------------
-    # Ward / bed
-    # -----------------------------------------------------
     ward_id = request.get("ward_id")
     bed_id = request.get("bed_id")
 
@@ -689,308 +729,289 @@ def create_hospital_patient(
     if bed_id in ("", None):
         bed_id = None
 
-    if is_admitted and ward_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Ward is required when admitting "
-                "a patient."
-            ),
-        )
-
-    if is_admitted and bed_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Bed is required when admitting "
-                "a patient."
-            ),
-        )
-
-    if not is_admitted:
-        ward_id = None
-        bed_id = None
-
-    # -----------------------------------------------------
-    # Validate ward / bed
-    # -----------------------------------------------------
     selected_bed = None
 
-    if bed_id is not None:
-        try:
-            ward_id = (
-                int(ward_id)
-                if ward_id is not None
-                else None
+    if is_admitted:
+        if ward_id is None or bed_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Ward and bed are required when admitting a patient."
             )
 
+        try:
+            ward_id = int(ward_id)
             bed_id = int(bed_id)
-
         except (TypeError, ValueError):
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "ward_id and bed_id must be "
-                    "valid integers."
-                ),
+                detail="Invalid ward_id or bed_id."
             )
 
-        selected_bed = db.scalar(
-            select(Bed).where(
-                Bed.id == bed_id,
-                Bed.is_active.is_(True),
-            )
-        )
+        ward = mongo_db.wards.find_one({
+            "_id": ward_id,
+            "is_active": {"$in": [True, 1]},
+        })
 
-        if selected_bed is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Selected bed not found or inactive."
-                ),
-            )
+        if ward is None:
+            raise HTTPException(404, "Selected ward not found or inactive.")
 
-        if selected_bed.is_occupied:
-            raise HTTPException(
-                status_code=409,
-                detail="Selected bed is already occupied.",
-            )
+        selected_bed = mongo_db.beds.find_one({
+            "_id": bed_id
+        })
 
-        if (
-            ward_id is not None
-            and selected_bed.ward_id != ward_id
+        if selected_bed is None or not as_bool(
+            selected_bed.get("is_active")
         ):
             raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Selected bed does not belong "
-                    "to the selected ward."
-                ),
+                status_code=404,
+                detail="Selected bed not found or inactive."
             )
 
-    # -----------------------------------------------------
-    # Generate Patient ID
-    # -----------------------------------------------------
-    patient_code = generate_patient_id(db)
+        if selected_bed.get("ward_id") != ward_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected bed does not belong to selected ward."
+            )
 
-    # -----------------------------------------------------
-    # Generate unique QR token
-    # -----------------------------------------------------
+        if as_bool(selected_bed.get("is_occupied")):
+            raise HTTPException(
+                status_code=409,
+                detail="Selected bed is already occupied."
+            )
+    else:
+        ward_id = None
+        bed_id = None
+
+    # Ensure unique patient identifiers and QR tokens.
+    ensure_patient_indexes()
+
+    patient_code = generate_patient_id()
+
     qr_token = generate_patient_qr_token()
 
-    while (
-        db.scalar(
-            select(Patient).where(
-                Patient.qr_token == qr_token
-            )
-        )
-        is not None
+    while mongo_db.patients.find_one(
+        {"qr_token": qr_token},
+        {"_id": 1}
     ):
         qr_token = generate_patient_qr_token()
 
-    now = datetime.utcnow()
+    now = now_string()
 
-    # -----------------------------------------------------
-    # Create patient
-    # -----------------------------------------------------
-    patient = Patient(
-        patient_id=patient_code,
-        first_name=first_name,
-        last_name=last_name,
-        date_of_birth=date_of_birth,
-        gender=gender,
-        weight_kg=weight_kg,
-        ward_id=ward_id,
-        bed_id=bed_id,
-        is_active=True,
-        qr_token=qr_token,
-        qr_generated_at=now,
-        qr_is_active=True,
-    )
+    patient_number = next_numeric_id("patients")
+    encounter_number = next_numeric_id("encounters")
+    billing_number = next_numeric_id("patient_billing")
+
+    patient_doc = {
+        "_id": patient_number,
+        "id": patient_number,
+        "patient_id": patient_code,
+        "first_name": first_name,
+        "last_name": last_name,
+        "date_of_birth": dob,
+        "gender": gender,
+        "weight_kg": weight,
+        "mobile_number": mobile,
+        "email": email,
+        "address": address,
+        "emergency_contact_name": emergency_name,
+        "emergency_contact_number": emergency_number,
+        "emergency_contact_relationship": emergency_relationship,
+        "preferred_language": preferred_language,
+        "ward_id": ward_id,
+        "bed_id": bed_id,
+        "is_active": True,
+        "qr_token": qr_token,
+        "qr_generated_at": now,
+        "qr_is_active": True,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    encounter_doc = {
+        "_id": encounter_number,
+        "id": encounter_number,
+        "patient_id": patient_number,
+        "doctor_id": doctor_id,
+        "encounter_type": "INPATIENT" if is_admitted else "OPD",
+        "status": "ACTIVE",
+        "chief_complaint": chief_complaint,
+        "symptom_duration": symptom_duration,
+        "symptom_severity": symptom_severity,
+        "visit_notes": visit_notes,
+        "medical_history_notes": medical_history_notes,
+        "current_medication_notes": current_medication_notes,
+        "allergy_notes": allergy_notes,
+        "clinical_observations": clinical_observations,
+        "admitted_at": now if is_admitted else None,
+        "discharged_at": None,
+        "discharge_reason": None,
+        "discharged_by": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    billing_doc = {
+        "_id": billing_number,
+        "id": billing_number,
+        "patient_id": patient_number,
+        "bill_status": "PENDING",
+        "bill_amount": None,
+        "paid_at": None,
+        "paid_by": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    # Reserve the bed atomically to avoid double allocation.
+    bed_reserved = False
+
+    if selected_bed is not None:
+        reservation = mongo_db.beds.update_one(
+            {
+                "_id": bed_id,
+                "ward_id": ward_id,
+                "is_active": {"$in": [True, 1]},
+                "is_occupied": {"$in": [False, 0]},
+            },
+            {
+                "$set": {
+                    "is_occupied": True,
+                    "updated_at": now,
+                }
+            }
+        )
+
+        if reservation.modified_count != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Selected bed is no longer available."
+            )
+
+        bed_reserved = True
+
+    inserted = []
 
     try:
-        db.add(patient)
+        mongo_db.patients.insert_one(patient_doc)
+        inserted.append(("patients", patient_number))
 
-        # Flush so patient.id becomes available.
-        db.flush()
+        mongo_db.encounters.insert_one(encounter_doc)
+        inserted.append(("encounters", encounter_number))
 
-        # -------------------------------------------------
-        # Create initial encounter
-        # -------------------------------------------------
-        encounter = Encounter(
-            patient_id=patient.id,
-            doctor_id=doctor_id,
-            encounter_type=(
-                "INPATIENT"
-                if is_admitted
-                else "OPD"
-            ),
-            status="ACTIVE",
-            admitted_at=(
-                now
-                if is_admitted
-                else None
-            ),
-            created_at=now,
-            updated_at=now,
-        )
+        mongo_db.patient_billing.insert_one(billing_doc)
+        inserted.append(("patient_billing", billing_number))
 
-        db.add(encounter)
+    except Exception as exc:
+        # Compensating cleanup if a multi-document write fails.
+        for collection_name, record_id in reversed(inserted):
+            try:
+                mongo_db[collection_name].delete_one({
+                    "_id": record_id
+                })
+            except Exception:
+                pass
 
-        # -------------------------------------------------
-        # Create initial billing record
-        # -------------------------------------------------
-        billing = PatientBilling(
-            patient_id=patient.id,
-            bill_status="PENDING",
-            bill_amount=None,
-            created_at=now,
-            updated_at=now,
-        )
+        if bed_reserved:
+            try:
+                mongo_db.beds.update_one(
+                    {"_id": bed_id},
+                    {"$set": {
+                        "is_occupied": False,
+                        "updated_at": now,
+                    }}
+                )
+            except Exception:
+                pass
 
-        db.add(billing)
-
-        # -------------------------------------------------
-        # Occupy bed
-        # -------------------------------------------------
-        if selected_bed is not None:
-            selected_bed.is_occupied = True
-            selected_bed.updated_at = now
-
-        db.commit()
-
-        db.refresh(patient)
-        db.refresh(encounter)
-        db.refresh(billing)
-
-    except IntegrityError as exc:
-        db.rollback()
+        if isinstance(exc, DuplicateKeyError):
+            raise HTTPException(
+                status_code=409,
+                detail="A duplicate patient record was detected. Please retry."
+            ) from exc
 
         raise HTTPException(
-            status_code=409,
-            detail=(
-                "Patient could not be created because "
-                "a unique database value already exists."
-            ),
+            status_code=500,
+            detail="Patient registration failed. Check MongoDB and retry."
         ) from exc
 
     return {
         "message": "Patient registered successfully.",
-
-        "patient": {
-            "id": patient.id,
-            "patient_id": patient.patient_id,
-            "first_name": patient.first_name,
-            "last_name": patient.last_name,
-            "full_name": (
-                f"{patient.first_name} "
-                f"{patient.last_name}"
-            ).strip(),
-            "date_of_birth": patient.date_of_birth,
-            "gender": patient.gender,
-            "weight_kg": (
-                float(patient.weight_kg)
-                if patient.weight_kg is not None
-                else None
-            ),
-            "ward_id": patient.ward_id,
-            "bed_id": patient.bed_id,
-            "is_active": patient.is_active,
-            "qr_is_active": patient.qr_is_active,
-            "qr_generated_at": patient.qr_generated_at,
-        },
-
+        "patient": patient_to_dict(patient_doc),
         "encounter": {
-            "id": encounter.id,
-            "doctor_id": encounter.doctor_id,
-            "doctor_name": (
-                encounter.doctor.full_name
-                if encounter.doctor is not None
-                else doctor.full_name
-            ),
-            "encounter_type": encounter.encounter_type,
-            "status": encounter.status,
-            "admitted_at": encounter.admitted_at,
+            "id": encounter_number,
+            "doctor_id": doctor_id,
+            "doctor_name": doctor.get("full_name"),
+            "encounter_type": encounter_doc["encounter_type"],
+            "status": "ACTIVE",
+            "chief_complaint": chief_complaint,
+            "symptom_duration": symptom_duration,
+            "symptom_severity": symptom_severity,
+            "visit_notes": visit_notes,
+            "medical_history_notes": medical_history_notes,
+            "current_medication_notes": current_medication_notes,
+            "allergy_notes": allergy_notes,
+            "clinical_observations": clinical_observations,
+            "admitted_at": encounter_doc["admitted_at"],
         },
-
         "billing": {
-            "id": billing.id,
-            "bill_status": billing.bill_status,
-            "bill_amount": (
-                float(billing.bill_amount)
-                if billing.bill_amount is not None
-                else None
-            ),
+            "id": billing_number,
+            "bill_status": "PENDING",
+            "bill_amount": None,
         },
     }
 
 
-# =========================================================
+# =====================================================
 # REGENERATE PATIENT QR
-# =========================================================
+# =====================================================
 
-@router.post(
-    "/patients/{patient_id}/qr/regenerate"
-)
+@router.post("/patients/{patient_id}/qr/regenerate")
 def regenerate_patient_qr(
     patient_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("MANAGE_SYSTEM")
     ),
 ):
-    """
-    Generate a new QR token for an active patient.
-    """
+    ensure_patient_indexes()
 
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == patient_id
-        )
-    )
+    patient = mongo_db.patients.find_one({
+        "_id": patient_id
+    })
 
     if patient is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Patient not found.",
-        )
+        raise HTTPException(404, "Patient not found.")
 
-    # A discharged patient must never receive
-    # a newly activated QR code.
-    if not patient.is_active:
+    if not as_bool(patient.get("is_active")):
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Cannot regenerate QR for a "
-                "discharged patient."
-            ),
+            detail="Cannot regenerate QR for a discharged patient."
         )
 
-    qr_token = generate_patient_qr_token()
+    token = generate_patient_qr_token()
 
-    while (
-        db.scalar(
-            select(Patient).where(
-                Patient.qr_token == qr_token
-            )
-        )
-        is not None
+    while mongo_db.patients.find_one(
+        {"qr_token": token},
+        {"_id": 1}
     ):
-        qr_token = generate_patient_qr_token()
+        token = generate_patient_qr_token()
 
-    patient.qr_token = qr_token
-    patient.qr_generated_at = datetime.utcnow()
-    patient.qr_is_active = True
-    patient.updated_at = datetime.utcnow()
+    now = now_string()
 
-    db.commit()
-    db.refresh(patient)
+    mongo_db.patients.update_one(
+        {"_id": patient_id},
+        {
+            "$set": {
+                "qr_token": token,
+                "qr_generated_at": now,
+                "qr_is_active": True,
+                "updated_at": now,
+            }
+        }
+    )
 
     return {
-        "message": (
-            "Patient QR token regenerated successfully."
-        ),
-        "patient_id": patient.id,
-        "qr_generated_at": patient.qr_generated_at,
-        "qr_is_active": patient.qr_is_active,
+        "message": "Patient QR token regenerated successfully.",
+        "patient_id": patient_id,
+        "qr_generated_at": now,
+        "qr_is_active": True,
     }

@@ -196,6 +196,7 @@ export const getAdminPatientHistory =
 // WARD MANAGEMENT
 // =========================================================
 
+
 export async function getWards() {
   const response = await api.get(
     "/api/admin/wards",
@@ -203,6 +204,20 @@ export async function getWards() {
 
   return response.data
 }
+
+
+export async function getRegistrationWards() {
+  const response = await api.get("/api/hospital/wards")
+  return response.data
+}
+
+export async function getRegistrationWardBeds(wardId) {
+  const response = await api.get(
+    `/api/hospital/wards/${wardId}/beds`
+  )
+  return response.data
+}
+
 
 
 export async function createWard(
@@ -227,15 +242,15 @@ export async function createWard(
 // BED MANAGEMENT
 // =========================================================
 
-export async function getWardBeds(
-  wardId,
-) {
+
+export async function getWardBeds(wardId) {
   const response = await api.get(
     `/api/admin/wards/${wardId}/beds`,
   )
 
   return response.data
 }
+
 
 
 export async function createBed(

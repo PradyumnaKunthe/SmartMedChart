@@ -1,0 +1,42 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "name": "Doctor",
+    "description": "Can prescribe and manage patient medications.",
+    "created_at": "2026-08-25 14:16:15.128049",
+    "updated_at": "2026-08-25 14:16:15.128059"
+  },
+  {
+    "_id": 2,
+    "id": 2,
+    "name": "Nurse",
+    "description": "Can view medication tasks and record medication administration.",
+    "created_at": "2026-08-25 14:16:15.137459",
+    "updated_at": "2026-08-25 14:16:15.137468"
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "name": "Pharmacist",
+    "description": "Can perform relevant medicine and pharmacy activities.",
+    "created_at": "2026-08-25 14:16:15.147610",
+    "updated_at": "2026-08-25 14:16:15.147616"
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "name": "Administrator",
+    "description": "Can manage users, permissions, reports, and system settings.",
+    "created_at": "2026-08-25 14:16:15.155181",
+    "updated_at": "2026-08-25 14:16:15.155191"
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "name": "Receptionist",
+    "description": "Can view patient information and register patients for CareMatch.",
+    "created_at": "2026-10-24 16:10:28.560252",
+    "updated_at": "2026-10-24 16:10:28.560260"
+  }
+]

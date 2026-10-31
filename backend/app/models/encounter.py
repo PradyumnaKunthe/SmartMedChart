@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -34,6 +34,47 @@ class Encounter(Base):
         nullable=False,
         default="ACTIVE",
         index=True,
+    )
+        # Structured patient visit intake
+    chief_complaint: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    symptom_duration: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    symptom_severity: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
+
+    visit_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    medical_history_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    current_medication_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    allergy_notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # Optional structured observations
+    clinical_observations: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
     )
 
     admitted_at: Mapped[datetime | None] = mapped_column(

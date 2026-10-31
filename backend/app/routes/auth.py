@@ -1,10 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from app.security import get_current_user, require_permission, require_role
-from app.database import get_db
-from app.models import User
+
+from app.security import (
+    get_current_user,
+    require_permission,
+    require_role,
+)
+
 from app.schemas.auth import LoginRequest, TokenResponse
-from app.security import get_current_user, require_role
+
 from app.services.auth_service import (
     authenticate_user,
     create_user_access_token,
@@ -17,23 +20,10 @@ router = APIRouter(
 )
 
 
-@router.post(
-    "/login",
-    response_model=TokenResponse,
-)
-def login(
-    request: LoginRequest,
-    db: Session = Depends(get_db),
-):
-    """
-    Authenticate a user and return a JWT access token.
-
-    This endpoint must remain public because the user
-    does not have a token yet.
-    """
+@router.post("/login", response_model=TokenResponse)
+def login(request: LoginRequest):
 
     user = authenticate_user(
-        db=db,
         username=request.username,
         password=request.password,
     )
@@ -53,12 +43,7 @@ def login(
 
 
 @router.get("/me")
-def get_me(
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Return information about the currently authenticated user.
-    """
+def get_me(current_user=Depends(get_current_user)):
 
     return {
         "id": current_user.id,
@@ -67,9 +52,11 @@ def get_me(
         "role": current_user.role.name,
         "is_active": current_user.is_active,
     }
+
+
 @router.get("/nurse-test")
 def nurse_test(
-    current_user: User = Depends(require_role("Nurse")),
+    current_user=Depends(require_role("Nurse")),
 ):
     return {
         "message": "Nurse role access granted.",
@@ -77,9 +64,11 @@ def nurse_test(
         "username": current_user.username,
         "role": current_user.role.name,
     }
+
+
 @router.get("/medication-admin-test")
 def medication_admin_test(
-    current_user: User = Depends(
+    current_user=Depends(
         require_permission("ADMINISTER_MEDICATION")
     ),
 ):

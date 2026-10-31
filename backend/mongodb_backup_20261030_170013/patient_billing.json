@@ -1,0 +1,156 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "patient_id": 19,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-05 11:16:27.612704",
+    "paid_by": 12,
+    "created_at": "2026-09-05 11:15:14.663860",
+    "updated_at": "2026-09-05 11:16:27.614621"
+  },
+  {
+    "_id": 2,
+    "id": 2,
+    "patient_id": 2,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-05 11:26:56.209044",
+    "paid_by": 12,
+    "created_at": "2026-09-05 11:26:56.212647",
+    "updated_at": "2026-09-05 11:26:56.212662"
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "patient_id": 8,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-05 11:27:19.783361",
+    "paid_by": 12,
+    "created_at": "2026-09-05 11:27:19.786115",
+    "updated_at": "2026-09-05 11:27:19.786128"
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "patient_id": 10,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-05 11:33:25.556995",
+    "paid_by": 12,
+    "created_at": "2026-09-05 11:33:25.557727",
+    "updated_at": "2026-09-05 11:33:25.557738"
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "patient_id": 20,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-05 12:30:38.291892",
+    "updated_at": "2026-09-05 12:30:38.291892"
+  },
+  {
+    "_id": 6,
+    "id": 6,
+    "patient_id": 21,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-05 12:31:05.999773",
+    "updated_at": "2026-09-05 12:31:05.999773"
+  },
+  {
+    "_id": 7,
+    "id": 7,
+    "patient_id": 22,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-05 12:31:55.704395",
+    "updated_at": "2026-09-05 12:31:55.704395"
+  },
+  {
+    "_id": 8,
+    "id": 8,
+    "patient_id": 23,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-05 12:33:26.168548",
+    "updated_at": "2026-09-05 12:33:26.168548"
+  },
+  {
+    "_id": 9,
+    "id": 9,
+    "patient_id": 12,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-05 12:35:01.228522",
+    "paid_by": 12,
+    "created_at": "2026-09-05 12:35:01.232276",
+    "updated_at": "2026-09-05 12:35:01.232291"
+  },
+  {
+    "_id": 10,
+    "id": 10,
+    "patient_id": 11,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-05 12:35:40.800194",
+    "paid_by": 12,
+    "created_at": "2026-09-05 12:35:40.801243",
+    "updated_at": "2026-09-05 12:35:40.801255"
+  },
+  {
+    "_id": 11,
+    "id": 11,
+    "patient_id": 24,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-06 21:17:04.126431",
+    "updated_at": "2026-09-06 21:17:04.126431"
+  },
+  {
+    "_id": 12,
+    "id": 12,
+    "patient_id": 4,
+    "bill_status": "PAID",
+    "bill_amount": null,
+    "paid_at": "2026-09-06 21:36:45.657620",
+    "paid_by": 12,
+    "created_at": "2026-09-06 21:36:45.661690",
+    "updated_at": "2026-09-06 21:36:45.661700"
+  },
+  {
+    "_id": 13,
+    "id": 13,
+    "patient_id": 25,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-07 11:45:20.271550",
+    "updated_at": "2026-09-07 11:45:20.271550"
+  },
+  {
+    "_id": 14,
+    "id": 14,
+    "patient_id": 26,
+    "bill_status": "PENDING",
+    "bill_amount": null,
+    "paid_at": null,
+    "paid_by": null,
+    "created_at": "2026-09-08 04:55:02.784753",
+    "updated_at": "2026-09-08 04:55:02.784753"
+  }
+]

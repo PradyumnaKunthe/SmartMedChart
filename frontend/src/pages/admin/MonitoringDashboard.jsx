@@ -130,97 +130,91 @@ function StaffCard({
 // PATIENT LIST
 // =========================================================
 
-function PatientList({
-  person,
-  type,
-}) {
+
+function PatientList({ person, type }) {
   const [openPatient, setOpenPatient] = useState(null)
 
-  const patients = person?.patients || []
+  const patients = Array.isArray(person?.patients)
+    ? person.patients
+    : []
 
   return (
     <div className="mt-6">
+      <div className="mb-4">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+          Assigned Patients
+        </p>
 
-      <div className="mb-4 flex items-center justify-between">
-
-        <div>
-
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Assigned Patients
-          </p>
-
-          <h3 className="mt-1 text-lg font-bold text-slate-900">
-            {patients.length} patient
-            {patients.length === 1 ? "" : "s"}
-          </h3>
-
-        </div>
-
+        <h3 className="mt-1 text-lg font-bold text-slate-900">
+          {patients.length} patient
+          {patients.length === 1 ? "" : "s"}
+        </h3>
       </div>
 
       {patients.length === 0 ? (
-
         <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-
           <UserRound className="mx-auto h-8 w-8 text-slate-300" />
-
           <p className="mt-3 font-semibold text-slate-700">
             No active patients assigned
           </p>
-
           <p className="mt-1 text-sm text-slate-500">
             No current patient workload is recorded for this {type}.
           </p>
-
         </div>
-
       ) : (
-
         <div className="space-y-3">
+          {patients.map((patient, index) => {
+            // Support both current and older API field names.
+            const patientName =
+              patient.full_name ||
+              patient.patient_name ||
+              `${patient.first_name || ""} ${patient.last_name || ""}`.trim() ||
+              "Unnamed patient"
 
-          {patients.map((patient) => {
+            const patientCode =
+              patient.patient_id ||
+              patient.patient_code ||
+              "No patient ID"
 
-            const isOpen =
-              openPatient === patient.patient_id
+            const patientKey =
+              patient.assignment_id ??
+              patient.encounter_id ??
+              patient.id ??
+              patientCode ??
+              index
+
+            const patientDate =
+              patient.assigned_at ||
+              patient.admitted_at ||
+              patient.encounter_created_at ||
+              patient.created_at
+
+            const isOpen = openPatient === patientKey
 
             return (
               <div
-                key={
-                  patient.assignment_id ||
-                  patient.encounter_id ||
-                  patient.patient_id
-                }
+                key={patientKey}
                 className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
               >
-
                 <button
                   type="button"
                   onClick={() =>
-                    setOpenPatient(
-                      isOpen
-                        ? null
-                        : patient.patient_id,
-                    )
+                    setOpenPatient(isOpen ? null : patientKey)
                   }
                   className="flex w-full items-center gap-4 p-4 text-left"
                 >
-
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100">
-
                     <UserRound className="h-5 w-5 text-slate-600" />
-
                   </div>
 
                   <div className="min-w-0 flex-1">
-
                     <p className="font-bold text-slate-900">
-                      {patient.patient_name}
+                      {patientName}
                     </p>
 
                     <p className="mt-1 text-xs text-slate-500">
-                      {patient.patient_code}
+                      {patientCode}
                     </p>
-
                   </div>
 
                   {isOpen ? (
@@ -228,70 +222,47 @@ function PatientList({
                   ) : (
                     <ChevronDown className="h-5 w-5 text-slate-400" />
                   )}
-
                 </button>
 
                 {isOpen && (
-
                   <div className="grid gap-3 border-t border-slate-100 bg-slate-50 p-4 md:grid-cols-3">
-
                     <div className="rounded-xl bg-white p-3">
-
                       <p className="text-xs text-slate-400">
                         Patient ID
                       </p>
-
                       <p className="mt-1 font-semibold text-slate-900">
-                        {patient.patient_code}
+                        {patientCode}
                       </p>
-
                     </div>
 
                     <div className="rounded-xl bg-white p-3">
-
                       <p className="text-xs text-slate-400">
-                        {type === "nurse"
-                          ? "Assigned"
-                          : "Encounter"}
+                        {type === "nurse" ? "Assigned" : "Encounter"}
                       </p>
-
                       <p className="mt-1 font-semibold text-slate-900">
-                        {formatDate(
-                          patient.assigned_at ||
-                            patient.created_at,
-                        )}
+                        {formatDate(patientDate)}
                       </p>
-
                     </div>
 
                     <div className="rounded-xl bg-white p-3">
-
                       <p className="text-xs text-slate-400">
                         Type
                       </p>
-
                       <p className="mt-1 font-semibold text-slate-900">
-                        {patient.encounter_type ||
-                          "Patient"}
+                        {patient.encounter_type || "Patient"}
                       </p>
-
                     </div>
-
                   </div>
-
                 )}
-
               </div>
             )
           })}
-
         </div>
-
       )}
-
     </div>
   )
 }
+
 
 
 // =========================================================

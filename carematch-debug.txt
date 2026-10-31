@@ -1,0 +1,297 @@
+
+===== Lines 1-150 =====
+1: import { useEffect, useState } from "react";
+2: import MainLayout from "../../components/layout/MainLayout";
+3: import {
+4:   getCareMatchDoctors,
+5:   saveCareMatchDoctorProfile,
+6: } from "../../services/admin";
+7: 
+8: // These are common starting options.
+9: // Search lets an administrator add additional values when needed.
+10: 
+11: const QUALIFICATIONS = [
+12:   "MBBS", "MD", "MS", "DNB", "DM", "MCh",
+13:   "DNB Super Specialty", "BDS", "MDS", "BAMS",
+14:   "BHMS", "BUMS", "BNYS", "BPT", "MPT",
+15:   "PharmD", "MRCP", "FRCS", "Fellowship",
+16: ];
+17: 
+18: const SPECIALIZATIONS = [
+19:   "General Medicine", "Internal Medicine", "Family Medicine",
+20:   "Cardiology", "Cardiothoracic Surgery", "Neurology",
+21:   "Neurosurgery", "Orthopedics", "Rheumatology",
+22:   "Pediatrics", "Neonatology", "Obstetrics and Gynecology",
+23:   "Fertility and IVF", "Dermatology", "Psychiatry",
+24:   "Ophthalmology", "ENT", "Pulmonology",
+25:   "Respiratory Medicine", "Gastroenterology", "Hepatology",
+26:   "Nephrology", "Urology", "Endocrinology", "Diabetology",
+27:   "Medical Oncology", "Surgical Oncology", "Hematology",
+28:   "Infectious Diseases", "Emergency Medicine", "Critical Care",
+29:   "Anesthesiology", "Radiology", "Interventional Radiology",
+30:   "Pathology", "General Surgery", "Plastic Surgery",
+31:   "Vascular Surgery", "Pediatric Surgery", "Geriatrics",
+32:   "Palliative Medicine", "Pain Medicine",
+33:   "Physical Medicine and Rehabilitation",
+34:   "Allergy and Immunology", "Dentistry", "Oral Surgery",
+35:   "Ayurveda", "Homeopathy",
+36: ];
+37: 
+38: const EXPERTISE = [
+39:   "Fever", "Cough", "Cold", "Sore Throat",
+40:   "Headache", "Migraine", "Dizziness",
+41:   "Chest Pain", "Palpitations", "High Blood Pressure",
+42:   "Low Blood Pressure", "Diabetes", "Thyroid Disorders",
+43:   "Abdominal Pain", "Acidity", "Acid Reflux",
+44:   "Diarrhea", "Constipation", "Vomiting",
+45:   "Liver Disease", "Kidney Disease", "Urinary Tract Infection",
+46:   "Back Pain", "Neck Pain", "Joint Pain", "Arthritis",
+47:   "Fractures", "Sports Injuries", "Muscle Pain",
+48:   "Skin Rash", "Acne", "Hair Loss", "Eczema",
+49:   "Allergies", "Asthma", "Breathing Difficulty",
+50:   "Sinusitis", "Ear Pain", "Hearing Problems",
+51:   "Vision Problems", "Eye Infection",
+52:   "Pregnancy Care", "Menstrual Problems", "Infertility",
+53:   "Child Health", "Vaccination", "Growth and Development",
+54:   "Depression", "Anxiety", "Sleep Disorders",
+55:   "Seizures", "Stroke", "Memory Problems",
+56:   "Cancer Screening", "Cancer Care", "Wound Care",
+57:   "Obesity", "Nutrition", "Preventive Health",
+58:   "Routine Checkup", "Infection", "Postoperative Care",
+59:   "Dental Pain", "Gum Disease", "Oral Health",
+60: ];
+61: 
+62: const LANGUAGES = [
+63:   "English", "Hindi", "Marathi", "Bengali",
+64:   "Gujarati", "Tamil", "Telugu", "Kannada",
+65:   "Malayalam", "Punjabi", "Urdu", "Odia",
+66:   "Assamese", "Nepali", "Konkani", "Sanskrit",
+67:   "Manipuri", "Bodo", "Dogri", "Kashmiri",
+68:   "Maithili", "Santali", "Sindhi",
+69:   "Spanish", "French", "Arabic", "Portuguese",
+70:   "Chinese", "Russian", "Japanese",
+71: ];
+72: 
+73: const DAYS = [
+74:   "Monday", "Tuesday", "Wednesday", "Thursday",
+75:   "Friday", "Saturday", "Sunday",
+76: ];
+77: 
+78: const EMPTY_FORM = {
+79:   qualifications: [],
+80:   specializations: [],
+81:   experience_years: "0",
+82:   expertise_keywords: [],
+83:   languages: [],
+84:   consultation_fee: "",
+85:   available_days: [],
+86:   is_available: true,
+87: };
+88: 
+89: const inputClass =
+90:   "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100";
+91: 
+92: const labelClass = "block text-sm font-semibold text-slate-700";
+93: 
+94: function toList(value) {
+95:   if (Array.isArray(value)) {
+96:     return value;
+97:   }
+98: 
+99:   if (typeof value === "string" && value.trim()) {
+100:     return value.split(",").map((item) => item.trim()).filter(Boolean);
+101:   }
+102: 
+103:   return [];
+104: }
+105: 
+106: // Searchable dropdown with multiple selections and optional custom values.
+107: function MultiSelectDropdown({
+108:   id,
+109:   label,
+110:   placeholder,
+111:   options,
+112:   selectedValues,
+113:   onChange,
+114:   allowCustom = true,
+115: }) {
+116:   const [open, setOpen] = useState(false);
+117:   const [search, setSearch] = useState("");
+118: 
+119:   const filteredOptions = options.filter((option) =>
+120:     option.toLowerCase().includes(search.trim().toLowerCase()),
+121:   );
+122: 
+123:   const customValue = search.trim();
+124: 
+125:   const alreadyExists = selectedValues.some(
+126:     (item) => item.toLowerCase() === customValue.toLowerCase(),
+127:   );
+128: 
+129:   function toggleOption(option) {
+130:     const selected = selectedValues.some(
+131:       (item) => item.toLowerCase() === option.toLowerCase(),
+132:     );
+133: 
+134:     onChange(
+135:       selected
+136:         ? selectedValues.filter(
+137:             (item) => item.toLowerCase() !== option.toLowerCase(),
+138:           )
+139:         : [...selectedValues, option],
+140:     );
+141:   }
+142: 
+143:   function addCustomValue() {
+144:     if (!customValue || alreadyExists) {
+145:       return;
+146:     }
+147: 
+148:     onChange([...selectedValues, customValue]);
+149:     setSearch("");
+150:   }
+
+===== Lines 350-450 =====
+350: 
+351:   async function handleSubmit(event) {
+352:     event.preventDefault();
+353:     setError("");
+354:     setSuccess("");
+355: 
+356:     if (!selectedDoctorId) {
+357:       setError("Select a doctor first.");
+358:       return;
+359:     }
+360: 
+361:     const experience = Number(form.experience_years);
+362:     const fee =
+363:       form.consultation_fee.trim() === ""
+364:         ? null
+365:         : Number(form.consultation_fee);
+366: 
+367:     if (
+368:       !Number.isInteger(experience) ||
+369:       experience < 0 ||
+370:       experience > 80
+371:     ) {
+372:       setError("Experience must be a whole number from 0 to 80.");
+373:       return;
+374:     }
+375: 
+376:     if (fee !== null && (!Number.isFinite(fee) || fee < 0)) {
+377:       setError("Enter a valid consultation fee.");
+378:       return;
+379:     }
+380: 
+381:     const payload = {
+382:       // Backend currently expects qualifications as a string.
+383:       qualifications: form.qualifications.join(", "),
+384:       specializations: form.specializations,
+385:       experience_years: experience,
+386:       expertise_keywords: form.expertise_keywords,
+387:       languages: form.languages,
+388:       consultation_fee: fee,
+389:       available_days: form.available_days,
+390:       is_available: form.is_available,
+391:     };
+392: 
+393:     setSaving(true);
+394: 
+395:     try {
+396:       const response = await saveCareMatchDoctorProfile(
+397:         Number(selectedDoctorId),
+398:         payload,
+399:       );
+400: 
+401:       setDoctors((current) =>
+402:         current.map((doctor) =>
+403:           String(doctor.id) === selectedDoctorId
+404:             ? {
+405:                 ...doctor,
+406:                 profile: response.profile,
+407:                 profile_configured: true,
+408:               }
+409:             : doctor,
+410:         ),
+411:       );
+412: 
+413:       setForm(profileToForm({ profile: response.profile }));
+414: 
+415:       setSuccess(
+416:         `Doctor profile saved for ${selectedDoctor?.full_name || "the selected doctor"}.`,
+417:       );
+418:     } catch (requestError) {
+419:       setError(
+420:         requestError?.response?.data?.detail ||
+421:           "Could not save the profile. Check your permissions and MongoDB.",
+422:       );
+423:     } finally {
+424:       setSaving(false);
+425:     }
+426:   }
+427: 
+428:   return (
+429:     <MainLayout title="CareMatch Doctor Profiles">
+430:       <div className="mx-auto max-w-5xl space-y-6">
+431:         <header>
+432:           <p className="text-sm font-semibold text-cyan-700">
+433:             SMARTMEDCHART · CAREMATCH
+434:           </p>
+435: 
+436:           <h1 className="mt-1 text-3xl font-bold text-slate-900">
+437:             Doctor Profiles
+438:           </h1>
+439: 
+440:           <p className="mt-2 text-sm leading-6 text-slate-500">
+441:             Use standardized professional tags to help CareMatch compare
+442:             patient visit reasons with registered doctor expertise.
+443:           </p>
+444:         </header>
+445: 
+446:         {error && (
+447:           <div
+448:             role="alert"
+449:             className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+450:           >
+
+===== Lines 630-675 =====
+630:                   />
+631: 
+632:                   <span>
+633:                     <span className="block text-sm font-semibold text-slate-800">
+634:                       Available for CareMatch recommendations
+635:                     </span>
+636: 
+637:                     <span className="mt-1 block text-xs text-slate-500">
+638:                       This setting controls recommendations, not the doctor's
+639:                       login account.
+640:                     </span>
+641:                   </span>
+642:                 </label>
+643:               </div>
+644:             </div>
+645: 
+646:             <div className="flex flex-wrap justify-end gap-3 border-t border-slate-200 bg-slate-50 p-5">
+647:               <button
+648:                 type="button"
+649:                 disabled={saving}
+650:                 onClick={() => setForm(profileToForm(selectedDoctor))}
+651:                 className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+652:               >
+653:                 Reset changes
+654:               </button>
+655: 
+656:               <button
+657:                 type="submit"
+658:                 disabled={saving || !selectedDoctorId}
+659:                 className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
+660:               >
+661:                 {saving ? "Saving..." : "Save doctor profile"}
+662:               </button>
+663:             </div>
+664:           </form>
+665:         )}
+666:       </div>
+667:     </MainLayout>
+668:   );
+669: }

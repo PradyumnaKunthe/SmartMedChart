@@ -1,0 +1,82 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "nurse_id": 13,
+    "patient_id": 7,
+    "assigned_at": "2026-09-03 06:18:29.033911",
+    "is_active": 0
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "nurse_id": 14,
+    "patient_id": 10,
+    "assigned_at": "2026-09-03 06:39:15.224483",
+    "is_active": 0
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "nurse_id": 14,
+    "patient_id": 13,
+    "assigned_at": "2026-09-03 06:44:36.991190",
+    "is_active": 1
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "nurse_id": 14,
+    "patient_id": 14,
+    "assigned_at": "2026-09-03 07:49:03.530397",
+    "is_active": 1
+  },
+  {
+    "_id": 6,
+    "id": 6,
+    "nurse_id": 14,
+    "patient_id": 15,
+    "assigned_at": "2026-09-03 10:32:09.914613",
+    "is_active": 1
+  },
+  {
+    "_id": 7,
+    "id": 7,
+    "nurse_id": 14,
+    "patient_id": 16,
+    "assigned_at": "2026-09-03 10:59:19.532461",
+    "is_active": 1
+  },
+  {
+    "_id": 8,
+    "id": 8,
+    "nurse_id": 14,
+    "patient_id": 17,
+    "assigned_at": "2026-09-03 11:23:06.012247",
+    "is_active": 1
+  },
+  {
+    "_id": 9,
+    "id": 9,
+    "nurse_id": 14,
+    "patient_id": 18,
+    "assigned_at": "2026-09-03 11:33:12.034434",
+    "is_active": 1
+  },
+  {
+    "_id": 10,
+    "id": 10,
+    "nurse_id": 14,
+    "patient_id": 22,
+    "assigned_at": "2026-09-05 13:11:11.155844",
+    "is_active": 1
+  },
+  {
+    "_id": 11,
+    "id": 11,
+    "nurse_id": 14,
+    "patient_id": 26,
+    "assigned_at": "2026-09-08 05:04:49.760087",
+    "is_active": 1
+  }
+]

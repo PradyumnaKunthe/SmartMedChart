@@ -1,0 +1,151 @@
+                    checked={checked}
+                    onChange={() => toggleOption(option)}
+                    className="h-4 w-4 accent-cyan-700"
+                  />
+                  <span>{option}</span>
+                </label>
+              );
+            })}
+
+            {filteredOptions.length === 0 && (
+              <p className="p-3 text-sm text-slate-500">
+                No matching options found.
+              </p>
+            )}
+          </div>
+
+          {allowCustom && customValue && !alreadyExists && (
+            <button
+              type="button"
+              onClick={addCustomValue}
+              className="mt-2 w-full rounded-lg bg-cyan-50 px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-100"
+            >
+              + Add custom value: "{customValue}"
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setSearch("");
+            }}
+            className="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            Done
+          </button>
+        </div>
+      )}
+
+      {selectedValues.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {selectedValues.map((value) => (
+            <span
+              key={value}
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-900"
+            >
+              {value}
+
+              <button
+                type="button"
+                aria-label={`Remove ${value}`}
+                onClick={() => toggleOption(value)}
+                className="ml-1 font-bold hover:text-red-600"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="text-xs text-slate-500 underline"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function profileToForm(doctor) {
+  const profile = doctor?.profile || {};
+
+  return {
+    qualifications: toList(profile.qualifications),
+    specializations: toList(profile.specializations),
+    experience_years: String(profile.experience_years ?? 0),
+    expertise_keywords: toList(profile.expertise_keywords),
+    languages: toList(profile.languages),
+    consultation_fee:
+      profile.consultation_fee == null
+        ? ""
+        : String(profile.consultation_fee),
+    available_days: toList(profile.available_days),
+    is_available: profile.is_available ?? true,
+  };
+}
+
+export default function DoctorProfiles() {
+  const [doctors, setDoctors] = useState([]);
+  const [selectedDoctorId, setSelectedDoctorId] = useState("");
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  async function loadDoctors() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await getCareMatchDoctors();
+      const list = Array.isArray(response?.doctors)
+        ? response.doctors
+        : [];
+
+      setDoctors(list);
+
+      if (list.length) {
+        setSelectedDoctorId(String(list[0].id));
+        setForm(profileToForm(list[0]));
+      } else {
+        setSelectedDoctorId("");
+        setForm(EMPTY_FORM);
+      }
+    } catch (requestError) {
+      setError(
+        requestError?.response?.data?.detail ||
+          "Could not load doctors. Check your login and backend connection.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadDoctors();
+  }, []);
+
+  const selectedDoctor = doctors.find(
+    (doctor) => String(doctor.id) === selectedDoctorId,
+  );
+
+  function handleDoctorChange(event) {
+    const id = event.target.value;
+    const doctor = doctors.find((item) => String(item.id) === id);
+
+    setSelectedDoctorId(id);
+    setForm(profileToForm(doctor));
+    setSuccess("");
+    setError("");
+  }
+
+  function updateField(name, value) {
+    setForm((current) => ({ ...current, [name]: value }));
+    setSuccess("");
+  }
+

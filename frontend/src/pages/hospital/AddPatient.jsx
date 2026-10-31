@@ -17,10 +17,28 @@ import MainLayout from "../../components/layout/MainLayout"
 import api from "../../services/api"
 import {
   getHospitalDoctors,
-  getWardBeds,
-  getWards,
 } from "../../services/admin"
 
+
+const PROBLEM_CATEGORIES = [
+  "General Medicine",
+  "Cardiology",
+  "Dermatology",
+  "Orthopedics",
+  "Pediatrics",
+  "Gynecology",
+  "Neurology",
+  "ENT",
+  "Ophthalmology",
+  "Gastroenterology",
+  "Pulmonology",
+  "Endocrinology",
+  "Psychiatry",
+  "Urology",
+  "Nephrology",
+  "Dentistry",
+  "Other / not sure",
+]
 
 // =========================================================
 // MAIN
@@ -34,11 +52,40 @@ export default function AddPatient() {
   // =======================================================
 
   const [form, setForm] = useState({
+    // Basic information
     first_name: "",
     last_name: "",
     date_of_birth: "",
     gender: "",
     weight_kg: "",
+
+    // Contact information
+    mobile_number: "",
+    email: "",
+    address: "",
+    emergency_contact_name: "",
+    emergency_contact_number: "",
+    emergency_contact_relationship: "",
+    preferred_language: "",
+
+    // Visit information
+    problem_category: "",
+    chief_complaint: "",
+    symptom_duration: "",
+    symptom_severity: "",
+    visit_notes: "",
+    medical_history_notes: "",
+    current_medication_notes: "",
+    allergy_notes: "",
+
+    // Optional clinical observations
+    blood_pressure: "",
+    pulse: "",
+    temperature_c: "",
+    spo2_percent: "",
+    height_cm: "",
+
+    // Doctor and admission
     doctor_id: "",
     admit_patient: false,
     ward_id: "",
@@ -59,6 +106,10 @@ export default function AddPatient() {
 
   const [doctors, setDoctors] = useState([])
   const [doctorsLoading, setDoctorsLoading] = useState(false)
+  const [recommendedDoctors, setRecommendedDoctors] = useState([])
+  const [recommendationLoading, setRecommendationLoading] = useState(false)
+  const [recommendationMessage, setRecommendationMessage] = useState("")
+  const [recommendationError, setRecommendationError] = useState(false)
 
   // =======================================================
   // WARD / BED STATE
@@ -113,11 +164,11 @@ export default function AddPatient() {
     setWardsLoading(true)
 
     try {
-      const response = await getWards()
+      const response = await api.get("/api/hospital/wards")
 
       setWards(
-        Array.isArray(response?.wards)
-          ? response.wards
+        Array.isArray(response.data?.wards)
+          ? response.data.wards
           : [],
       )
 
@@ -150,11 +201,13 @@ export default function AddPatient() {
     setBedsLoading(true)
 
     try {
-      const response = await getWardBeds(wardId)
+      const response = await api.get(
+        `/api/hospital/wards/${wardId}/beds`,
+      )
 
       const availableBeds =
-        Array.isArray(response?.beds)
-          ? response.beds.filter(
+        Array.isArray(response.data?.beds)
+          ? response.data.beds.filter(
               (bed) =>
                 bed.is_active &&
                 !bed.is_occupied,
@@ -179,6 +232,89 @@ export default function AddPatient() {
     } finally {
       setBedsLoading(false)
     }
+  }
+
+  // =======================================================
+  // RECOMMEND DOCTORS FROM THE PATIENT'S REPORTED CONCERN
+  // =======================================================
+
+  async function recommendDoctors() {
+    const visitReason = [
+      form.problem_category,
+      form.chief_complaint.trim(),
+      form.symptom_duration.trim()
+        ? `Duration: ${form.symptom_duration.trim()}`
+        : "",
+      form.symptom_severity
+        ? `Reported severity: ${form.symptom_severity}`
+        : "",
+      form.visit_notes.trim(),
+    ]
+      .filter(Boolean)
+      .join(" | ")
+      .slice(0, 1500)
+
+    if (!visitReason) {
+      setRecommendedDoctors([])
+      setRecommendationError(true)
+      setRecommendationMessage(
+        "Select a main problem or enter the chief complaint before requesting doctor suggestions.",
+      )
+      return
+    }
+
+    setRecommendationLoading(true)
+    setRecommendationError(false)
+    setRecommendationMessage("")
+    setRecommendedDoctors([])
+
+    try {
+      const response = await api.post(
+        "/api/carematch/recommendations",
+        { visit_reason: visitReason },
+      )
+
+      const suggestions = Array.isArray(
+        response.data?.recommendations,
+      )
+        ? response.data.recommendations
+        : []
+
+      setRecommendedDoctors(suggestions)
+      setRecommendationMessage(
+        response.data?.message ||
+          (suggestions.length > 0
+            ? `${suggestions.length} available doctor suggestion(s) found.`
+            : "No available doctor profiles matched this request. Ask the administrator to configure doctor profiles."),
+      )
+      setRecommendationError(suggestions.length === 0)
+
+    } catch (requestError) {
+      console.error("Doctor recommendation error:", requestError)
+      setRecommendedDoctors([])
+      setRecommendationError(true)
+      setRecommendationMessage(
+        requestError?.response?.data?.detail ||
+          "Unable to retrieve doctor suggestions. Check your registration permission and try again.",
+      )
+
+    } finally {
+      setRecommendationLoading(false)
+    }
+  }
+
+  function chooseRecommendedDoctor(doctor) {
+    const doctorId = String(doctor.doctor_id)
+
+    setForm((current) => ({
+      ...current,
+      doctor_id: doctorId,
+    }))
+
+    setRecommendationError(false)
+    setRecommendationMessage(
+      `${doctor.full_name} selected as the attending doctor.`,
+    )
   }
 
   // =======================================================
@@ -211,6 +347,22 @@ export default function AddPatient() {
           ? checked
           : value,
     }))
+
+    if ([
+      "problem_category",
+      "chief_complaint",
+      "symptom_duration",
+      "symptom_severity",
+      "visit_notes",
+    ].includes(name)) {
+      setRecommendedDoctors([])
+      setRecommendationMessage("")
+      setRecommendationError(false)
+      setForm((current) => ({
+        ...current,
+        doctor_id: "",
+      }))
+    }
 
     // -----------------------------------------------------
     // Disable admission
@@ -316,6 +468,16 @@ export default function AddPatient() {
     setLoading(true)
 
     try {
+      const filteredObservations = Object.fromEntries(
+        Object.entries({
+          blood_pressure: form.blood_pressure.trim(),
+          pulse: form.pulse.trim(),
+          temperature_c: form.temperature_c.trim(),
+          spo2_percent: form.spo2_percent.trim(),
+          height_cm: form.height_cm.trim(),
+        }).filter(([, value]) => value !== ""),
+      )
+
       const payload = {
         first_name: form.first_name.trim(),
 
@@ -330,6 +492,38 @@ export default function AddPatient() {
         weight_kg:
           form.weight_kg
             ? Number(form.weight_kg)
+            : null,
+
+        // Contact information
+        mobile_number: form.mobile_number.trim() || null,
+        email: form.email.trim() || null,
+        address: form.address.trim() || null,
+        emergency_contact_name:
+          form.emergency_contact_name.trim() || null,
+        emergency_contact_number:
+          form.emergency_contact_number.trim() || null,
+        emergency_contact_relationship:
+          form.emergency_contact_relationship.trim() || null,
+        preferred_language:
+          form.preferred_language.trim() || null,
+
+        // Visit information
+        problem_category: form.problem_category || null,
+        chief_complaint:
+          form.chief_complaint.trim() || form.problem_category || null,
+        symptom_duration: form.symptom_duration.trim() || null,
+        symptom_severity: form.symptom_severity || null,
+        visit_notes: form.visit_notes.trim() || null,
+        medical_history_notes:
+          form.medical_history_notes.trim() || null,
+        current_medication_notes:
+          form.current_medication_notes.trim() || null,
+        allergy_notes: form.allergy_notes.trim() || null,
+
+        // Optional clinical observations
+        clinical_observations:
+          Object.keys(filteredObservations).length > 0
+            ? filteredObservations
             : null,
 
         doctor_id:
@@ -373,6 +567,26 @@ export default function AddPatient() {
         date_of_birth: "",
         gender: "",
         weight_kg: "",
+        mobile_number: "",
+        email: "",
+        address: "",
+        emergency_contact_name: "",
+        emergency_contact_number: "",
+        emergency_contact_relationship: "",
+        preferred_language: "",
+        problem_category: "",
+        chief_complaint: "",
+        symptom_duration: "",
+        symptom_severity: "",
+        visit_notes: "",
+        medical_history_notes: "",
+        current_medication_notes: "",
+        allergy_notes: "",
+        blood_pressure: "",
+        pulse: "",
+        temperature_c: "",
+        spo2_percent: "",
+        height_cm: "",
         doctor_id: "",
         admit_patient: false,
         ward_id: "",
@@ -380,6 +594,9 @@ export default function AddPatient() {
       })
 
       setBeds([])
+      setRecommendedDoctors([])
+      setRecommendationMessage("")
+      setRecommendationError(false)
 
     } catch (requestError) {
       console.error(
@@ -422,10 +639,27 @@ export default function AddPatient() {
   )
 
   // =======================================================
-  // SELECTED DOCTOR
+  // DOCTOR OPTIONS / SELECTED DOCTOR
   // =======================================================
 
-  const selectedDoctor = doctors.find(
+  const doctorOptions = [...doctors]
+
+  recommendedDoctors.forEach((recommendedDoctor) => {
+    const alreadyLoaded = doctorOptions.some(
+      (doctor) =>
+        String(doctor.id) === String(recommendedDoctor.doctor_id),
+    )
+
+    if (!alreadyLoaded) {
+      doctorOptions.push({
+        id: recommendedDoctor.doctor_id,
+        full_name: recommendedDoctor.full_name,
+        username: "Recommended doctor",
+      })
+    }
+  })
+
+  const selectedDoctor = doctorOptions.find(
     (doctor) =>
       String(doctor.id) ===
       String(form.doctor_id),
@@ -811,12 +1045,12 @@ export default function AddPatient() {
                     <option value="">
                       {doctorsLoading
                         ? "Loading registered doctors..."
-                        : doctors.length === 0
+                        : doctorOptions.length === 0
                           ? "No active doctors registered"
                           : "Select attending doctor"}
                     </option>
 
-                    {doctors.map(
+                    {doctorOptions.map(
                       (doctor) => (
                         <option
                           key={doctor.id}
@@ -860,6 +1094,532 @@ export default function AddPatient() {
 
               </div>
 
+            </section>
+
+            {/* =================================================
+                CONTACT INFORMATION
+            ================================================= */}
+
+            <section className="border-t border-slate-100 pt-8">
+
+              <div className="mb-4">
+                <h3 className="font-semibold text-slate-900">
+                  Contact Information
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Optional patient contact and emergency contact details.
+                </p>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
+
+                <div>
+                  <label htmlFor="mobile_number" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Mobile Number
+                  </label>
+                  <input
+                    id="mobile_number"
+                    name="mobile_number"
+                    type="tel"
+                    value={form.mobile_number}
+                    onChange={handleChange}
+                    maxLength={20}
+                    placeholder="Enter mobile number"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="email" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Email Address
+                  </label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    value={form.email}
+                    onChange={handleChange}
+                    maxLength={255}
+                    placeholder="patient@example.com"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label htmlFor="address" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Address
+                  </label>
+                  <textarea
+                    id="address"
+                    name="address"
+                    rows={2}
+                    value={form.address}
+                    onChange={handleChange}
+                    maxLength={1000}
+                    placeholder="Enter patient's residential address"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="emergency_contact_name" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Emergency Contact Name
+                  </label>
+                  <input
+                    id="emergency_contact_name"
+                    name="emergency_contact_name"
+                    value={form.emergency_contact_name}
+                    onChange={handleChange}
+                    maxLength={150}
+                    placeholder="Contact person's name"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="emergency_contact_number" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Emergency Contact Number
+                  </label>
+                  <input
+                    id="emergency_contact_number"
+                    name="emergency_contact_number"
+                    type="tel"
+                    value={form.emergency_contact_number}
+                    onChange={handleChange}
+                    maxLength={20}
+                    placeholder="Enter emergency contact number"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="emergency_contact_relationship" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Relationship to Patient
+                  </label>
+                  <input
+                    id="emergency_contact_relationship"
+                    name="emergency_contact_relationship"
+                    value={form.emergency_contact_relationship}
+                    onChange={handleChange}
+                    maxLength={80}
+                    placeholder="e.g. Parent, spouse, sibling"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="preferred_language" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Preferred Language
+                  </label>
+                  <input
+                    id="preferred_language"
+                    name="preferred_language"
+                    value={form.preferred_language}
+                    onChange={handleChange}
+                    maxLength={80}
+                    placeholder="e.g. Marathi, Hindi, English"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+              </div>
+            </section>
+
+            {/* =================================================
+                VISIT INFORMATION
+            ================================================= */}
+
+            <section className="border-t border-slate-100 pt-8">
+
+              <div className="mb-4">
+                <h3 className="font-semibold text-slate-900">
+                  Visit Information
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Optional reason for visit, symptoms, and medical history.
+                </p>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
+
+                <div>
+                  <label htmlFor="problem_category" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Main Problem / Department
+                  </label>
+                  <select
+                    id="problem_category"
+                    name="problem_category"
+                    value={form.problem_category}
+                    onChange={handleChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  >
+                    <option value="">Select a problem or department</option>
+                    {PROBLEM_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="symptom_duration" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Symptom Duration
+                  </label>
+                  <input
+                    id="symptom_duration"
+                    name="symptom_duration"
+                    value={form.symptom_duration}
+                    onChange={handleChange}
+                    maxLength={100}
+                    placeholder="e.g. 3 days, 2 weeks"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="symptom_severity" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Reported Symptom Severity
+                  </label>
+                  <select
+                    id="symptom_severity"
+                    name="symptom_severity"
+                    value={form.symptom_severity}
+                    onChange={handleChange}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  >
+                    <option value="">Not specified</option>
+                    <option value="Mild">Mild</option>
+                    <option value="Moderate">Moderate</option>
+                    <option value="Severe">Severe</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="chief_complaint" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Chief Complaint
+                  </label>
+                  <textarea
+                    id="chief_complaint"
+                    name="chief_complaint"
+                    rows={2}
+                    value={form.chief_complaint}
+                    onChange={handleChange}
+                    maxLength={1500}
+                    placeholder="Describe the main reason for this visit"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label htmlFor="visit_notes" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Visit Notes
+                  </label>
+                  <textarea
+                    id="visit_notes"
+                    name="visit_notes"
+                    rows={3}
+                    value={form.visit_notes}
+                    onChange={handleChange}
+                    maxLength={3000}
+                    placeholder="Add any relevant details shared by the patient"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="medical_history_notes" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Previous Medical History
+                  </label>
+                  <textarea
+                    id="medical_history_notes"
+                    name="medical_history_notes"
+                    rows={3}
+                    value={form.medical_history_notes}
+                    onChange={handleChange}
+                    maxLength={3000}
+                    placeholder="Previous conditions or relevant history (optional)"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="current_medication_notes" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Current Medications
+                  </label>
+                  <textarea
+                    id="current_medication_notes"
+                    name="current_medication_notes"
+                    rows={3}
+                    value={form.current_medication_notes}
+                    onChange={handleChange}
+                    maxLength={3000}
+                    placeholder="List medicines currently taken, if provided"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label htmlFor="allergy_notes" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Allergies
+                  </label>
+                  <textarea
+                    id="allergy_notes"
+                    name="allergy_notes"
+                    rows={2}
+                    value={form.allergy_notes}
+                    onChange={handleChange}
+                    maxLength={2000}
+                    placeholder="Known allergies or 'Not reported' (optional)"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+              </div>
+
+              {/* DOCTOR RECOMMENDATIONS */}
+              <div className="mt-6 rounded-2xl border border-cyan-200 bg-cyan-50/50 p-4 md:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-900">
+                      Doctor Recommendations
+                    </h4>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Find available doctors using the selected problem and the doctor's configured specialties and expertise.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={recommendDoctors}
+                    disabled={recommendationLoading || doctorsLoading}
+                    className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {recommendationLoading ? (
+                      <>
+                        <LoaderCircle className="h-4 w-4 animate-spin" />
+                        Finding doctors...
+                      </>
+                    ) : (
+                      <>
+                        <Stethoscope className="h-4 w-4" />
+                        Find Recommended Doctors
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {recommendationMessage && (
+                  <p
+                    role={recommendationError ? "alert" : "status"}
+                    className={`mt-3 rounded-xl p-3 text-sm ${
+                      recommendationError
+                        ? "border border-amber-200 bg-amber-50 text-amber-800"
+                        : "border border-emerald-200 bg-emerald-50 text-emerald-800"
+                    }`}
+                  >
+                    {recommendationMessage}
+                  </p>
+                )}
+
+                {recommendedDoctors.length > 0 && (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {recommendedDoctors.map((doctor) => {
+                      const isSelected =
+                        String(form.doctor_id) === String(doctor.doctor_id)
+                      const specializations = Array.isArray(doctor.specializations)
+                        ? doctor.specializations
+                        : []
+                      const languages = Array.isArray(doctor.languages)
+                        ? doctor.languages
+                        : []
+                      const matchReasons = Array.isArray(doctor.match_reasons)
+                        ? doctor.match_reasons
+                        : []
+
+                      return (
+                        <article
+                          key={doctor.doctor_id}
+                          className={`rounded-xl border p-4 ${
+                            isSelected
+                              ? "border-cyan-400 bg-white ring-2 ring-cyan-100"
+                              : "border-slate-200 bg-white"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h5 className="font-semibold text-slate-900">
+                                {doctor.full_name}
+                              </h5>
+                              {doctor.qualifications && (
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {doctor.qualifications}
+                                </p>
+                              )}
+                            </div>
+                            <span className="shrink-0 rounded-full bg-cyan-100 px-2.5 py-1 text-xs font-bold text-cyan-800">
+                              {Number(doctor.match_score) || 0}% keyword match
+                            </span>
+                          </div>
+
+                          <div className="mt-3 space-y-1 text-sm text-slate-600">
+                            <p>
+                              <span className="font-semibold text-slate-700">Specialties: </span>
+                              {specializations.length > 0
+                                ? specializations.join(", ")
+                                : "Not listed"}
+                            </p>
+                            {Number(doctor.experience_years) > 0 && (
+                              <p>
+                                <span className="font-semibold text-slate-700">Experience: </span>
+                                {doctor.experience_years} years
+                              </p>
+                            )}
+                            {languages.length > 0 && (
+                              <p>
+                                <span className="font-semibold text-slate-700">Languages: </span>
+                                {languages.join(", ")}
+                              </p>
+                            )}
+                          </div>
+
+                          {matchReasons.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-1.5">
+                              {matchReasons.map((reason, index) => (
+                                <span
+                                  key={`${doctor.doctor_id}-${index}`}
+                                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"
+                                >
+                                  {reason}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => chooseRecommendedDoctor(doctor)}
+                            className={`mt-4 w-full rounded-lg px-3 py-2.5 text-sm font-semibold transition ${
+                              isSelected
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-cyan-700 text-white hover:bg-cyan-800"
+                            }`}
+                          >
+                            {isSelected ? "Selected Attending Doctor" : "Choose This Doctor"}
+                          </button>
+                        </article>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <p className="mt-3 text-xs leading-5 text-slate-500">
+                  Recommendations are based on profile keyword overlap. The match percentage is not a diagnosis or a measure of clinical suitability. Confirm the appropriate doctor before registration.
+                </p>
+              </div>
+            </section>
+
+            {/* =================================================
+                OPTIONAL CLINICAL OBSERVATIONS
+            ================================================= */}
+
+            <section className="border-t border-slate-100 pt-8">
+
+              <div className="mb-4">
+                <h3 className="font-semibold text-slate-900">
+                  Clinical Observations (Optional)
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Enter measurements only when they are available. These fields are not required for registration.
+                </p>
+              </div>
+
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+
+                <div>
+                  <label htmlFor="blood_pressure" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Blood Pressure
+                  </label>
+                  <input
+                    id="blood_pressure"
+                    name="blood_pressure"
+                    value={form.blood_pressure}
+                    onChange={handleChange}
+                    maxLength={30}
+                    placeholder="e.g. 120/80 mmHg"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="pulse" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Pulse (bpm)
+                  </label>
+                  <input
+                    id="pulse"
+                    name="pulse"
+                    type="number"
+                    min="0"
+                    max="300"
+                    value={form.pulse}
+                    onChange={handleChange}
+                    placeholder="e.g. 72"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="temperature_c" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Temperature (°C)
+                  </label>
+                  <input
+                    id="temperature_c"
+                    name="temperature_c"
+                    type="number"
+                    min="25"
+                    max="45"
+                    step="0.1"
+                    value={form.temperature_c}
+                    onChange={handleChange}
+                    placeholder="e.g. 36.8"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="spo2_percent" className="mb-2 block text-sm font-semibold text-slate-700">
+                    SpO₂ (%)
+                  </label>
+                  <input
+                    id="spo2_percent"
+                    name="spo2_percent"
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={form.spo2_percent}
+                    onChange={handleChange}
+                    placeholder="e.g. 98"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="height_cm" className="mb-2 block text-sm font-semibold text-slate-700">
+                    Height (cm)
+                  </label>
+                  <input
+                    id="height_cm"
+                    name="height_cm"
+                    type="number"
+                    min="1"
+                    max="300"
+                    step="0.1"
+                    value={form.height_cm}
+                    onChange={handleChange}
+                    placeholder="e.g. 170"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </div>
+
+              </div>
             </section>
 
             {/* =================================================

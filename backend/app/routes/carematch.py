@@ -302,6 +302,9 @@ def recommend_doctors(
             status_code=400,
             detail="Visit reason is too long.",
         )
+        preferred_language = str(
+        request.get("preferred_language") or ""
+    ).strip().casefold()
 
     # Find active doctor accounts in the existing SQL database.
     doctors = db.scalars(
@@ -386,6 +389,23 @@ def recommend_doctors(
                 for item in expertise.split(",")
                 if item.strip()
             ]
+                    # Match the patient's preferred language.
+        languages = profile.get("languages", [])
+
+        if isinstance(languages, str):
+            languages = [
+                item.strip()
+                for item in languages.split(",")
+                if item.strip()
+            ]
+
+        language_match = bool(
+            preferred_language
+            and any(
+                preferred_language == str(language).strip().casefold()
+                for language in languages
+            )
+        )
 
         profile_terms = (
             specializations + expertise
@@ -438,9 +458,8 @@ def recommend_doctors(
             ),
             "specializations": specializations,
             "expertise_keywords": expertise,
-            "languages": profile.get(
-                "languages", []
-            ),
+            "languages": languages,
+            "language_match": language_match,
             "experience_years": profile.get(
                 "experience_years", 0
             ),
@@ -454,10 +473,10 @@ def recommend_doctors(
     recommendations.sort(
         key=lambda item: (
             -item["match_score"],
+            -int(item["language_match"]),
             item["full_name"].casefold(),
         )
     )
-
     return {
         "count": len(recommendations),
         "recommendations": recommendations,

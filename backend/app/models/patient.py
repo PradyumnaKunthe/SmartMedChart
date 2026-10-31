@@ -1,10 +1,17 @@
 from datetime import date, datetime
-from sqlalchemy import Boolean, DateTime, String
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from datetime import datetime
-from app.database import Base
 
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
 
 class Patient(Base):
     __tablename__ = "patients"
@@ -40,6 +47,42 @@ class Patient(Base):
 
     weight_kg: Mapped[float | None] = mapped_column(
         Numeric(6, 2),
+        nullable=True,
+    )
+        # Patient contact information
+    mobile_number: Mapped[str | None] = mapped_column(
+        String(25),
+        nullable=True,
+    )
+
+    email: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    address: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # Emergency contact
+    emergency_contact_name: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+
+    emergency_contact_number: Mapped[str | None] = mapped_column(
+        String(25),
+        nullable=True,
+    )
+
+    emergency_contact_relationship: Mapped[str | None] = mapped_column(
+        String(60),
+        nullable=True,
+    )
+
+    preferred_language: Mapped[str | None] = mapped_column(
+        String(60),
         nullable=True,
     )
 

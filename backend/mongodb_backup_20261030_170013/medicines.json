@@ -1,0 +1,62 @@
+[
+  {
+    "_id": 1,
+    "id": 1,
+    "name": "Test Paracetamol",
+    "generic_name": "Paracetamol",
+    "strength": "500 mg",
+    "dosage_form": "Tablet",
+    "description": "Test medicine for scheduling workflow",
+    "is_active": 1,
+    "created_at": "2026-08-25 16:11:54.927433",
+    "updated_at": "2026-08-26 12:28:12.192869"
+  },
+  {
+    "_id": 2,
+    "id": 2,
+    "name": "Test Medicine Administration",
+    "generic_name": "Test Generic",
+    "strength": "500 mg",
+    "dosage_form": "Tablet",
+    "description": "Test medicine for administration workflow",
+    "is_active": 1,
+    "created_at": "2026-08-25 16:26:24.404750",
+    "updated_at": "2026-08-25 16:26:24.404757"
+  },
+  {
+    "_id": 3,
+    "id": 3,
+    "name": "Status Test Medicine",
+    "generic_name": "Test Generic",
+    "strength": "500 mg",
+    "dosage_form": "Tablet",
+    "description": null,
+    "is_active": 1,
+    "created_at": "2026-08-25 16:28:15.485307",
+    "updated_at": "2026-08-25 16:28:15.485313"
+  },
+  {
+    "_id": 4,
+    "id": 4,
+    "name": "Duplicate Test Medicine",
+    "generic_name": null,
+    "strength": "500 mg",
+    "dosage_form": "Tablet",
+    "description": null,
+    "is_active": 1,
+    "created_at": "2026-08-25 16:29:46.835001",
+    "updated_at": "2026-08-25 16:29:46.835013"
+  },
+  {
+    "_id": 5,
+    "id": 5,
+    "name": "Duplicate Test Medicine 25ccde81",
+    "generic_name": null,
+    "strength": "500 mg",
+    "dosage_form": "Tablet",
+    "description": null,
+    "is_active": 1,
+    "created_at": "2026-08-25 16:34:48.979183",
+    "updated_at": "2026-08-25 16:34:48.979188"
+  }
+]

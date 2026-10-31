@@ -1,0 +1,13 @@
+[
+  {
+    "_id": 9,
+    "id": 9,
+    "medication_schedule_id": 1,
+    "administered_by": 4,
+    "status": "GIVEN",
+    "administered_at": "2026-08-25 08:07:00.000000",
+    "notes": "Medication administered successfully.",
+    "created_at": "2026-08-25 16:48:49.220687",
+    "updated_at": "2026-08-25 16:48:49.220699"
+  }
+]
