@@ -25,8 +25,14 @@ export function isTokenExpired(token) {
   }
 }
 
+// Environment-driven base URL configuration:
+// - In Production (Vercel): points to deployed Render backend (e.g. https://smartmedchart-backend.onrender.com)
+// - In Local Development: empty string fallback utilizes Vite local proxy (/api -> http://127.0.0.1:8000)
+const rawBaseURL = import.meta.env.VITE_API_BASE_URL || ""
+const apiBaseURL = typeof rawBaseURL === "string" ? rawBaseURL.trim().replace(/\/+$/, "") : ""
+
 const api = axios.create({
-  baseURL: "",
+  baseURL: apiBaseURL,
   headers: {
     "Content-Type": "application/json",
   },

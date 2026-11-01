@@ -1,0 +1,68 @@
+# ==============================================================================
+# SmartMedChart Render Blueprint Specification
+# Manual Setup: Render Dashboard -> New -> Web Service / Blueprint
+# Documentation: https://render.com/docs/blueprint-spec
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # SmartMedChart FastAPI Backend Web Service
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: smartmedchart-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    region: oregon
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /readyz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: smartmedchart_production
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: ENABLE_EMBEDDED_SCHEDULER
+        value: "true"
+      - key: NOTIFICATION_POLL_INTERVAL
+        value: "15"
+
+  # ----------------------------------------------------------------------------
+  # Dedicated Medication Reminder Background Worker (Optional / Paid Tier)
+  # NOTE: On the Render Free tier, keep ENABLE_EMBEDDED_SCHEDULER="true" on the
+  # web service above to run notifications inside the web process at $0 cost.
+  # If scaling to multiple web instances, uncomment this worker and set
+  # ENABLE_EMBEDDED_SCHEDULER="false" on the web service.
+  # ----------------------------------------------------------------------------
+  # - type: worker
+  #   name: smartmedchart-worker
+  #   runtime: python
+  #   rootDir: backend
+  #   plan: starter
+  #   region: oregon
+  #   buildCommand: pip install --no-cache-dir -r requirements.txt
+  #   startCommand: python worker.py
+  #   envVars:
+  #     - key: PYTHON_VERSION
+  #       value: 3.11.9
+  #     - key: MONGODB_URI
+  #       sync: false
+  #     - key: MONGODB_DATABASE
+  #       value: smartmedchart_production
+  #     - key: ENVIRONMENT
+  #       value: production
+  #     - key: NOTIFICATION_POLL_INTERVAL
+  #       value: "15"
+

@@ -1,12 +1,16 @@
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
-# Load the backend/.env file
+# Load environment variables (from backend/.env or system environment)
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
-load_dotenv(ENV_FILE)
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE)
+else:
+    load_dotenv()
 
 MONGODB_URI = os.getenv(
     "MONGODB_URI",
@@ -18,13 +22,34 @@ MONGODB_DATABASE = os.getenv(
     "smartmedchart",
 )
 
-# Create the MongoDB client
+
+def mask_mongo_uri(uri: str) -> str:
+    """Mask user credentials in MongoDB connection string for safe logging."""
+    if not uri:
+        return ""
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:****@", uri)
+
+
+# Warn if running in production mode with a localhost connection string
+is_production = (
+    os.getenv("ENVIRONMENT", "").lower() in ("production", "prod")
+    or bool(os.getenv("RENDER"))
+)
+if is_production and ("localhost" in MONGODB_URI or "127.0.0.1" in MONGODB_URI):
+    import warnings
+
+    warnings.warn(
+        "MONGODB_URI is configured with a localhost address in a production environment. "
+        "Please provide a MongoDB Atlas connection string."
+    )
+
+# Create the MongoDB client (supports local MongoDB and MongoDB Atlas SRV)
 mongo_client = MongoClient(
     MONGODB_URI,
     serverSelectionTimeoutMS=5000,
 )
 
-# Select the SmartMedChart database
+# Select the configured database
 mongo_db = mongo_client[MONGODB_DATABASE]
 
 
@@ -57,4 +82,4 @@ def get_next_sequence_value(collection_name: str) -> int:
 
 
 # Alias for convenience
-next_mongo_id = get_next_sequence_value
+next_mongo_id = get_next_sequence_value

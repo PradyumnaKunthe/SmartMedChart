@@ -22,7 +22,7 @@ export default function QRCodeScanner({ onScanSuccess }) {
   const [selectedCameraId, setSelectedCameraId] = useState("")
 
   // =======================================================
-  // STOP SCANNER
+  // STOP SCANNER & RELEASE MEDIA TRACKS (IOS SAFARI SAFE)
   // =======================================================
   const stopScanner = useCallback(async () => {
     const scanner = scannerRef.current
@@ -42,6 +42,28 @@ export default function QRCodeScanner({ onScanSuccess }) {
       // Ignore clear errors
     }
 
+    // Explicitly release any open camera stream tracks on iOS Safari / WebKit
+    try {
+      const el = document.getElementById("smartmedchart-qr-reader")
+      if (el) {
+        const videoElements = el.querySelectorAll("video")
+        videoElements.forEach((video) => {
+          if (video.srcObject && typeof video.srcObject.getTracks === "function") {
+            video.srcObject.getTracks().forEach((track) => {
+              try {
+                track.stop()
+              } catch {
+                // Ignore individual track stop error
+              }
+            })
+            video.srcObject = null
+          }
+        })
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+
     scanningRef.current = false
     scannerRef.current = null
   }, [])
@@ -57,14 +79,14 @@ export default function QRCodeScanner({ onScanSuccess }) {
       setError("")
       scanHandledRef.current = false
 
-      // Check browser environment support
+      // Check browser environment support (requires HTTPS or localhost)
       if (
         typeof window === "undefined" ||
         !navigator?.mediaDevices?.getUserMedia
       ) {
         setStatus("error")
         setError(
-          "Camera access is not supported by your browser environment or requires a secure HTTPS/localhost connection.",
+          "Camera access is not supported by your browser environment or requires a secure HTTPS connection. Please ensure you are browsing via HTTPS.",
         )
         return
       }
@@ -102,6 +124,23 @@ export default function QRCodeScanner({ onScanSuccess }) {
           setError("Scanner viewport element not mounted.")
         }
         return
+      }
+
+      // Ensure inline playback on iPhone Safari (prevents fullscreen video takeover)
+      try {
+        const observer = new MutationObserver(() => {
+          const video = el.querySelector("video")
+          if (video) {
+            video.setAttribute("playsinline", "true")
+            video.setAttribute("webkit-playsinline", "true")
+            video.setAttribute("autoplay", "true")
+            video.muted = true
+          }
+        })
+        observer.observe(el, { childList: true, subtree: true })
+        window.setTimeout(() => observer.disconnect(), 4000)
+      } catch {
+        // Observer not supported
       }
 
       const scanner = new Html5Qrcode(elementId)
@@ -180,15 +219,15 @@ export default function QRCodeScanner({ onScanSuccess }) {
           msg.includes("notallowed")
         ) {
           setError(
-            "Camera permission was denied. Please allow camera access in your browser settings (click the lock/camera icon in the address bar) and retry.",
+            "Camera permission was denied. On iPhone Safari, tap the 'aA' or lock icon in the address bar -> Website Settings -> set Camera to 'Allow', then refresh and retry.",
           )
         } else if (msg.includes("notfound") || msg.includes("device")) {
           setError(
-            "No active camera was detected on this device. Please connect a webcam or use a mobile device.",
+            "No active camera was detected on this device. Please connect a camera or use manual QR token input.",
           )
         } else if (msg.includes("readable") || msg.includes("could not start")) {
           setError(
-            "The camera is currently in use by another application or video call. Close other apps and retry.",
+            "The camera is currently in use by another application. Close other camera apps and retry.",
           )
         } else {
           setError(
