@@ -256,10 +256,10 @@ def run_tests():
         )
         try:
             doctor_routes.create_prescription(rx_dup_bed, current_user=doctor_user)
-            assert False, "Double bed allocation should have raised HTTPException 400"
+            assert False, "Double bed allocation should have raised HTTPException 409 or 400"
         except HTTPException as exc:
-            assert exc.status_code == 400
-            print("PASS: Double bed allocation blocked with HTTP 400:", exc.detail)
+            assert exc.status_code in (400, 409)
+            print("PASS: Double bed allocation blocked with HTTP", exc.status_code, ":", exc.detail)
 
     # ---------------------------------------------------------
     # TEST 8: Add Allergy & Safety Engine Alert

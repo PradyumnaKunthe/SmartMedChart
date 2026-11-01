@@ -1,7 +1,7 @@
-import { getWards, getWardBeds } from "../../services/admin"
 import React, { useEffect, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   Building2,
@@ -13,6 +13,7 @@ import {
   Info,
   Pill,
   Plus,
+  RefreshCw,
   Save,
   ShieldAlert,
   ShieldCheck,
@@ -34,6 +35,8 @@ import {
   getDoctorMedicines,
   getDoctorPatient,
   getDoctorPatients,
+  getDoctorWards,
+  getDoctorWardBeds,
   getPatientAllergies,
   updatePatientAllergy,
 } from "../../services/doctor"
@@ -168,10 +171,14 @@ export default function CreatePrescription() {
   // Admission & Bed Allocation state
   const [admitNeeded, setAdmitNeeded] = useState("NO")
   const [wards, setWards] = useState([])
+  const [loadingWards, setLoadingWards] = useState(false)
+  const [wardError, setWardError] = useState("")
   const [selectedWard, setSelectedWard] = useState("")
   const [selectedBed, setSelectedBed] = useState("")
   const [availableBeds, setAvailableBeds] = useState([])
   const [loadingBeds, setLoadingBeds] = useState(false)
+  const [bedApiError, setBedApiError] = useState("")
+  const [isAuthError, setIsAuthError] = useState(false)
 
   // Allergy modal state
   const [allergyModalOpen, setAllergyModalOpen] = useState(false)
@@ -187,31 +194,58 @@ export default function CreatePrescription() {
   })
 
   async function loadWardsData() {
+    setLoadingWards(true)
+    setWardError("")
     try {
-      const res = await getWards()
+      const res = await getDoctorWards()
       const wardList = Array.isArray(res) ? res : res?.wards || []
       setWards(wardList)
+      if (wardList.length === 0) {
+        setWardError("No active hospital wards found in the database.")
+      }
+      return wardList
     } catch (err) {
       console.error("Failed to load wards", err)
+      setWardError(err?.response?.data?.detail || "Unable to load hospital wards. Please check connection.")
+      return []
+    } finally {
+      setLoadingWards(false)
     }
   }
 
-  async function handleWardChange(wardId) {
+  async function handleWardChange(wardId, currentPatient = patient) {
     setSelectedWard(wardId)
     setSelectedBed("")
     setAvailableBeds([])
+    setBedApiError("")
+    setIsAuthError(false)
     if (!wardId) return
 
     setLoadingBeds(true)
     try {
-      const res = await getWardBeds(wardId)
+      const activePid = currentPatient?.id || selectedPatientId || patientId
+      const res = await getDoctorWardBeds(wardId, activePid)
       const bedList = Array.isArray(res) ? res : res?.beds || []
       const avail = bedList.filter(
-        (b) => !b.is_occupied || b.id === patient?.bed_id || b.occupied_by_patient_id === patient?.id
+        (b) =>
+          b.is_available ||
+          !b.is_occupied ||
+          String(b.id) === String(currentPatient?.bed_id) ||
+          String(b.occupied_by_patient_id) === String(currentPatient?.id)
       )
       setAvailableBeds(avail)
     } catch (err) {
       console.error("Failed to load beds for ward", err)
+      const isAuth =
+        err?.response?.status === 401 ||
+        String(err?.response?.data?.detail || "").toLowerCase().includes("token") ||
+        String(err?.response?.data?.detail || "").toLowerCase().includes("expired")
+      setIsAuthError(Boolean(isAuth))
+      setBedApiError(
+        isAuth
+          ? "Invalid or expired access token. Please sign in again."
+          : err?.response?.data?.detail || "Unable to load beds for the selected ward."
+      )
     } finally {
       setLoadingBeds(false)
     }
@@ -225,20 +259,31 @@ export default function CreatePrescription() {
       try {
         const activePid = selectedPatientId || patientId
         const medPromise = getDoctorMedicines()
+        const wardsPromise = loadWardsData()
 
         if (activePid) {
           const [patientData, medicineData, allergyData] = await Promise.all([
             getDoctorPatient(activePid),
             medPromise,
             getPatientAllergies(activePid),
+            wardsPromise,
           ])
           setPatient(patientData)
           setMedicinesCatalogue(Array.isArray(medicineData) ? medicineData : [])
           setAllergies(Array.isArray(allergyData) ? allergyData : [])
+
+          if (patientData?.ward_id) {
+            setSelectedWard(String(patientData.ward_id))
+            if (patientData?.bed_id) {
+              setSelectedBed(String(patientData.bed_id))
+            }
+            handleWardChange(patientData.ward_id, patientData)
+          }
         } else {
           const [patientList, medicineData] = await Promise.all([
             getDoctorPatients(),
             medPromise,
+            wardsPromise,
           ])
           const list = Array.isArray(patientList) ? patientList : []
           setAssignedPatients(list)
@@ -252,6 +297,13 @@ export default function CreatePrescription() {
             ])
             setPatient(pData)
             setAllergies(Array.isArray(aData) ? aData : [])
+            if (pData?.ward_id) {
+              setSelectedWard(String(pData.ward_id))
+              if (pData?.bed_id) {
+                setSelectedBed(String(pData.bed_id))
+              }
+              handleWardChange(pData.ward_id, pData)
+            }
           }
         }
       } catch (requestError) {
@@ -510,6 +562,20 @@ export default function CreatePrescription() {
       }
     }
 
+    // Validate Inpatient Admission & Bed Allocation
+    if (admitNeeded === "YES") {
+      if (!selectedWard) {
+        setError("Please select a hospital ward for inpatient admission.")
+        setSubmitting(false)
+        return
+      }
+      if (!selectedBed) {
+        setError("Please select an unoccupied bed for inpatient admission.")
+        setSubmitting(false)
+        return
+      }
+    }
+
     try {
       const formattedItems = medicines.map((m) => ({
         medicine_id: Number(m.medicine_id),
@@ -546,6 +612,24 @@ export default function CreatePrescription() {
 
       const result = await createPrescription(payload)
       setSuccess(result)
+
+      // Synchronize local patient state & refresh bed availability if bed was assigned
+      if (result?.bed_assignment) {
+        setPatient((prev) =>
+          prev
+            ? {
+                ...prev,
+                ward_id: result.bed_assignment.ward_id,
+                bed_id: result.bed_assignment.bed_id,
+                is_admitted: true,
+              }
+            : prev
+        )
+        // Refresh beds for this ward to reflect updated occupancy
+        if (selectedWard) {
+          handleWardChange(selectedWard)
+        }
+      }
     } catch (requestError) {
       setError(formatApiError(requestError, "Unable to create prescription."))
     } finally {
@@ -649,6 +733,25 @@ export default function CreatePrescription() {
               </div>
             )}
 
+            {success.bed_assignment && (
+              <div className="max-w-xl mx-auto p-4 bg-white/80 border border-indigo-200/80 rounded-2xl text-left flex items-center justify-between shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-indigo-950 uppercase">
+                      Inpatient Admission & Bed Allocation Confirmed
+                    </div>
+                    <div className="text-xs text-slate-600 font-medium mt-0.5">
+                      Ward: <strong className="text-slate-900 uppercase">{success.bed_assignment.ward_name}</strong> · Bed Number: <strong className="text-indigo-700 font-bold">#{success.bed_assignment.bed_number}</strong>
+                    </div>
+                  </div>
+                </div>
+                <Badge variant="success" size="sm">BED ALLOCATED</Badge>
+              </div>
+            )}
+
             <div className="flex items-center justify-center gap-3 pt-2">
               <Button
                 variant="primary"
@@ -665,6 +768,10 @@ export default function CreatePrescription() {
                   setSuccess(null)
                   setMedicines([createDefaultMedicineEntry(1)])
                   setPrescriptionNotes("")
+                  setAdmitNeeded("NO")
+                  setSelectedWard("")
+                  setSelectedBed("")
+                  setAvailableBeds([])
                 }}
               >
                 Write Another Order
@@ -1278,7 +1385,7 @@ export default function CreatePrescription() {
             <Card>
               <CardHeader
                 title="INPATIENT ADMISSION & BED ASSIGNMENT"
-                subtitle="Assign or verify hospital ward and unoccupied bed for this patient during care order"
+                subtitle="Assign hospital ward and unoccupied bed for this patient during care order"
               />
               <div className="p-6 space-y-5">
                 <div>
@@ -1329,41 +1436,94 @@ export default function CreatePrescription() {
 
                 {admitNeeded === "YES" && (
                   <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 animate-fade-in">
+                    {/* Ward Error Alert */}
+                    {wardError && (
+                      <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                          <span>{wardError}</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          icon={RefreshCw}
+                          onClick={loadWardsData}
+                        >
+                          Retry
+                        </Button>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Ward Selection */}
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                          HOSPITAL WARD <span className="text-rose-500">*</span>
-                        </label>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                            HOSPITAL WARD <span className="text-rose-500">*</span>
+                          </label>
+                          {loadingWards && (
+                            <span className="text-[11px] font-bold text-sky-600 flex items-center gap-1">
+                              <RefreshCw className="w-3 h-3 animate-spin" /> LOADING...
+                            </span>
+                          )}
+                        </div>
                         <select
                           value={selectedWard}
                           onChange={(e) => handleWardChange(e.target.value)}
+                          disabled={loadingWards}
                           required={admitNeeded === "YES"}
-                          className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 disabled:opacity-50"
                         >
-                          <option value="">-- SELECT HOSPITAL WARD --</option>
-                          {wards.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name?.toUpperCase()} {w.code ? `(${w.code})` : ""}
-                            </option>
-                          ))}
+                          <option value="">
+                            {loadingWards
+                              ? "LOADING HOSPITAL WARDS..."
+                              : wards.length === 0
+                              ? "-- NO WARDS CONFIGURED --"
+                              : "-- SELECT HOSPITAL WARD --"}
+                          </option>
+                          {wards.map((w) => {
+                            const availCount = w.available_beds ?? (w.total_beds - (w.occupied_beds || 0))
+                            return (
+                              <option key={w.id} value={w.id}>
+                                {w.name?.toUpperCase()} {w.code ? `(${w.code})` : ""} — {availCount} Beds Available / {w.total_beds} Total
+                              </option>
+                            )
+                          })}
                         </select>
                       </div>
 
                       {/* Bed Selection */}
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                          UNOCCUPIED BED <span className="text-rose-500">*</span>
-                        </label>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                            UNOCCUPIED BED <span className="text-rose-500">*</span>
+                          </label>
+                          {loadingBeds && (
+                            <span className="text-[11px] font-bold text-sky-600 flex items-center gap-1">
+                              <RefreshCw className="w-3 h-3 animate-spin" /> LOADING BEDS...
+                            </span>
+                          )}
+                        </div>
                         <select
                           value={selectedBed}
                           onChange={(e) => setSelectedBed(e.target.value)}
-                          disabled={!selectedWard || loadingBeds}
+                          disabled={!selectedWard || loadingBeds || loadingWards}
                           required={admitNeeded === "YES"}
                           className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 disabled:opacity-50"
                         >
                           <option value="">
-                            {loadingBeds ? "LOADING AVAILABLE BEDS..." : "-- SELECT UNOCCUPIED BED --"}
+                            {loadingBeds
+                              ? "LOADING AVAILABLE BEDS..."
+                              : !selectedWard
+                              ? "-- SELECT HOSPITAL WARD FIRST --"
+                              : isAuthError
+                              ? "-- SESSION EXPIRED (LOGIN REQUIRED) --"
+                              : bedApiError
+                              ? "-- ERROR LOADING BEDS (CLICK RETRY) --"
+                              : availableBeds.length === 0
+                              ? "-- NO AVAILABLE BEDS IN THIS WARD --"
+                              : "-- SELECT UNOCCUPIED BED --"}
                           </option>
                           {availableBeds.map((b) => (
                             <option key={b.id} value={b.id}>
@@ -1371,13 +1531,72 @@ export default function CreatePrescription() {
                             </option>
                           ))}
                         </select>
-                        {selectedWard && !loadingBeds && availableBeds.length === 0 && (
-                          <p className="mt-1.5 text-xs text-rose-600 font-semibold">
-                            No unoccupied beds available in this ward. Please select another ward.
-                          </p>
+
+                        {/* Genuinely empty ward with 0 beds available (No error) */}
+                        {selectedWard && !loadingBeds && !bedApiError && availableBeds.length === 0 && (
+                          <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>NO AVAILABLE BEDS IN THIS WARD. PLEASE SELECT ANOTHER WARD.</span>
+                          </div>
+                        )}
+
+                        {/* Session Expired / Authentication Failure */}
+                        {isAuthError && (
+                          <div className="mt-2 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                              <div>
+                                <span className="font-bold uppercase tracking-wider block">SESSION EXPIRED / AUTHENTICATION REQUIRED</span>
+                                <span className="text-rose-700">{bedApiError}</span>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="primary"
+                              size="sm"
+                              onClick={() => {
+                                localStorage.removeItem("smartmedchart_token")
+                                localStorage.removeItem("smartmedchart_user")
+                                window.location.href = "/login"
+                              }}
+                              className="shrink-0 font-bold uppercase tracking-wider"
+                            >
+                              Sign In Again
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* General API / Network Error */}
+                        {!isAuthError && bedApiError && (
+                          <div className="mt-2 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                              <span>{bedApiError}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleWardChange(selectedWard)}
+                              className="text-sky-700 hover:text-sky-900 font-bold flex items-center gap-1 shrink-0 uppercase tracking-wider text-[11px]"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" /> Retry
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
+
+                    {/* Selection Review Banner */}
+                    {selectedWard && selectedBed && (
+                      <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs text-indigo-950 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <span>
+                            Selected Allocation: <strong>{wards.find((w) => String(w.id) === String(selectedWard))?.name?.toUpperCase()}</strong> · Bed <strong>#{availableBeds.find((b) => String(b.id) === String(selectedBed))?.bed_number || selectedBed}</strong>
+                          </span>
+                        </div>
+                        <Badge variant="primary" size="sm">READY TO ASSIGN</Badge>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

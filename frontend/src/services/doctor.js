@@ -212,3 +212,21 @@ export async function getDoctorPatientAssessments(patientId) {
   const response = await api.get(`/api/doctor/patients/${patientId}/assessments`)
   return response.data
 }
+
+// ======================================================
+// HOSPITAL WARDS & BEDS FOR INPATIENT ADMISSION
+// ======================================================
+
+export async function getDoctorWards() {
+  const response = await api.get("/api/doctor/wards")
+  return response.data
+}
+
+export async function getDoctorWardBeds(wardId, patientId = null) {
+  const params = {}
+  if (patientId) {
+    params.patient_id = patientId
+  }
+  const response = await api.get(`/api/doctor/wards/${wardId}/beds`, { params })
+  return response.data
+}

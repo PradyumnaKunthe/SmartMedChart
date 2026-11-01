@@ -843,6 +843,7 @@ def create_hospital_patient(
         "ward_id": ward_id,
         "bed_id": bed_id,
         "is_active": True,
+        "lifecycle_status": "ACTIVE",
         "qr_token": qr_token,
         "qr_generated_at": now,
         "qr_is_active": True,

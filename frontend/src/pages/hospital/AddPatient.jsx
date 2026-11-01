@@ -4,8 +4,6 @@ import {
   Activity,
   AlertCircle,
   ArrowLeft,
-  BedDouble,
-  Building2,
   Calendar,
   Check,
   CheckCircle2,
@@ -80,11 +78,8 @@ export default function AddPatient() {
     symptom_duration: "",
     symptom_severity: "MODERATE",
 
-    // Doctor & Admission
+    // Attending Doctor Assignment (Bed assignment handled solely by Doctor)
     doctor_id: "",
-    admit_patient: false,
-    ward_id: "",
-    bed_id: "",
 
     // Additional Information (Collapsible)
     address: "",
@@ -121,12 +116,6 @@ export default function AddPatient() {
   const [recommendationMessage, setRecommendationMessage] = useState("")
   const [recommendationError, setRecommendationError] = useState(false)
 
-  // Ward / Bed state
-  const [wards, setWards] = useState([])
-  const [beds, setBeds] = useState([])
-  const [wardsLoading, setWardsLoading] = useState(false)
-  const [bedsLoading, setBedsLoading] = useState(false)
-
   // Ref to track last recommended search query to prevent duplicate requests
   const lastQueryRef = useRef("")
 
@@ -146,7 +135,7 @@ export default function AddPatient() {
       } else if (field === "mobile_number" || field === "emergency_contact_number") {
         // Phone numbers
         value = rawValue.replace(/[^\d+ -]/g, "").slice(0, 20)
-      } else if (field !== "doctor_id" && field !== "ward_id" && field !== "bed_id") {
+      } else if (field !== "doctor_id") {
         // Automatically uppercase all human-readable inputs
         value = rawValue.toUpperCase()
       }
@@ -160,7 +149,7 @@ export default function AddPatient() {
   }
 
   // =======================================================
-  // LOAD DOCTORS & WARDS
+  // LOAD DOCTORS (Bed assignment handled solely by Doctor)
   // =======================================================
   async function loadDoctors() {
     setDoctorsLoading(true)
@@ -176,52 +165,9 @@ export default function AddPatient() {
     }
   }
 
-  async function loadWards() {
-    setWardsLoading(true)
-    try {
-      const response = await api.get("/api/hospital/wards")
-      setWards(Array.isArray(response.data?.wards) ? response.data.wards : [])
-    } catch (err) {
-      console.error("Load wards error:", err)
-      setWards([])
-    } finally {
-      setWardsLoading(false)
-    }
-  }
-
-  async function loadBeds(wardId) {
-    if (!wardId) {
-      setBeds([])
-      return
-    }
-
-    setBedsLoading(true)
-    try {
-      const response = await api.get(`/api/hospital/wards/${wardId}/beds`)
-      const availableBeds = Array.isArray(response.data?.beds)
-        ? response.data.beds.filter((bed) => bed.is_active && !bed.is_occupied)
-        : []
-      setBeds(availableBeds)
-    } catch (err) {
-      console.error("Load beds error:", err)
-      setBeds([])
-    } finally {
-      setBedsLoading(false)
-    }
-  }
-
   useEffect(() => {
     loadDoctors()
-    loadWards()
   }, [])
-
-  useEffect(() => {
-    if (form.ward_id) {
-      loadBeds(form.ward_id)
-    } else {
-      setBeds([])
-    }
-  }, [form.ward_id])
 
   // =======================================================
   // CAREMATCH AUTOMATIC RECOMMENDATIONS
@@ -369,17 +315,6 @@ export default function AddPatient() {
       return
     }
 
-    if (form.admit_patient) {
-      if (!form.ward_id) {
-        setError("PLEASE SELECT A WARD FOR INPATIENT ADMISSION.")
-        return
-      }
-      if (!form.bed_id) {
-        setError("PLEASE SELECT AN AVAILABLE BED FOR INPATIENT ADMISSION.")
-        return
-      }
-    }
-
     setLoading(true)
 
     try {
@@ -428,9 +363,9 @@ export default function AddPatient() {
         allergy_notes: form.allergy_notes.trim() || null,
         clinical_observations: Object.keys(observations).length > 0 ? observations : null,
         doctor_id: Number(form.doctor_id),
-        is_admitted: Boolean(form.admit_patient),
-        ward_id: form.admit_patient && form.ward_id ? Number(form.ward_id) : null,
-        bed_id: form.admit_patient && form.bed_id ? Number(form.bed_id) : null,
+        is_admitted: false,
+        ward_id: null,
+        bed_id: null,
       }
 
       const response = await api.post("/api/hospital/patients", payload)
@@ -449,9 +384,6 @@ export default function AddPatient() {
         symptom_duration: "",
         symptom_severity: "MODERATE",
         doctor_id: "",
-        admit_patient: false,
-        ward_id: "",
-        bed_id: "",
         address: "",
         email: "",
         emergency_contact_name: "",
@@ -506,9 +438,6 @@ export default function AddPatient() {
   const selectedDoctorObj = allDoctorOptions.find(
     (d) => String(d.id || d._id) === String(form.doctor_id)
   )
-
-  const selectedWardObj = wards.find((w) => String(w.id || w._id) === String(form.ward_id))
-  const selectedBedObj = beds.find((b) => String(b.id || b._id) === String(form.bed_id))
 
   // =======================================================
   // RENDER
@@ -1233,152 +1162,6 @@ export default function AddPatient() {
                   </p>
                 )}
               </div>
-            </div>
-          </Card>
-
-          {/* STEP 4: ADMISSION TYPE (OUTPATIENT VS INPATIENT) */}
-          <Card>
-            <CardHeader
-              title="4. HOSPITAL ADMISSION & BED ALLOCATION"
-              subtitle="CHOOSE OUTPATIENT OPD OR ALLOCATE INPATIENT WARD AND BED"
-            />
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  ADMISSION TYPE <span className="text-rose-500">*</span>
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm((prev) => ({
-                        ...prev,
-                        admit_patient: false,
-                        ward_id: "",
-                        bed_id: "",
-                      }))
-                    }
-                    className={`p-4 rounded-2xl border text-left transition flex items-center gap-3 ${
-                      !form.admit_patient
-                        ? "bg-sky-50/70 border-sky-500 ring-2 ring-sky-500/20 text-sky-950 shadow-xs"
-                        : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    <div
-                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
-                        !form.admit_patient ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-600"
-                      }`}
-                    >
-                      <User className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-black uppercase">OUTPATIENT (OPD)</div>
-                      <div className="text-[11px] text-slate-500 uppercase">DAY CONSULTATION ONLY</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm((prev) => ({
-                        ...prev,
-                        admit_patient: true,
-                      }))
-                    }
-                    className={`p-4 rounded-2xl border text-left transition flex items-center gap-3 ${
-                      form.admit_patient
-                        ? "bg-indigo-50/70 border-indigo-500 ring-2 ring-indigo-500/20 text-indigo-950 shadow-xs"
-                        : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    <div
-                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
-                        form.admit_patient ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"
-                      }`}
-                    >
-                      <BedDouble className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-black uppercase">INPATIENT (IPD)</div>
-                      <div className="text-[11px] text-slate-500 uppercase">BED ALLOCATION REQUIRED</div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              {/* Inpatient Ward & Bed Selection */}
-              {form.admit_patient && (
-                <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-100 space-y-4 pt-3">
-                  <div className="flex items-center gap-2 text-xs font-bold text-indigo-950 uppercase">
-                    <Building2 className="w-4 h-4 text-indigo-600" />
-                    <span>INPATIENT BED ALLOCATION DETAILS</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Ward Dropdown */}
-                    <div>
-                      <label
-                        htmlFor="ward_select"
-                        className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
-                      >
-                        SELECT WARD <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        id="ward_select"
-                        required={form.admit_patient}
-                        value={form.ward_id}
-                        onChange={(e) => {
-                          handleFieldChange("ward_id", e.target.value)
-                          handleFieldChange("bed_id", "")
-                        }}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                      >
-                        <option value="" disabled className="text-slate-400">
-                          {wardsLoading ? "LOADING WARDS..." : "SELECT WARD"}
-                        </option>
-                        {wards.map((ward) => (
-                          <option key={ward.id} value={ward.id} className="uppercase font-bold">
-                            {ward.name} ({ward.code})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Bed Dropdown */}
-                    <div>
-                      <label
-                        htmlFor="bed_select"
-                        className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
-                      >
-                        SELECT AVAILABLE BED <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        id="bed_select"
-                        required={form.admit_patient}
-                        disabled={!form.ward_id || bedsLoading}
-                        value={form.bed_id}
-                        onChange={(e) => handleFieldChange("bed_id", e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 font-bold uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:opacity-50"
-                      >
-                        <option value="" disabled className="text-slate-400">
-                          {bedsLoading
-                            ? "LOADING AVAILABLE BEDS..."
-                            : !form.ward_id
-                            ? "SELECT WARD FIRST"
-                            : beds.length === 0
-                            ? "NO UNOCCUPIED BEDS AVAILABLE"
-                            : "SELECT BED"}
-                        </option>
-                        {beds.map((bed) => (
-                          <option key={bed.id} value={bed.id} className="uppercase font-bold">
-                            BED {bed.bed_number}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           </Card>
 

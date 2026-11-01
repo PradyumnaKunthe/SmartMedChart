@@ -913,50 +913,109 @@ def create_prescription(
 
         # Handle inpatient admission & bed allocation if requested
         bed_info = None
-        if getattr(request, "admit_patient", False) and request.ward_id and request.bed_id:
-            ward = mongo_db.wards.find_one({"_id": request.ward_id, "is_active": active_filter()})
+        admit_patient_requested = getattr(request, "admit_patient", False)
+        if admit_patient_requested:
+            if not request.ward_id or not request.bed_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Hospital ward and unoccupied bed selection are required for inpatient admission.",
+                )
+
+            # 1. Prevent assigning beds to discharged or inactive patients
+            if not mongo_bool(patient.get("is_active")) or patient.get("lifecycle_status") == "DISCHARGED":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot assign a hospital bed to a discharged or inactive patient.",
+                )
+
+            req_ward_id = int(request.ward_id)
+            req_bed_id = int(request.bed_id)
+
+            # 2. Validate ward exists and is active
+            ward = mongo_db.wards.find_one({
+                "$or": [{"_id": req_ward_id}, {"id": req_ward_id}, {"_id": str(req_ward_id)}, {"id": str(req_ward_id)}],
+                "is_active": active_filter(),
+            })
             if not ward:
-                raise HTTPException(404, "Selected ward not found or inactive.")
-            bed = mongo_db.beds.find_one({"_id": request.bed_id, "ward_id": request.ward_id, "is_active": active_filter()})
+                raise HTTPException(status_code=404, detail="Selected hospital ward not found or inactive.")
+
+            # 3. Validate bed exists, belongs to ward, and is active
+            bed = mongo_db.beds.find_one({
+                "$or": [{"_id": req_bed_id}, {"id": req_bed_id}, {"_id": str(req_bed_id)}, {"id": str(req_bed_id)}],
+                "$and": [{"$or": [{"ward_id": req_ward_id}, {"ward_id": str(req_ward_id)}]}],
+                "is_active": active_filter(),
+            })
             if not bed:
-                raise HTTPException(404, "Selected bed not found or inactive.")
-            
-            # Check for double allocation
-            occupant = bed.get("occupied_by_patient_id")
-            if mongo_bool(bed.get("is_occupied")) and occupant not in (None, patient["id"]):
-                raise HTTPException(400, "Selected bed is already occupied by another patient.")
-            
-            # Release previous bed if patient was assigned elsewhere
-            if patient.get("bed_id") and patient.get("bed_id") != request.bed_id:
+                raise HTTPException(status_code=404, detail="Selected bed not found or does not belong to the selected ward.")
+
+            actual_bed_id = bed.get("_id") if bed.get("_id") is not None else req_bed_id
+            patient_id_int = int(patient.get("id") or patient.get("_id"))
+
+            # 4. Atomic bed allocation with safe concurrency control:
+            # Bed must be either unoccupied OR already assigned to THIS patient
+            allocation_res = mongo_db.beds.update_one(
+                {
+                    "_id": actual_bed_id,
+                    "is_active": active_filter(),
+                    "$or": [
+                        {"is_occupied": {"$in": [False, 0]}},
+                        {"occupied_by_patient_id": patient_id_int},
+                    ],
+                },
+                {
+                    "$set": {
+                        "is_occupied": 1,
+                        "occupied_by_patient_id": patient_id_int,
+                        "updated_at": now,
+                    }
+                },
+            )
+            if allocation_res.matched_count == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Selected bed is already occupied by another patient.",
+                )
+
+            # 5. Release previous bed if patient was assigned elsewhere
+            prev_bed_id = patient.get("bed_id")
+            if prev_bed_id and int(prev_bed_id) != req_bed_id:
                 mongo_db.beds.update_one(
-                    {"_id": patient["bed_id"]},
+                    {"$or": [{"_id": int(prev_bed_id)}, {"id": int(prev_bed_id)}, {"_id": str(prev_bed_id)}]},
                     {"$set": {"is_occupied": 0, "occupied_by_patient_id": None, "updated_at": now}}
                 )
 
-            # Assign new bed
-            mongo_db.beds.update_one(
-                {"_id": request.bed_id},
-                {"$set": {"is_occupied": 1, "occupied_by_patient_id": patient["id"], "updated_at": now}}
-            )
-
-            # Update patient record
+            # 6. Update patient record
             mongo_db.patients.update_one(
-                {"_id": patient["id"]},
-                {"$set": {
-                    "ward_id": request.ward_id,
-                    "bed_id": request.bed_id,
-                    "is_admitted": True,
-                    "admission_date": now,
-                    "updated_at": now
-                }}
+                {"_id": patient_id_int},
+                {
+                    "$set": {
+                        "ward_id": req_ward_id,
+                        "bed_id": req_bed_id,
+                        "is_admitted": True,
+                        "admission_date": patient.get("admission_date") or now,
+                        "updated_at": now,
+                    }
+                },
             )
 
-            # Update active encounter
+            # 7. Update active encounter
             mongo_db.encounters.update_many(
-                {"patient_id": patient["id"], "status": "ACTIVE"},
-                {"$set": {"ward_id": request.ward_id, "bed_id": request.bed_id, "updated_at": now}}
+                {"patient_id": patient_id_int, "status": "ACTIVE"},
+                {
+                    "$set": {
+                        "ward_id": req_ward_id,
+                        "bed_id": req_bed_id,
+                        "encounter_type": "INPATIENT",
+                        "updated_at": now,
+                    }
+                },
             )
-            bed_info = {"ward_id": request.ward_id, "bed_id": request.bed_id, "ward_name": ward.get("name"), "bed_number": bed.get("bed_number")}
+            bed_info = {
+                "ward_id": req_ward_id,
+                "bed_id": req_bed_id,
+                "ward_name": ward.get("name"),
+                "bed_number": bed.get("bed_number"),
+            }
 
     except HTTPException:
         if created_schedule_ids:
@@ -1604,3 +1663,139 @@ def get_patient_round_assessments(
         })
 
     return results
+
+
+# =========================================================
+# HOSPITAL WARDS & BEDS FOR INPATIENT ADMISSION
+# =========================================================
+
+def _natural_bed_key(text):
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', str(text))]
+
+
+@router.get("/wards")
+def get_doctor_wards(
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    List all active hospital wards with real-time bed occupancy stats
+    for doctor inpatient admission and bed allocation.
+    """
+    wards = list(
+        mongo_db.wards.find({
+            "is_active": active_filter(),
+        }).sort("name", 1)
+    )
+
+    result = []
+    for ward in wards:
+        ward_id = ward.get("id") if ward.get("id") is not None else ward.get("_id")
+        bed_query = {
+            "$or": [{"ward_id": ward_id}, {"ward_id": str(ward_id)}],
+            "is_active": active_filter(),
+        }
+        total = mongo_db.beds.count_documents(bed_query)
+        occupied = mongo_db.beds.count_documents({
+            **bed_query,
+            "is_occupied": active_filter(),
+        })
+
+        result.append({
+            "id": ward_id,
+            "_id": ward_id,
+            "name": ward.get("name"),
+            "code": ward.get("code"),
+            "description": ward.get("description"),
+            "total_beds": total,
+            "occupied_beds": occupied,
+            "available_beds": max(0, total - occupied),
+        })
+
+    return {
+        "count": len(result),
+        "wards": result,
+    }
+
+
+@router.get("/wards/{ward_id}/beds")
+def get_doctor_ward_beds(
+    ward_id: int,
+    patient_id: Any = Query(None, description="Optional patient ID to include current bed"),
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    List beds for a specific ward.
+    Returns genuinely available/unoccupied beds. If patient_id is provided,
+    includes the bed currently assigned to this patient.
+    """
+    ward = mongo_db.wards.find_one({
+        "$or": [
+            {"_id": ward_id},
+            {"id": ward_id},
+            {"_id": str(ward_id)},
+            {"id": str(ward_id)},
+        ],
+        "is_active": active_filter(),
+    })
+    if not ward:
+        raise HTTPException(status_code=404, detail="Selected hospital ward not found or inactive.")
+
+    beds = list(
+        mongo_db.beds.find({
+            "$or": [{"ward_id": ward_id}, {"ward_id": str(ward_id)}],
+            "is_active": active_filter(),
+        })
+    )
+
+    # Natural sorting for bed numbers (e.g. IC-1, IC-2, IC-10, Bed 1, Bed 2)
+    beds.sort(key=lambda b: _natural_bed_key(b.get("bed_number", "")))
+
+    parsed_pid = None
+    if patient_id is not None and str(patient_id).strip().lower() not in ("", "null", "undefined", "none"):
+        try:
+            parsed_pid = int(patient_id)
+        except (ValueError, TypeError):
+            parsed_pid = str(patient_id).strip()
+
+    bed_list = []
+    for bed in beds:
+        b_id = bed.get("id") if bed.get("id") is not None else bed.get("_id")
+        is_occ = mongo_bool(bed.get("is_occupied"))
+        occ_pid = bed.get("occupied_by_patient_id")
+
+        # Determine if this bed is available for allocation
+        is_avail = not is_occ
+        if parsed_pid is not None and occ_pid is not None and str(occ_pid) == str(parsed_pid):
+            is_avail = True
+
+        bed_list.append({
+            "id": b_id,
+            "_id": b_id,
+            "bed_number": bed.get("bed_number") or str(b_id),
+            "ward_id": ward_id,
+            "is_active": mongo_bool(bed.get("is_active")),
+            "is_occupied": is_occ,
+            "occupied_by_patient_id": occ_pid,
+            "is_available": is_avail,
+            "status": "OCCUPIED" if is_occ else "AVAILABLE",
+        })
+
+    occupied_count = sum(1 for b in bed_list if b["is_occupied"])
+    available_count = sum(1 for b in bed_list if b["is_available"])
+
+    ward_actual_id = ward.get("id") if ward.get("id") is not None else ward.get("_id")
+
+    return {
+        "ward": {
+            "id": ward_actual_id,
+            "name": ward.get("name"),
+            "code": ward.get("code"),
+            "description": ward.get("description"),
+        },
+        "beds": bed_list,
+        "counts": {
+            "total": len(bed_list),
+            "occupied": occupied_count,
+            "available": available_count,
+        },
+    }
