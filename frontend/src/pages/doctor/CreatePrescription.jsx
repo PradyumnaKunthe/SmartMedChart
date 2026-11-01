@@ -15,6 +15,7 @@ import {
   Plus,
   Save,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
   User,
   Zap,
@@ -38,16 +39,78 @@ import {
 } from "../../services/doctor"
 
 const FREQUENCIES = [
-  { value: "ONCE_DAILY", label: "Once Daily (QD)" },
-  { value: "TWICE_DAILY", label: "Twice Daily (BID)" },
-  { value: "EVERY_8_HOURS", label: "Every 8 Hours (TID)" },
-  { value: "EVERY_6_HOURS", label: "Every 6 Hours (QID)" },
+  {
+    value: "ONCE_DAILY",
+    label: "Once Daily (QD) — 1 dose / day",
+    timesCount: 1,
+    defaultTimes: ["08:00"],
+  },
+  {
+    value: "TWICE_DAILY",
+    label: "Twice Daily (BID) — 2 doses / day",
+    timesCount: 2,
+    defaultTimes: ["08:00", "20:00"],
+  },
+  {
+    value: "THREE_TIMES_DAILY",
+    label: "Three Times Daily (TID) — 3 doses / day",
+    timesCount: 3,
+    defaultTimes: ["08:00", "14:00", "20:00"],
+  },
+  {
+    value: "FOUR_TIMES_DAILY",
+    label: "Four Times Daily (QID) — 4 doses / day",
+    timesCount: 4,
+    defaultTimes: ["08:00", "12:00", "16:00", "20:00"],
+  },
+  {
+    value: "EVERY_4_HOURS",
+    label: "Every 4 Hours (Q4H) — 6 doses / day",
+    timesCount: 6,
+    defaultTimes: ["04:00", "08:00", "12:00", "16:00", "20:00", "00:00"],
+  },
+  {
+    value: "EVERY_6_HOURS",
+    label: "Every 6 Hours (Q6H) — 4 doses / day",
+    timesCount: 4,
+    defaultTimes: ["06:00", "12:00", "18:00", "00:00"],
+  },
+  {
+    value: "EVERY_8_HOURS",
+    label: "Every 8 Hours (Q8H) — 3 doses / day",
+    timesCount: 3,
+    defaultTimes: ["08:00", "16:00", "00:00"],
+  },
+  {
+    value: "EVERY_12_HOURS",
+    label: "Every 12 Hours (Q12H) — 2 doses / day",
+    timesCount: 2,
+    defaultTimes: ["08:00", "20:00"],
+  },
+  {
+    value: "PRN",
+    label: "As Needed (PRN) — Bedside nurse discretion",
+    timesCount: 0,
+    defaultTimes: [],
+  },
+  {
+    value: "STAT",
+    label: "STAT / Immediate Order — 1 immediate dose",
+    timesCount: 1,
+    defaultTimes: ["08:00"],
+  },
+  {
+    value: "CUSTOM",
+    label: "Custom Schedule — Doctor specifies exact times",
+    timesCount: -1,
+    defaultTimes: ["08:00"],
+  },
 ]
 
 const SEVERITIES = [
-  { value: "LOW", label: "Low", variant: "neutral" },
-  { value: "MODERATE", label: "Moderate", variant: "warning" },
-  { value: "HIGH", label: "High", variant: "danger" },
+  { value: "LOW", label: "Low Severity", variant: "neutral" },
+  { value: "MODERATE", label: "Moderate Severity", variant: "warning" },
+  { value: "HIGH", label: "High Severity", variant: "danger" },
   { value: "SEVERE", label: "Severe / Anaphylactic", variant: "danger" },
 ]
 
@@ -65,6 +128,23 @@ function formatApiError(err, fallbackMessage) {
   return err?.message || fallbackMessage
 }
 
+function createDefaultMedicineEntry(index = 1) {
+  const today = new Date().toISOString().split("T")[0]
+  return {
+    id: Date.now() + Math.random(),
+    medicine_id: "",
+    dose: "",
+    route: "Oral",
+    frequency: "ONCE_DAILY",
+    duration_days: 5,
+    start_date: today,
+    start_time: "08:00",
+    administration_times: ["08:00"],
+    is_stat: false,
+    instructions: "",
+  }
+}
+
 export default function CreatePrescription() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -73,12 +153,25 @@ export default function CreatePrescription() {
   const [selectedPatientId, setSelectedPatientId] = useState(patientId || "")
   const [assignedPatients, setAssignedPatients] = useState([])
   const [patient, setPatient] = useState(null)
-  const [medicines, setMedicines] = useState([])
+  const [medicinesCatalogue, setMedicinesCatalogue] = useState([])
   const [allergies, setAllergies] = useState([])
+
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState(null)
+
+  // Multiple medicines list
+  const [medicines, setMedicines] = useState([createDefaultMedicineEntry(1)])
+  const [prescriptionNotes, setPrescriptionNotes] = useState("")
+
+  // Admission & Bed Allocation state
+  const [admitNeeded, setAdmitNeeded] = useState("NO")
+  const [wards, setWards] = useState([])
+  const [selectedWard, setSelectedWard] = useState("")
+  const [selectedBed, setSelectedBed] = useState("")
+  const [availableBeds, setAvailableBeds] = useState([])
+  const [loadingBeds, setLoadingBeds] = useState(false)
 
   // Allergy modal state
   const [allergyModalOpen, setAllergyModalOpen] = useState(false)
@@ -92,15 +185,6 @@ export default function CreatePrescription() {
     severity: "MODERATE",
     notes: "",
   })
-
-  // Prescription Form
-  // Admission & Bed Allocation state
-  const [admitNeeded, setAdmitNeeded] = useState("NO")
-  const [wards, setWards] = useState([])
-  const [selectedWard, setSelectedWard] = useState("")
-  const [selectedBed, setSelectedBed] = useState("")
-  const [availableBeds, setAvailableBeds] = useState([])
-  const [loadingBeds, setLoadingBeds] = useState(false)
 
   async function loadWardsData() {
     try {
@@ -122,7 +206,6 @@ export default function CreatePrescription() {
     try {
       const res = await getWardBeds(wardId)
       const bedList = Array.isArray(res) ? res : res?.beds || []
-      // Only unoccupied beds or current patient's bed
       const avail = bedList.filter(
         (b) => !b.is_occupied || b.id === patient?.bed_id || b.occupied_by_patient_id === patient?.id
       )
@@ -133,29 +216,6 @@ export default function CreatePrescription() {
       setLoadingBeds(false)
     }
   }
-
-  const [form, setForm] = useState({
-    medicine_id: "",
-    dose: "",
-    route: "Oral",
-    frequency: "ONCE_DAILY",
-    duration_days: 7,
-    start_date: new Date().toISOString().split("T")[0],
-    start_time: "08:00",
-    is_stat: false,
-    instructions: "",
-    notes: "",
-  })
-
-  const freqMultiplier =
-    form.frequency === "EVERY_6_HOURS"
-      ? 4
-      : form.frequency === "EVERY_8_HOURS"
-      ? 3
-      : form.frequency === "TWICE_DAILY"
-      ? 2
-      : 1
-  const estimatedDoses = Math.max(1, Number(form.duration_days || 1)) * freqMultiplier
 
   useEffect(() => {
     async function loadData() {
@@ -173,7 +233,7 @@ export default function CreatePrescription() {
             getPatientAllergies(activePid),
           ])
           setPatient(patientData)
-          setMedicines(Array.isArray(medicineData) ? medicineData : [])
+          setMedicinesCatalogue(Array.isArray(medicineData) ? medicineData : [])
           setAllergies(Array.isArray(allergyData) ? allergyData : [])
         } else {
           const [patientList, medicineData] = await Promise.all([
@@ -182,7 +242,7 @@ export default function CreatePrescription() {
           ])
           const list = Array.isArray(patientList) ? patientList : []
           setAssignedPatients(list)
-          setMedicines(Array.isArray(medicineData) ? medicineData : [])
+          setMedicinesCatalogue(Array.isArray(medicineData) ? medicineData : [])
           if (list.length === 1) {
             const onlyPid = String(list[0].id)
             setSelectedPatientId(onlyPid)
@@ -195,9 +255,7 @@ export default function CreatePrescription() {
           }
         }
       } catch (requestError) {
-        setError(
-          formatApiError(requestError, "Unable to load prescription data.")
-        )
+        setError(formatApiError(requestError, "Unable to load prescription data."))
       } finally {
         setLoading(false)
       }
@@ -229,19 +287,94 @@ export default function CreatePrescription() {
     }
   }
 
-  function handleChange(event) {
-    const { name, value, type, checked } = event.target
-    setForm((prev) => ({
-      ...prev,
-      [name]: type === "checkbox" ? checked : value,
-    }))
+  // Multi-Medicine Actions
+  function handleAddMedicine() {
+    setMedicines((prev) => [...prev, createDefaultMedicineEntry(prev.length + 1)])
   }
 
-  function handleAllergyChange(event) {
-    const { name, value } = event.target
-    setAllergyForm((prev) => ({ ...prev, [name]: value }))
+  function handleRemoveMedicine(id) {
+    if (medicines.length <= 1) return
+    setMedicines((prev) => prev.filter((m) => m.id !== id))
   }
 
+  function handleMedicineFieldChange(id, field, value) {
+    setMedicines((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item
+        return { ...item, [field]: value }
+      })
+    )
+  }
+
+  function handleFrequencyChange(id, newFrequency) {
+    const config = FREQUENCIES.find((f) => f.value === newFrequency)
+    setMedicines((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item
+        const defTimes = config?.defaultTimes ? [...config.defaultTimes] : ["08:00"]
+        return {
+          ...item,
+          frequency: newFrequency,
+          administration_times: defTimes,
+          start_time: defTimes[0] || "08:00",
+        }
+      })
+    )
+  }
+
+  function handleAdminTimeChange(id, timeIndex, newTime) {
+    setMedicines((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item
+        const updated = [...(item.administration_times || [])]
+        updated[timeIndex] = newTime
+        const newStartTime = timeIndex === 0 ? newTime : item.start_time
+        return {
+          ...item,
+          administration_times: updated,
+          start_time: newStartTime,
+        }
+      })
+    )
+  }
+
+  function handleAddCustomTime(id) {
+    setMedicines((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item
+        const current = item.administration_times || []
+        return {
+          ...item,
+          administration_times: [...current, "12:00"],
+        }
+      })
+    )
+  }
+
+  function handleRemoveCustomTime(id, timeIndex) {
+    setMedicines((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item
+        const current = [...(item.administration_times || [])]
+        if (current.length <= 1) return item
+        current.splice(timeIndex, 1)
+        return {
+          ...item,
+          administration_times: current,
+          start_time: current[0] || item.start_time,
+        }
+      })
+    )
+  }
+
+  function calculateDoseCount(med) {
+    if (med.frequency === "PRN") return 0
+    if (med.frequency === "STAT") return 1
+    const timesPerDay = med.administration_times?.length || 1
+    return Math.max(1, Number(med.duration_days || 1)) * timesPerDay
+  }
+
+  // Allergy management
   function openAddAllergy() {
     setEditingAllergy(null)
     setAllergyForm({ allergen: "", reaction: "", severity: "MODERATE", notes: "" })
@@ -277,6 +410,7 @@ export default function CreatePrescription() {
       return
     }
 
+    const activePid = patient?.id || selectedPatientId || patientId
     setSavingAllergy(true)
     try {
       const payload = {
@@ -287,35 +421,29 @@ export default function CreatePrescription() {
       }
 
       if (editingAllergy) {
-        const activePid = patient?.id || selectedPatientId || patientId
         const result = await updatePatientAllergy(activePid, editingAllergy.id, payload)
         setAllergies((prev) =>
           prev.map((item) => (item.id === editingAllergy.id ? result : item))
         )
       } else {
-        const activePid = patient?.id || selectedPatientId || patientId
         const result = await createPatientAllergy(activePid, payload)
         setAllergies((prev) => [...prev, result])
       }
       closeAllergyModal()
     } catch (requestError) {
-      setAllergyError(
-        requestError?.response?.data?.detail || "Unable to save allergy record."
-      )
+      setAllergyError(requestError?.response?.data?.detail || "Unable to save allergy record.")
     } finally {
       setSavingAllergy(false)
     }
   }
 
   async function handleDeleteAllergy(allergy) {
-    const confirmed = window.confirm(
-      `Remove allergy "${allergy.allergen}" from patient record?`
-    )
+    const activePid = patient?.id || selectedPatientId || patientId
+    const confirmed = window.confirm(`Remove allergy "${allergy.allergen}" from patient record?`)
     if (!confirmed) return
 
     setDeletingAllergyId(allergy.id)
     try {
-      const activePid = patient?.id || selectedPatientId || patientId
       await deletePatientAllergy(activePid, allergy.id)
       setAllergies((prev) => prev.filter((item) => item.id !== allergy.id))
     } catch (requestError) {
@@ -325,16 +453,17 @@ export default function CreatePrescription() {
     }
   }
 
-  // Cross-reference selected medicine with known allergies
-  const selectedMedObj = medicines.find((m) => String(m.id) === String(form.medicine_id))
-  const allergyConflict = selectedMedObj
-    ? allergies.find(
-        (a) =>
-          a.allergen &&
-          (selectedMedObj.name.toLowerCase().includes(a.allergen.toLowerCase()) ||
-            a.allergen.toLowerCase().includes(selectedMedObj.name.toLowerCase()))
-      )
-    : null
+  // Cross-reference medicine with documented allergies
+  function checkAllergyForMed(medId) {
+    const medObj = medicinesCatalogue.find((m) => String(m.id) === String(medId))
+    if (!medObj) return null
+    return allergies.find(
+      (a) =>
+        a.allergen &&
+        (medObj.name.toLowerCase().includes(a.allergen.toLowerCase()) ||
+          a.allergen.toLowerCase().includes(medObj.name.toLowerCase()))
+    )
+  }
 
   async function handleSubmit(event) {
     event.preventDefault()
@@ -349,42 +478,76 @@ export default function CreatePrescription() {
       return
     }
 
-    if (!form.medicine_id) {
-      setError("Please select a medicine from the active pharmacy catalogue.")
+    if (medicines.length === 0) {
+      setError("Please add at least one medicine to the prescription order.")
       setSubmitting(false)
       return
     }
 
-    if (!form.dose || !form.dose.trim()) {
-      setError("Dosage is required (e.g., 500 mg).")
-      setSubmitting(false)
-      return
+    // Validate each medicine
+    for (let i = 0; i < medicines.length; i++) {
+      const m = medicines[i]
+      const num = i + 1
+      if (!m.medicine_id) {
+        setError(`Please select a formulary medicine for Medicine #${num}.`)
+        setSubmitting(false)
+        return
+      }
+      if (!m.dose || !m.dose.trim()) {
+        setError(`Dosage is required for Medicine #${num} (e.g. 500 mg, 1 tablet).`)
+        setSubmitting(false)
+        return
+      }
+      if (!m.route || !m.route.trim()) {
+        setError(`Administration route is required for Medicine #${num}.`)
+        setSubmitting(false)
+        return
+      }
+      if (m.frequency !== "PRN" && (!m.administration_times || m.administration_times.length === 0)) {
+        setError(`Please specify at least one administration time for Medicine #${num}.`)
+        setSubmitting(false)
+        return
+      }
     }
 
     try {
+      const formattedItems = medicines.map((m) => ({
+        medicine_id: Number(m.medicine_id),
+        dose: m.dose.trim(),
+        route: m.route.trim(),
+        frequency: m.frequency,
+        duration_days: Number(m.duration_days || 1),
+        start_date: m.start_date,
+        start_time: m.start_time || "08:00",
+        administration_times: m.administration_times || [],
+        is_stat: Boolean(m.is_stat),
+        instructions: m.instructions ? m.instructions.trim() : null,
+      }))
+
       const payload = {
         patient_id: Number(targetPatientId),
-        medicine_id: Number(form.medicine_id),
-        dose: form.dose.trim(),
-        route: form.route.trim(),
-        frequency: form.frequency,
-        duration_days: Number(form.duration_days),
-        start_date: form.start_date,
-        start_time: form.start_time,
-        is_stat: Boolean(form.is_stat),
-        instructions: form.instructions.trim() || null,
-        notes: form.notes.trim() || null,
+        notes: prescriptionNotes.trim() || null,
         admit_patient: admitNeeded === "YES",
         ward_id: admitNeeded === "YES" && selectedWard ? Number(selectedWard) : null,
         bed_id: admitNeeded === "YES" && selectedBed ? Number(selectedBed) : null,
+        medicines: formattedItems,
+        // Legacy backward compatibility fields
+        medicine_id: formattedItems[0].medicine_id,
+        dose: formattedItems[0].dose,
+        route: formattedItems[0].route,
+        frequency: formattedItems[0].frequency,
+        duration_days: formattedItems[0].duration_days,
+        start_date: formattedItems[0].start_date,
+        start_time: formattedItems[0].start_time,
+        administration_times: formattedItems[0].administration_times,
+        is_stat: formattedItems[0].is_stat,
+        instructions: formattedItems[0].instructions,
       }
 
       const result = await createPrescription(payload)
       setSuccess(result)
     } catch (requestError) {
-      setError(
-        formatApiError(requestError, "Unable to create prescription.")
-      )
+      setError(formatApiError(requestError, "Unable to create prescription."))
     } finally {
       setSubmitting(false)
     }
@@ -393,15 +556,17 @@ export default function CreatePrescription() {
   if (loading) {
     return (
       <MainLayout title="Create Prescription">
-        <Loading message="Loading patient chart and formulary..." />
+        <Loading message="Loading patient chart and formulary catalogue..." />
       </MainLayout>
     )
   }
 
+  const totalDosesAcrossAll = medicines.reduce((acc, m) => acc + calculateDoseCount(m), 0)
+
   return (
     <MainLayout
       title="Create Prescription"
-      subtitle="Issue an authorized medical prescription with automated schedule generation"
+      subtitle="Issue multi-item medical orders with independent dosing schedules and 5-min nurse alerts"
     >
       <div className="mx-auto max-w-5xl space-y-6">
         {/* Top Navigation */}
@@ -418,7 +583,7 @@ export default function CreatePrescription() {
           </Button>
 
           {patient && (
-            <div className="flex items-center gap-2 text-xs text-slate-500 bg-white border border-slate-200/80 rounded-xl px-3 py-1.5 shadow-sm">
+            <div className="flex items-center gap-2 text-xs text-slate-500 bg-white border border-slate-200/80 rounded-xl px-3.5 py-1.5 shadow-xs">
               <User className="w-3.5 h-3.5 text-sky-600" />
               <span>Patient:</span>
               <span className="font-semibold text-slate-800">
@@ -432,30 +597,58 @@ export default function CreatePrescription() {
 
         {/* Global Error Banner */}
         {error && (
-          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm">
+          <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm animate-fade-in">
             <AlertTriangle className="w-5 h-5 shrink-0 text-rose-600" />
-            <div className="flex-1">{error}</div>
+            <div className="flex-1 font-medium">{error}</div>
           </div>
         )}
 
-        {/* Success State */}
+        {/* Success State Confirmation Card */}
         {success && (
-          <div className="p-8 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-3xl text-center space-y-4">
-            <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
-              <CheckCircle2 className="w-8 h-8" />
+          <div className="p-8 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-3xl text-center space-y-5 animate-fade-in">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+              <CheckCircle2 className="w-9 h-9" />
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900">
                 Prescription Successfully Created
               </h2>
-              <p className="text-sm text-slate-600 mt-1 max-w-md mx-auto">
-                Prescription record #{success.prescription_id} has been registered and{" "}
+              <p className="text-sm text-slate-600 mt-1 max-w-lg mx-auto leading-relaxed">
+                Prescription Order #{success.prescription_id} containing{" "}
                 <strong className="text-emerald-700 font-bold">
-                  {success.schedule_count} medication administration schedule(s)
+                  {success.medicine_count || medicines.length} medicine(s)
                 </strong>{" "}
-                were automatically populated for nurse rounds.
+                was saved, and{" "}
+                <strong className="text-emerald-700 font-bold">
+                  {success.schedule_count} individual medication dosing schedule(s)
+                </strong>{" "}
+                with 5-minute pre-dose nurse notifications have been scheduled in the queue.
               </p>
             </div>
+
+            {success.medicines && success.medicines.length > 0 && (
+              <div className="max-w-xl mx-auto p-4 bg-white/80 border border-emerald-200/70 rounded-2xl text-left space-y-2">
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Prescribed Regimen Summary:
+                </div>
+                {success.medicines.map((item, idx) => (
+                  <div
+                    key={item.id || idx}
+                    className="flex items-center justify-between text-xs py-1.5 border-b border-slate-100 last:border-none"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Pill className="w-3.5 h-3.5 text-sky-600" />
+                      <span className="font-bold text-slate-900">{item.medicine_name}</span>
+                      <span className="text-slate-500">({item.dose} · {item.route})</span>
+                    </div>
+                    <Badge variant="primary" size="sm">
+                      {item.frequency} · {item.schedule_count} doses
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex items-center justify-center gap-3 pt-2">
               <Button
                 variant="primary"
@@ -470,21 +663,11 @@ export default function CreatePrescription() {
                 variant="outline"
                 onClick={() => {
                   setSuccess(null)
-                  setForm({
-                    medicine_id: "",
-                    dose: "",
-                    route: "Oral",
-                    frequency: "ONCE_DAILY",
-                    duration_days: 7,
-                    start_date: new Date().toISOString().split("T")[0],
-                    start_time: "08:00",
-                    is_stat: false,
-                    instructions: "",
-                    notes: "",
-                  })
+                  setMedicines([createDefaultMedicineEntry(1)])
+                  setPrescriptionNotes("")
                 }}
               >
-                Add Another Medicine
+                Write Another Order
               </Button>
             </div>
           </div>
@@ -494,7 +677,7 @@ export default function CreatePrescription() {
         {!success && !patient && (
           <Card>
             <CardHeader
-              title="Select Patient for Prescription"
+              title="Select Inpatient for Prescription"
               subtitle="Choose an active inpatient currently assigned to your clinical care"
             />
             <div className="p-6 space-y-4">
@@ -525,7 +708,7 @@ export default function CreatePrescription() {
 
         {/* Patient Allergies Banner */}
         {!success && patient && (
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
@@ -536,7 +719,7 @@ export default function CreatePrescription() {
                     Patient Allergy Safety Review
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Review documented drug hypersensitivities before issuing new regimens
+                    Documented drug hypersensitivities evaluated automatically against all prescribed items
                   </p>
                 </div>
               </div>
@@ -607,330 +790,489 @@ export default function CreatePrescription() {
                 ))}
               </div>
             )}
-
-            {/* Live Conflict Warning */}
-            {allergyConflict && (
-              <div className="p-4 bg-rose-500/10 border border-rose-300 rounded-xl text-rose-900 text-xs flex items-start gap-2.5 animate-pulse">
-                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="font-bold">CRITICAL SAFETY ALERT:</strong> Patient
-                  has a documented allergy to{" "}
-                  <span className="font-black underline">{allergyConflict.allergen}</span>{" "}
-                  ({allergyConflict.severity || "Moderate"}), which conflicts with{" "}
-                  <span className="font-black underline">{selectedMedObj.name}</span>.
-                  Re-evaluate before prescribing!
-                </div>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Prescription Form */}
+        {/* Multi-Medicine Prescription Form */}
         {!success && (
           <form onSubmit={handleSubmit} className="space-y-6">
-            <Card>
-              <CardHeader
-                title="Prescription Details"
-                subtitle="Select formulary item, dosing parameters, route and administration window"
-              />
+            <div className="space-y-6">
+              {medicines.map((med, index) => {
+                const selectedMedObj = medicinesCatalogue.find(
+                  (m) => String(m.id) === String(med.medicine_id)
+                )
+                const allergyConflict = checkAllergyForMed(med.medicine_id)
+                const estimatedDoses = calculateDoseCount(med)
+                const freqConfig = FREQUENCIES.find((f) => f.value === med.frequency)
 
-              <div className="p-6 space-y-6">
-                {/* Medicine Selection */}
-                <div>
-                  <label
-                    htmlFor="medicine_id"
-                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                  >
-                    FORMULARY MEDICINE <span className="text-rose-500">*</span>
-                  </label>
-
-                  {medicines.length === 0 ? (
-                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
-                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="font-bold">NO ACTIVE FORMULARY MEDICINES AVAILABLE:</strong> Default and test medicines have been deactivated. Please add medicines in <strong>Pharmacy Management</strong> before prescribing.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      <Pill className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <select
-                        id="medicine_id"
-                        name="medicine_id"
-                        value={form.medicine_id}
-                        onChange={handleChange}
-                        required
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
-                      >
-                        <option value="">SELECT A MEDICINE FROM PHARMACY CATALOG</option>
-                        {medicines.map((m) => {
-                          const stockCount = m.total_stock ?? 0
-                          const status = m.stock_status || (stockCount === 0 ? "OUT OF STOCK" : stockCount <= (m.min_stock_level || 10) ? "LOW STOCK" : "IN STOCK")
-                          return (
-                            <option key={m.id} value={m.id}>
-                              {m.name} {m.strength ? `(${m.strength})` : ""} — {m.dosage_form || m.form || "TABLET"} [{status}: {stockCount} {m.unit || "UNITS"}]
-                            </option>
-                          )
-                        })}
-                      </select>
-                    </div>
-                  )}
-
-                  {/* Selected Medicine Stock Badge & Details */}
-                  {selectedMedObj && (
-                    <div className="mt-3 p-3.5 rounded-2xl border border-slate-200 bg-slate-50/80 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <Pill className="w-4 h-4 text-sky-600 shrink-0" />
-                          <span className="font-extrabold text-xs text-slate-900">
-                            {selectedMedObj.name} {selectedMedObj.strength && `(${selectedMedObj.strength})`}
-                          </span>
-                          <span className="text-xs text-slate-500">
-                            • {selectedMedObj.dosage_form || "TABLET"}
-                          </span>
-                        </div>
-                        <div>
-                          <Badge
-                            variant={
-                              (selectedMedObj.total_stock ?? 0) === 0
-                                ? "danger"
-                                : (selectedMedObj.total_stock ?? 0) <= (selectedMedObj.min_stock_level || 10)
-                                ? "warning"
-                                : "success"
-                            }
+                return (
+                  <Card key={med.id}>
+                    <CardHeader
+                      title={`MEDICINE #${index + 1}${
+                        selectedMedObj ? ` — ${selectedMedObj.name.toUpperCase()}` : ""
+                      }`}
+                      subtitle="Independent dosage, route, frequency, and exact administration times"
+                      action={
+                        medicines.length > 1 ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
                             size="sm"
+                            icon={Trash2}
+                            className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                            onClick={() => handleRemoveMedicine(med.id)}
                           >
-                            {(selectedMedObj.total_stock ?? 0) === 0
-                              ? "OUT OF STOCK"
-                              : (selectedMedObj.total_stock ?? 0) <= (selectedMedObj.min_stock_level || 10)
-                              ? "LOW STOCK"
-                              : "IN STOCK"}
-                          </Badge>
-                        </div>
-                      </div>
+                            Remove Medicine
+                          </Button>
+                        ) : null
+                      }
+                    />
 
-                      <div className="flex flex-wrap items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-200/60">
-                        <span>
-                          AVAILABLE STOCK:{" "}
-                          <strong className="font-extrabold text-slate-900">
-                            {selectedMedObj.total_stock ?? 0} {selectedMedObj.unit || "TABLETS"}
-                          </strong>
-                        </span>
-                        {selectedMedObj.min_stock_level !== undefined && (
-                          <span className="text-slate-400">
-                            MIN. THRESHOLD: {selectedMedObj.min_stock_level}
-                          </span>
+                    <div className="p-6 space-y-5">
+                      {/* 1. Formulary Medicine Selector */}
+                      <div>
+                        <label
+                          htmlFor={`med_select_${med.id}`}
+                          className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+                        >
+                          1. FORMULARY MEDICINE <span className="text-rose-500">*</span>
+                        </label>
+
+                        {medicinesCatalogue.length === 0 ? (
+                          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+                            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="font-bold">NO FORMULARY MEDICINES AVAILABLE:</strong>{" "}
+                              Please ensure medicines exist in <strong>Pharmacy Management</strong> before prescribing.
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <Pill className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <select
+                              id={`med_select_${med.id}`}
+                              value={med.medicine_id}
+                              onChange={(e) =>
+                                handleMedicineFieldChange(med.id, "medicine_id", e.target.value)
+                              }
+                              required
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                            >
+                              <option value="">-- SELECT MEDICINE FROM PHARMACY CATALOGUE --</option>
+                              {medicinesCatalogue.map((m) => {
+                                const stockCount = m.total_stock ?? 0
+                                const status =
+                                  m.stock_status ||
+                                  (stockCount === 0
+                                    ? "OUT OF STOCK"
+                                    : stockCount <= (m.min_stock_level || 10)
+                                    ? "LOW STOCK"
+                                    : "IN STOCK")
+                                return (
+                                  <option key={m.id} value={m.id}>
+                                    {m.name} {m.strength ? `(${m.strength})` : ""} — {m.dosage_form || "TABLET"} [{status}: {stockCount} {m.unit || "UNITS"}]
+                                  </option>
+                                )
+                              })}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Selected Medicine Details Strip */}
+                        {selectedMedObj && (
+                          <div className="mt-3 p-3.5 rounded-2xl border border-slate-200 bg-slate-50/80 space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <Pill className="w-4 h-4 text-sky-600 shrink-0" />
+                                <span className="font-extrabold text-xs text-slate-900">
+                                  {selectedMedObj.name} {selectedMedObj.strength && `(${selectedMedObj.strength})`}
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  • {selectedMedObj.dosage_form || "TABLET"}
+                                </span>
+                              </div>
+                              <Badge
+                                variant={
+                                  (selectedMedObj.total_stock ?? 0) === 0
+                                    ? "danger"
+                                    : (selectedMedObj.total_stock ?? 0) <= (selectedMedObj.min_stock_level || 10)
+                                    ? "warning"
+                                    : "success"
+                                }
+                                size="sm"
+                              >
+                                {(selectedMedObj.total_stock ?? 0) === 0
+                                  ? "OUT OF STOCK"
+                                  : (selectedMedObj.total_stock ?? 0) <= (selectedMedObj.min_stock_level || 10)
+                                  ? "LOW STOCK"
+                                  : "IN STOCK"}
+                              </Badge>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-200/60">
+                              <span>
+                                Available Stock:{" "}
+                                <strong className="font-extrabold text-slate-900">
+                                  {selectedMedObj.total_stock ?? 0} {selectedMedObj.unit || "TABLETS"}
+                                </strong>
+                              </span>
+                              {selectedMedObj.generic_name && (
+                                <span className="text-slate-500 font-mono text-[11px]">
+                                  Generic: {selectedMedObj.generic_name}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Stock Warning */}
+                            {estimatedDoses > (selectedMedObj.total_stock ?? 0) && (
+                              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+                                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                                <div>
+                                  <strong className="font-bold">LOW STOCK WARNING:</strong> Prescribed regimen requires approx {estimatedDoses} doses, but current inventory shows {selectedMedObj.total_stock ?? 0} {selectedMedObj.unit || "units"}. Doctor may authorize; pharmacy will fulfill prior to administration.
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Allergy Conflict Warning */}
+                            {allergyConflict && (
+                              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-start gap-2 animate-pulse">
+                                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                                <div>
+                                  <strong className="font-bold">ALLERGY WARNING:</strong> Patient has a documented allergy to <span className="font-black underline">{allergyConflict.allergen}</span> ({allergyConflict.severity || "Moderate"}), which matches this medicine!
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
 
-                      {/* Stock Shortage Warning */}
-                      {estimatedDoses > (selectedMedObj.total_stock ?? 0) && (
-                        <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
-                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <strong className="font-bold">STOCK SHORTAGE WARNING:</strong> Regimen requires approximately {estimatedDoses} doses, but currently only {selectedMedObj.total_stock ?? 0} {selectedMedObj.unit || "units"} are available. You may still authorize for clinical necessity; pharmacy restock will be required before full dispensing.
+                      {/* 2. Dose & Route */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                            2. Dose <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. 1 Tablet, 500 mg, 10 ml, 1 Vial"
+                            value={med.dose}
+                            onChange={(e) =>
+                              handleMedicineFieldChange(med.id, "dose", e.target.value)
+                            }
+                            required
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                            3. Route <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            value={med.route}
+                            onChange={(e) =>
+                              handleMedicineFieldChange(med.id, "route", e.target.value)
+                            }
+                            required
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                          >
+                            <option value="Oral">Oral (PO)</option>
+                            <option value="Intravenous (IV)">Intravenous (IV)</option>
+                            <option value="Intramuscular (IM)">Intramuscular (IM)</option>
+                            <option value="Subcutaneous (SC)">Subcutaneous (SC)</option>
+                            <option value="Inhalation">Inhalation</option>
+                            <option value="Topical">Topical</option>
+                            <option value="Sublingual">Sublingual</option>
+                            <option value="Ophthalmic">Ophthalmic</option>
+                            <option value="Rectal">Rectal</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* 3. Frequency & Duration */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                            4. Administration Frequency <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            value={med.frequency}
+                            onChange={(e) => handleFrequencyChange(med.id, e.target.value)}
+                            required
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                          >
+                            {FREQUENCIES.map((freq) => (
+                              <option key={freq.value} value={freq.value}>
+                                {freq.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                            5. Duration (Days) <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="365"
+                            value={med.duration_days}
+                            onChange={(e) =>
+                              handleMedicineFieldChange(med.id, "duration_days", e.target.value)
+                            }
+                            required
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                          />
+                        </div>
+                      </div>
+
+                      {/* 4. Flexible Administration Times */}
+                      <div className="p-4 bg-slate-100/70 border border-slate-200 rounded-2xl space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-sky-600" />
+                            <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                              6. Scheduled Administration Times
+                            </span>
+                          </div>
+                          {med.frequency === "CUSTOM" && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              icon={Plus}
+                              onClick={() => handleAddCustomTime(med.id)}
+                            >
+                              Add Time
+                            </Button>
+                          )}
+                        </div>
+
+                        {med.frequency === "PRN" ? (
+                          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
+                            <strong>AS NEEDED (PRN):</strong> Routine administration schedules are not created in advance. Clinical instructions will be prominently displayed on the bedside nurse administration queue.
+                          </div>
+                        ) : med.frequency === "STAT" ? (
+                          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900">
+                            <strong>STAT / IMMEDIATE ORDER:</strong> Generates exactly one immediate medication task due right away for bedside rounds.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                            {(med.administration_times || []).map((tVal, tIdx) => (
+                              <div key={tIdx} className="space-y-1">
+                                <label className="block text-[10px] font-bold text-slate-500 uppercase">
+                                  Dose #{tIdx + 1} Time
+                                </label>
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    type="time"
+                                    value={tVal}
+                                    onChange={(e) =>
+                                      handleAdminTimeChange(med.id, tIdx, e.target.value)
+                                    }
+                                    required
+                                    className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                                  />
+                                  {med.frequency === "CUSTOM" && med.administration_times.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveCustomTime(med.id, tIdx)}
+                                      className="p-1.5 text-rose-400 hover:text-rose-600 rounded-lg hover:bg-rose-50"
+                                      title="Remove time"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-200/60">
+                          <span>
+                            Dosing Times / Day: <strong>{med.frequency === "PRN" ? "0 (PRN)" : med.administration_times?.length || 1}</strong>
+                          </span>
+                          <span>
+                            Total Estimated Doses: <strong className="text-sky-700">{estimatedDoses}</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 5. Start Date & Urgent / STAT */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                            7. First Administration Date <span className="text-rose-500">*</span>
+                          </label>
+                          <div className="relative">
+                            <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input
+                              type="date"
+                              value={med.start_date}
+                              onChange={(e) =>
+                                handleMedicineFieldChange(med.id, "start_date", e.target.value)
+                              }
+                              required
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+                            />
                           </div>
                         </div>
-                      )}
-                    </div>
-                  )}
-                </div>
 
-                {/* Dose & Route */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label
-                      htmlFor="dose"
-                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                    >
-                      Dose <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="dose"
-                      name="dose"
-                      type="text"
-                      placeholder="e.g. 500 mg, 10 ml, 1 tablet"
-                      value={form.dose}
-                      onChange={handleChange}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="route"
-                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                    >
-                      Route <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="route"
-                      name="route"
-                      type="text"
-                      placeholder="e.g. Oral, IV, IM, Subcutaneous, Topical"
-                      value={form.route}
-                      onChange={handleChange}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* Frequency & Duration */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label
-                      htmlFor="frequency"
-                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                    >
-                      Administration Frequency <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="frequency"
-                      name="frequency"
-                      value={form.frequency}
-                      onChange={handleChange}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                    >
-                      {FREQUENCIES.map((freq) => (
-                        <option key={freq.value} value={freq.value}>
-                          {freq.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="duration_days"
-                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                    >
-                      Duration (Days) <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="duration_days"
-                      name="duration_days"
-                      type="number"
-                      min="1"
-                      max="90"
-                      value={form.duration_days}
-                      onChange={handleChange}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                    />
-                  </div>
-                </div>
-
-                {/* Start Date & Start Time */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label
-                      htmlFor="start_date"
-                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                    >
-                      First Administration Date <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input
-                        id="start_date"
-                        name="start_date"
-                        type="date"
-                        value={form.start_date}
-                        onChange={handleChange}
-                        required
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="start_time"
-                      className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                    >
-                      First Dose Time <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input
-                        id="start_time"
-                        name="start_time"
-                        type="time"
-                        value={form.start_time}
-                        onChange={handleChange}
-                        required
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Urgent / STAT Checkbox */}
-                <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-2xl flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                      <Zap className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-amber-950">
-                        Urgent / STAT Order
+                        <div className="p-3.5 bg-amber-50/60 border border-amber-200 rounded-2xl flex items-center justify-between self-end">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                              <Zap className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-amber-950">
+                                Urgent / STAT Order
+                              </div>
+                              <div className="text-[11px] text-amber-800/80">
+                                Prioritize immediate dose
+                              </div>
+                            </div>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={med.is_stat}
+                            onChange={(e) =>
+                              handleMedicineFieldChange(med.id, "is_stat", e.target.checked)
+                            }
+                            className="w-5 h-5 rounded text-amber-600 focus:ring-amber-500 border-amber-300"
+                          />
+                        </div>
                       </div>
-                      <div className="text-xs text-amber-800/80">
-                        Designate for immediate bedside administration during rounds
+
+                      {/* 6. Administration Instructions */}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                          8. Administration Instructions (e.g. Take with food, monitor BP)
+                        </label>
+                        <textarea
+                          rows={2}
+                          placeholder="e.g. Take immediately after meals with plenty of water. Withhold if systolic BP < 100."
+                          value={med.instructions}
+                          onChange={(e) =>
+                            handleMedicineFieldChange(med.id, "instructions", e.target.value)
+                          }
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all resize-none"
+                        />
                       </div>
                     </div>
+                  </Card>
+                )
+              })}
+
+              {/* + ADD ANOTHER MEDICINE BUTTON */}
+              <div className="flex items-center justify-between p-4 bg-white border border-dashed border-sky-300 rounded-2xl shadow-xs">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    Need to prescribe multiple medications?
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Add as many items as clinically required in this order, each with independent dosing & timing.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  icon={Plus}
+                  onClick={handleAddMedicine}
+                >
+                  + ADD ANOTHER MEDICINE
+                </Button>
+              </div>
+            </div>
+
+            {/* Overall Order Summary Card */}
+            <Card>
+              <CardHeader
+                title="Prescription Order Summary"
+                subtitle="Review all prescribed medications and estimated dosing schedules"
+              />
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Medicines</span>
+                    <span className="text-lg font-bold text-slate-800 mt-1 block">{medicines.length} Item(s)</span>
                   </div>
-                  <input
-                    type="checkbox"
-                    id="is_stat"
-                    name="is_stat"
-                    checked={form.is_stat}
-                    onChange={handleChange}
-                    className="w-5 h-5 rounded text-amber-600 focus:ring-amber-500 border-amber-300"
-                  />
+                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Planned Administrations</span>
+                    <span className="text-lg font-bold text-sky-700 mt-1 block">{totalDosesAcrossAll} Doses</span>
+                  </div>
+                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Nurse Alerts</span>
+                    <span className="text-lg font-bold text-emerald-700 mt-1 block">5 Min Pre-Dose</span>
+                  </div>
+                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Inventory Deductions</span>
+                    <span className="text-lg font-bold text-slate-800 mt-1 block">0 (On Dispense)</span>
+                  </div>
                 </div>
 
-                {/* Instructions */}
-                <div>
-                  <label
-                    htmlFor="instructions"
-                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
-                  >
-                    Administration Instructions
-                  </label>
-                  <textarea
-                    id="instructions"
-                    name="instructions"
-                    rows={2}
-                    placeholder="e.g. Take immediately after breakfast with a full glass of water. Monitor BP before administering."
-                    value={form.instructions}
-                    onChange={handleChange}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all resize-none"
-                  />
+                {/* Items Summary Table */}
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600 uppercase">
+                      <tr>
+                        <th className="p-3">#</th>
+                        <th className="p-3">Medicine</th>
+                        <th className="p-3">Dose & Route</th>
+                        <th className="p-3">Frequency & Times</th>
+                        <th className="p-3">Duration</th>
+                        <th className="p-3">Est. Doses</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                      {medicines.map((m, i) => {
+                        const medObj = medicinesCatalogue.find(
+                          (c) => String(c.id) === String(m.medicine_id)
+                        )
+                        return (
+                          <tr key={m.id} className="hover:bg-slate-50/50">
+                            <td className="p-3 font-bold text-slate-400">{i + 1}</td>
+                            <td className="p-3 font-bold text-slate-900">
+                              {medObj ? `${medObj.name} ${medObj.strength ? `(${medObj.strength})` : ""}` : "Unselected"}
+                            </td>
+                            <td className="p-3">{m.dose || "—"} · {m.route}</td>
+                            <td className="p-3">
+                              {m.frequency}
+                              {m.administration_times?.length > 0 && (
+                                <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                                  {m.administration_times.join(", ")}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3">{m.duration_days} Days</td>
+                            <td className="p-3 font-bold text-sky-700">{calculateDoseCount(m)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
 
-                {/* Clinical Notes */}
+                {/* Physician Notes */}
                 <div>
                   <label
-                    htmlFor="notes"
+                    htmlFor="order_notes"
                     className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
                   >
-                    Internal Physician Notes (Optional)
+                    Clinical Order Notes (Optional)
                   </label>
                   <textarea
-                    id="notes"
-                    name="notes"
+                    id="order_notes"
                     rows={2}
-                    placeholder="Confidential clinical rationale or reference notes..."
-                    value={form.notes}
-                    onChange={handleChange}
+                    placeholder="Confidential order rationale, treatment goal or physician reference notes..."
+                    value={prescriptionNotes}
+                    onChange={(e) => setPrescriptionNotes(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all resize-none"
                   />
                 </div>
               </div>
+            </Card>
 
             {/* INPATIENT ADMISSION & BED ASSIGNMENT */}
             <Card>
@@ -1041,28 +1383,27 @@ export default function CreatePrescription() {
               </div>
             </Card>
 
-              {/* Action Buttons */}
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 rounded-b-2xl">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() =>
-                    navigate(patientId ? `/doctor/patients/${patientId}` : "/doctor/patients")
-                  }
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  icon={Save}
-                  loading={submitting}
-                  disabled={submitting || !form.medicine_id || !(selectedPatientId || patientId)}
-                >
-                  Authorize & Create Prescription
-                </Button>
-              </div>
-            </Card>
+            {/* Action Footer */}
+            <div className="px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  navigate(patientId ? `/doctor/patients/${patientId}` : "/doctor/patients")
+                }
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                icon={Save}
+                loading={submitting}
+                disabled={submitting || medicines.length === 0 || !(selectedPatientId || patientId)}
+              >
+                Authorize & Create Prescription ({medicines.length} Medicines)
+              </Button>
+            </div>
           </form>
         )}
 
@@ -1111,18 +1452,20 @@ export default function CreatePrescription() {
                 htmlFor="severity"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
               >
-                Clinical Severity
+                CLINICAL SEVERITY
               </label>
               <select
                 id="severity"
                 name="severity"
                 value={allergyForm.severity}
-                onChange={handleAllergyChange}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                onChange={(e) =>
+                  setAllergyForm((prev) => ({ ...prev, severity: e.target.value }))
+                }
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase font-medium"
               >
-                {SEVERITIES.map((sev) => (
-                  <option key={sev.value} value={sev.value}>
-                    {sev.label}
+                {SEVERITIES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label.toUpperCase()}
                   </option>
                 ))}
               </select>
@@ -1133,40 +1476,52 @@ export default function CreatePrescription() {
                 htmlFor="reaction"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
               >
-                Observed Reaction
+                OBSERVED REACTION
               </label>
               <input
                 id="reaction"
                 name="reaction"
                 type="text"
-                placeholder="e.g. Urticaria, Bronchospasm, Facial swelling"
+                placeholder="E.G. URTICARIA, RASH, ANAPHYLAXIS, WHEEZING"
                 value={allergyForm.reaction}
-                onChange={handleAllergyChange}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                onChange={(e) =>
+                  setAllergyForm((prev) => ({
+                    ...prev,
+                    reaction: e.target.value.toUpperCase(),
+                  }))
+                }
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase"
               />
             </div>
 
             <div>
               <label
-                htmlFor="allergy_notes"
+                htmlFor="notes"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
               >
-                Safety Notes
+                CLINICAL NOTES
               </label>
               <textarea
-                id="allergy_notes"
+                id="notes"
                 name="notes"
                 rows={2}
-                placeholder="Details on previous episodes..."
+                placeholder="ADDITIONAL DETAILS CONCERNING PREVIOUS EXPOSURE..."
                 value={allergyForm.notes}
-                onChange={handleAllergyChange}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none"
+                onChange={(e) =>
+                  setAllergyForm((prev) => ({ ...prev, notes: e.target.value }))
+                }
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none uppercase"
               />
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <Button type="button" variant="outline" size="sm" onClick={closeAllergyModal}>
-                Cancel
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={closeAllergyModal}
+              >
+                CANCEL
               </Button>
               <Button
                 type="submit"
@@ -1174,7 +1529,7 @@ export default function CreatePrescription() {
                 size="sm"
                 loading={savingAllergy}
               >
-                {editingAllergy ? "Save Changes" : "Record Allergy"}
+                RECORD ALLERGY
               </Button>
             </div>
           </form>

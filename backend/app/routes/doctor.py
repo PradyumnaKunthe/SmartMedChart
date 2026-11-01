@@ -193,7 +193,33 @@ FREQUENCY_HOURS = {
 }
 
 
+from app.services.scheduling_service import (
+    generate_schedule_times as service_generate_schedule_times,
+    normalize_frequency,
+)
+from app.services.notification_service import (
+    create_notification_jobs_for_schedules,
+    init_notification_indexes,
+)
+
+
 def generate_schedule_times(
+    start_date: date,
+    start_time: time,
+    duration_days: int,
+    frequency: str,
+    administration_times=None,
+):
+    return service_generate_schedule_times(
+        start_date=start_date,
+        start_time=start_time,
+        duration_days=duration_days,
+        frequency=frequency,
+        administration_times=administration_times,
+    )
+
+
+def old_generate_schedule_times(
     start_date: date,
     start_time: time,
     duration_days: int,
@@ -669,55 +695,121 @@ def create_prescription(
         current_user,
     )
 
-    medicine = mongo_db.medicines.find_one({
-        "_id": request.medicine_id,
-        "is_active": active_filter(),
-    })
-
-    if medicine is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Medicine not found.",
-        )
-
-    frequency = request.frequency.upper().strip()
-
-    # Validate frequency before writing anything.
-    try:
-        schedule_times = generate_schedule_times(
-            start_date=request.start_date,
-            start_time=request.start_time,
-            duration_days=request.duration_days,
-            frequency=frequency,
-        )
-    except ValueError as error:
+    # 1. Normalize list of medicine items (support multi-medicine or legacy single-medicine)
+    raw_medicines = []
+    if request.medicines and len(request.medicines) > 0:
+        for m in request.medicines:
+            raw_medicines.append(m if isinstance(m, dict) else m.dict())
+    elif request.medicine_id:
+        raw_medicines.append({
+            "medicine_id": request.medicine_id,
+            "dose": request.dose,
+            "route": request.route,
+            "frequency": request.frequency,
+            "duration_days": request.duration_days or 1,
+            "start_date": request.start_date,
+            "start_time": request.start_time,
+            "administration_times": getattr(request, "administration_times", []) or [],
+            "is_stat": getattr(request, "is_stat", False),
+            "instructions": getattr(request, "instructions", None),
+        })
+    else:
         raise HTTPException(
             status_code=400,
-            detail=str(error),
-        ) from error
+            detail="At least one medicine item must be specified in the prescription order.",
+        )
 
-    # Duplicate check: check if identical active prescription exists
+    # 2. Comprehensive validation across all items BEFORE writing to DB
+    validated_items = []
     active_rx_ids = mongo_db.prescriptions.distinct(
         "_id",
         {"patient_id": patient["id"], "status": "ACTIVE"}
     )
-    if active_rx_ids:
-        duplicate = mongo_db.prescription_items.find_one({
-            "prescription_id": {"$in": active_rx_ids},
-            "medicine_id": medicine["id"],
-            "dose": request.dose.strip(),
-            "frequency": frequency,
-            "status": "ACTIVE",
+
+    seen_in_request = set()
+
+    for idx, med_input in enumerate(raw_medicines, start=1):
+        med_id = int(med_input["medicine_id"])
+        dose_str = str(med_input.get("dose") or "").strip()
+        route_str = str(med_input.get("route") or "Oral").strip()
+        freq_raw = str(med_input.get("frequency") or "ONCE_DAILY").strip()
+        canonical_freq = normalize_frequency(freq_raw)
+        dur_days = int(med_input.get("duration_days") or 1)
+        start_d = med_input["start_date"]
+        start_t = med_input["start_time"]
+        admin_times = med_input.get("administration_times") or []
+        is_stat = bool(med_input.get("is_stat", False))
+        instructions = med_input.get("instructions")
+
+        if not dose_str:
+            raise HTTPException(status_code=400, detail=f"Dose is required for medicine #{idx}.")
+
+        medicine = mongo_db.medicines.find_one({
+            "_id": med_id,
+            "is_active": active_filter(),
         })
-        if duplicate:
+        if medicine is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Medicine #{med_id} not found or inactive in the pharmacy catalogue.",
+            )
+
+        # Check duplicate inside current request
+        req_key = (med_id, dose_str.lower(), canonical_freq)
+        if req_key in seen_in_request:
             raise HTTPException(
                 status_code=409,
-                detail=f"An active prescription for {medicine.get('name')} ({request.dose}) already exists for this patient. Please review active regimens to avoid duplicate orders.",
+                detail=f"Duplicate entry for {medicine.get('name')} ({dose_str}) in the same prescription.",
             )
-    now = mongo_now()
+        seen_in_request.add(req_key)
 
+        # Check duplicate against existing active prescriptions in database
+        if active_rx_ids:
+            duplicate = mongo_db.prescription_items.find_one({
+                "prescription_id": {"$in": active_rx_ids},
+                "medicine_id": medicine["id"],
+                "dose": dose_str,
+                "frequency": canonical_freq,
+                "status": "ACTIVE",
+            })
+            if duplicate:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"An active prescription for {medicine.get('name')} ({dose_str}) already exists for this patient. Please review active regimens to avoid duplicate orders.",
+                )
+
+        # Validate schedule times generation
+        try:
+            schedule_times = generate_schedule_times(
+                start_date=start_d,
+                start_time=start_t,
+                duration_days=dur_days,
+                frequency=canonical_freq,
+                administration_times=admin_times,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{medicine.get('name')}: {str(error)}",
+            ) from error
+
+        validated_items.append({
+            "medicine": medicine,
+            "dose": dose_str,
+            "route": route_str,
+            "frequency": canonical_freq,
+            "duration_days": dur_days,
+            "start_date": start_d.isoformat() if hasattr(start_d, "isoformat") else str(start_d),
+            "start_time": start_t.isoformat() if hasattr(start_t, "isoformat") else str(start_t),
+            "administration_times": admin_times,
+            "is_stat": is_stat,
+            "instructions": instructions,
+            "schedule_times": schedule_times,
+        })
+
+    # 3. Transactional Write to MongoDB
+    now = mongo_now()
     prescription_id = next_mongo_id("prescriptions")
-    item_id = next_mongo_id("prescription_items")
 
     prescription = {
         "_id": prescription_id,
@@ -726,62 +818,97 @@ def create_prescription(
         "doctor_id": current_user.id,
         "status": "ACTIVE",
         "notes": request.notes,
+        "item_count": len(validated_items),
         "created_at": now,
         "updated_at": now,
     }
 
-    item = {
-        "_id": item_id,
-        "id": item_id,
-        "prescription_id": prescription_id,
-        "medicine_id": medicine["id"],
-        "dose": request.dose,
-        "route": request.route,
-        "frequency": frequency,
-        "duration_days": request.duration_days,
-        "start_date": request.start_date.isoformat(),
-        "start_time": request.start_time.isoformat(),
-        "is_stat": request.is_stat,
-        "instructions": request.instructions,
-        "status": "ACTIVE",
-        "created_at": now,
-        "updated_at": now,
-    }
-
+    created_item_ids = []
     created_schedule_ids = []
+    created_items_summary = []
+    all_schedules_for_notifs = []
 
     try:
         mongo_db.prescriptions.insert_one(prescription)
 
-        mongo_db.prescription_items.insert_one(item)
+        for v_item in validated_items:
+            item_id = next_mongo_id("prescription_items")
+            med_doc = v_item["medicine"]
 
-        schedule_records = []
-
-        for scheduled_datetime in schedule_times:
-            schedule_id = next_mongo_id(
-                "medication_schedules"
-            )
-
-            schedule = {
-                "_id": schedule_id,
-                "id": schedule_id,
-                "prescription_item_id": item_id,
-                "scheduled_date": scheduled_datetime.date().isoformat(),
-                "scheduled_time": scheduled_datetime.time().isoformat(),
-                "status": "UPCOMING",
-                "actual_administration_time": None,
-                "administered_by": None,
-                "notes": None,
+            db_item = {
+                "_id": item_id,
+                "id": item_id,
+                "prescription_id": prescription_id,
+                "medicine_id": med_doc["id"],
+                "medicine_name": med_doc.get("name"),
+                "dose": v_item["dose"],
+                "route": v_item["route"],
+                "frequency": v_item["frequency"],
+                "duration_days": v_item["duration_days"],
+                "start_date": v_item["start_date"],
+                "start_time": v_item["start_time"],
+                "administration_times": v_item["administration_times"],
+                "is_stat": v_item["is_stat"],
+                "instructions": v_item["instructions"],
+                "status": "ACTIVE",
                 "created_at": now,
                 "updated_at": now,
             }
+            mongo_db.prescription_items.insert_one(db_item)
+            created_item_ids.append(item_id)
 
-            schedule_records.append(schedule)
-            created_schedule_ids.append(schedule_id)
+            item_schedules = []
+            for s_time in v_item["schedule_times"]:
+                s_id = next_mongo_id("medication_schedules")
+                s_record = {
+                    "_id": s_id,
+                    "id": s_id,
+                    "prescription_id": prescription_id,
+                    "prescription_item_id": item_id,
+                    "patient_id": patient["id"],
+                    "medicine_id": med_doc["id"],
+                    "medicine_name": med_doc.get("name"),
+                    "dose": v_item["dose"],
+                    "route": v_item["route"],
+                    "scheduled_date": s_time.date().isoformat(),
+                    "scheduled_time": s_time.time().isoformat(),
+                    "status": "SCHEDULED",
+                    "is_stat": v_item["is_stat"],
+                    "instructions": v_item["instructions"],
+                    "actual_administration_time": None,
+                    "administered_by": None,
+                    "notes": None,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                item_schedules.append(s_record)
+                created_schedule_ids.append(s_id)
+                all_schedules_for_notifs.append(s_record)
 
-        if schedule_records:
-            mongo_db.medication_schedules.insert_many(
-                schedule_records
+            if item_schedules:
+                mongo_db.medication_schedules.insert_many(item_schedules)
+
+            created_items_summary.append({
+                "id": item_id,
+                "prescription_item_id": item_id,
+                "medicine_id": med_doc["id"],
+                "medicine_name": med_doc.get("name"),
+                "dose": v_item["dose"],
+                "route": v_item["route"],
+                "frequency": v_item["frequency"],
+                "duration_days": v_item["duration_days"],
+                "start_date": v_item["start_date"],
+                "start_time": v_item["start_time"],
+                "is_stat": v_item["is_stat"],
+                "instructions": v_item["instructions"],
+                "schedule_count": len(item_schedules),
+            })
+
+        # Generate 5-minute pre-dose nurse notification jobs for all schedules
+        if all_schedules_for_notifs:
+            create_notification_jobs_for_schedules(
+                schedules=all_schedules_for_notifs,
+                patient=patient,
             )
 
         # Handle inpatient admission & bed allocation if requested
@@ -833,48 +960,45 @@ def create_prescription(
 
     except HTTPException:
         if created_schedule_ids:
-            mongo_db.medication_schedules.delete_many({
-                "_id": {"$in": created_schedule_ids}
-            })
-        mongo_db.prescription_items.delete_one({"_id": item_id})
+            mongo_db.medication_schedules.delete_many({"_id": {"$in": created_schedule_ids}})
+            mongo_db.medication_notifications.delete_many({"medication_schedule_id": {"$in": created_schedule_ids}})
+        if created_item_ids:
+            mongo_db.prescription_items.delete_many({"_id": {"$in": created_item_ids}})
         mongo_db.prescriptions.delete_one({"_id": prescription_id})
         raise
     except Exception as exc:
         if created_schedule_ids:
-            mongo_db.medication_schedules.delete_many({
-                "_id": {"$in": created_schedule_ids}
-            })
-
-        mongo_db.prescription_items.delete_one({
-            "_id": item_id
-        })
-
-        mongo_db.prescriptions.delete_one({
-            "_id": prescription_id
-        })
-
+            mongo_db.medication_schedules.delete_many({"_id": {"$in": created_schedule_ids}})
+            mongo_db.medication_notifications.delete_many({"medication_schedule_id": {"$in": created_schedule_ids}})
+        if created_item_ids:
+            mongo_db.prescription_items.delete_many({"_id": {"$in": created_item_ids}})
+        mongo_db.prescriptions.delete_one({"_id": prescription_id})
         raise HTTPException(
             status_code=500,
-            detail="Prescription creation failed.",
+            detail=f"Prescription creation failed: {str(exc)}",
         ) from exc
 
+    first_item = created_items_summary[0] if created_items_summary else {}
     return {
-        "message": "Prescription created successfully.",
+        "message": f"Prescription created successfully with {len(created_items_summary)} medicine(s).",
         "prescription_id": prescription_id,
-        "prescription_item_id": item_id,
         "patient_id": patient["id"],
         "doctor_id": current_user.id,
-        "medicine_id": medicine["id"],
-        "medicine_name": medicine.get("name"),
-        "dose": item["dose"],
-        "route": item["route"],
-        "frequency": item["frequency"],
-        "duration_days": item["duration_days"],
-        "start_date": item["start_date"],
-        "start_time": item["start_time"],
-        "is_stat": item["is_stat"],
-        "schedule_count": len(schedule_records),
+        "medicine_count": len(created_items_summary),
+        "medicines": created_items_summary,
+        "schedule_count": len(created_schedule_ids),
         "bed_assignment": bed_info,
+        # Legacy fields for backward compatibility
+        "prescription_item_id": first_item.get("id"),
+        "medicine_id": first_item.get("medicine_id"),
+        "medicine_name": first_item.get("medicine_name"),
+        "dose": first_item.get("dose"),
+        "route": first_item.get("route"),
+        "frequency": first_item.get("frequency"),
+        "duration_days": first_item.get("duration_days"),
+        "start_date": first_item.get("start_date"),
+        "start_time": first_item.get("start_time"),
+        "is_stat": first_item.get("is_stat", False),
     }
 
 

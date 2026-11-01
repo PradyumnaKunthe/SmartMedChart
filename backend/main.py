@@ -1,5 +1,8 @@
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
+from app.services.notification_service import process_due_notifications, init_notification_indexes
 from app.routes import chat
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
@@ -17,10 +20,36 @@ from app.routes.monitoring import router as monitoring_router
 from app.routes.pharmacy import router as pharmacy_router
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_notification_indexes()
+    stop_event = asyncio.Event()
+
+    async def notification_worker():
+        while not stop_event.is_set():
+            try:
+                process_due_notifications()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                pass
+
+    worker_task = asyncio.create_task(notification_worker())
+    yield
+    stop_event.set()
+    try:
+        await asyncio.wait_for(worker_task, timeout=2.0)
+    except Exception:
+        pass
+
+
 app = FastAPI(
     title="SmartMedChart API",
     description="Hospital Medication Management System",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 

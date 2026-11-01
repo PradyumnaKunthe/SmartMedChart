@@ -1,7 +1,12 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from app.services.notification_service import (
+    get_nurse_notifications,
+    acknowledge_notification,
+)
 from pymongo import ReturnDocument
 
 from app.mongo_client import mongo_db
@@ -676,6 +681,200 @@ def get_nurse_history(
 
     for r in records:
         r["id"] = r.get("id", r.get("_id"))
+        if "_id" in r:
+            r["_id"] = str(r["_id"])
+
+    return records
+
+
+class MedicationHoldRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500, description="Clinical rationale for holding dose")
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post("/medications/{schedule_id}/hold")
+def hold_medication(
+    schedule_id: int,
+    request: MedicationHoldRequest,
+    current_user=Depends(require_permission("RECORD_MEDICATION_ADMINISTRATION")),
+):
+    """
+    Mark a scheduled medication dose as HELD with required clinical rationale.
+    """
+    schedule, item, prescription, patient, medicine, is_assigned = (
+        _get_nurse_schedule(
+            schedule_id,
+            current_user.id,
+            allow_override=True,
+        )
+    )
+
+    if schedule.get("status") in {"GIVEN", "GIVEN_ON_TIME", "GIVEN_LATE", "ADMINISTERED"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot hold a medication dose that has already been administered.",
+        )
+
+    now = _now_iso()
+    nurse_name = getattr(current_user, "full_name", None) or getattr(current_user, "username", f"Nurse #{current_user.id}")
+
+    hold_note = f"HELD: {request.reason.strip()}."
+    if request.notes:
+        hold_note += f" Notes: {request.notes.strip()}"
+
+    # Update schedule status to HELD
+    mongo_db.medication_schedules.update_one(
+        {"_id": int(schedule_id)},
+        {
+            "$set": {
+                "status": "HELD",
+                "notes": hold_note,
+                "administered_by": int(current_user.id),
+                "actual_administration_time": now,
+                "updated_at": now,
+            }
+        },
+    )
+
+    # Record in medication_administrations as HELD
+    admin_id = _next_administration_id()
+    patient_id = int(patient.get("id", patient.get("_id")))
+    admin_doc = {
+        "_id": admin_id,
+        "id": admin_id,
+        "medication_schedule_id": int(schedule_id),
+        "patient_id": patient_id,
+        "prescription_item_id": int(item.get("id", item.get("_id"))),
+        "medicine_id": int(medicine.get("id", medicine.get("_id"))),
+        "medicine_name": medicine.get("name"),
+        "scheduled_date": schedule.get("scheduled_date"),
+        "scheduled_time": schedule.get("scheduled_time"),
+        "administered_by": int(current_user.id),
+        "nurse_name": nurse_name,
+        "status": "HELD",
+        "administered_at": now,
+        "delay_minutes": 0.0,
+        "notes": hold_note,
+        "is_override": not is_assigned,
+        "created_at": now,
+        "updated_at": now,
+    }
+    mongo_db.medication_administrations.insert_one(admin_doc)
+
+    # Acknowledge open alerts and notifications
+    mongo_db.medication_alerts.update_many(
+        {"medication_schedule_id": int(schedule_id)},
+        {"$set": {"is_acknowledged": True, "acknowledged_by": int(current_user.id), "acknowledged_at": now}}
+    )
+    mongo_db.medication_notifications.update_many(
+        {"medication_schedule_id": int(schedule_id)},
+        {"$set": {"acknowledged": True, "read": True, "acknowledged_by": int(current_user.id), "acknowledged_at": now}}
+    )
+
+    return {
+        "message": "Medication held successfully.",
+        "schedule_id": int(schedule_id),
+        "status": "HELD",
+        "reason": request.reason.strip(),
+        "held_by": int(current_user.id),
+        "held_by_name": nurse_name,
+        "held_at": now,
+    }
+
+
+# =========================================================
+# 5-MINUTE PRE-DOSE NURSE NOTIFICATIONS
+# =========================================================
+
+@router.get("/notifications")
+def get_notifications(
+    unread_only: bool = Query(False, description="Filter unread notifications only"),
+    limit: int = Query(50, ge=1, le=200),
+    as_of: Optional[str] = Query(None, description="Optional ISO datetime override for test injection"),
+    current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
+):
+    """
+    Get 5-minute pre-dose medication notifications for the currently logged in nurse.
+    Dynamically delivers only to currently authorized and assigned nurse.
+    """
+    as_of_dt = None
+    if as_of:
+        try:
+            clean_str = as_of.replace("Z", "+00:00")
+            as_of_dt = datetime.fromisoformat(clean_str)
+            if as_of_dt.tzinfo:
+                as_of_dt = as_of_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+
+    user_role_name = getattr(getattr(current_user, "role", None), "name", "")
+    is_supervisor = user_role_name in {"Admin", "Head Nurse", "Supervisor"}
+
+    limit_val = limit if isinstance(limit, int) else (getattr(limit, "default", 50) if isinstance(getattr(limit, "default", None), int) else 50)
+    unread_val = unread_only if isinstance(unread_only, bool) else (getattr(unread_only, "default", False) if isinstance(getattr(unread_only, "default", None), bool) else False)
+
+    return get_nurse_notifications(
+        nurse_id=int(current_user.id),
+        is_supervisor=is_supervisor,
+        unread_only=unread_val,
+        limit=limit_val,
+        as_of_time=as_of_dt,
+    )
+
+
+@router.post("/notifications/{notification_id}/acknowledge")
+def acknowledge_nurse_notification(
+    notification_id: int,
+    current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
+):
+    """
+    Acknowledge a medication reminder notification.
+    NOTE: Acknowledging a reminder NEVER counts as medication administration!
+    """
+    result = acknowledge_notification(notification_id=notification_id, user=current_user)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/notifications/{notification_id}/read")
+def read_nurse_notification(
+    notification_id: int,
+    current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
+):
+    """Mark a notification as read."""
+    mongo_db.medication_notifications.update_one(
+        {"$or": [{"_id": int(notification_id)}, {"id": int(notification_id)}]},
+        {"$set": {"read": True, "read_at": _now_iso(), "updated_at": _now_iso()}},
+    )
+    return {"message": "Notification marked as read."}
+
+
+@router.get("/notifications/history")
+def get_notifications_history(
+    limit: int = Query(100, ge=1, le=500),
+    current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
+):
+    """
+    Get full medication notification history for the nurse.
+    """
+    user_role_name = getattr(getattr(current_user, "role", None), "name", "")
+    is_supervisor = user_role_name in {"Admin", "Head Nurse", "Supervisor"}
+
+    query = {}
+    if is_supervisor:
+        query = {"$or": [{"recipient_nurse_id": int(current_user.id)}, {"is_supervisor_alert": True}]}
+    else:
+        query = {"recipient_nurse_id": int(current_user.id)}
+
+    records = list(
+        mongo_db.medication_notifications.find(query)
+        .sort([("scheduled_datetime", -1), ("created_at", -1)])
+        .limit(limit)
+    )
+
+    for r in records:
+        r["id"] = int(r.get("id", r.get("_id")))
         if "_id" in r:
             r["_id"] = str(r["_id"])
 

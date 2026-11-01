@@ -207,10 +207,10 @@ def run_tests():
     print("\n[TEST 1B] Verifying medication_schedules in MongoDB...")
     created_schedules = list(mongo_db.medication_schedules.find({
         "prescription_item_id": rx_res["prescription_item_id"],
-        "status": "UPCOMING",
+        "status": {"$in": ["SCHEDULED", "UPCOMING"]},
     }))
-    assert len(created_schedules) == 6, f"Expected 6 UPCOMING schedules, found {len(created_schedules)}"
-    print(f"PASS: Verified {len(created_schedules)} UPCOMING medication schedules in MongoDB.")
+    assert len(created_schedules) == 6, f"Expected 6 active schedules, found {len(created_schedules)}"
+    print(f"PASS: Verified {len(created_schedules)} active medication schedules in MongoDB.")
 
     # Test 1C: Verify inventory NOT deducted on prescription creation
     print("\n[TEST 1C] Verifying inventory is NOT deducted on prescription creation...")

@@ -644,8 +644,8 @@ def create_hospital_patient(
                 detail=f"{field} is required."
             )
 
-    first_name = str(request["first_name"]).strip()
-    last_name = str(request["last_name"]).strip()
+    first_name = str(request["first_name"]).strip().upper()
+    last_name = str(request["last_name"]).strip().upper()
 
     gender = request.get("gender")
     gender = str(gender).strip() if gender else None
@@ -899,6 +899,7 @@ def create_hospital_patient(
             {
                 "$set": {
                     "is_occupied": True,
+                    "occupied_by_patient_id": patient_number,
                     "updated_at": now,
                 }
             }

@@ -1,0 +1,17 @@
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+*.db
+*.sqlite3
+mongodb_backup*
+generated_qr
+.git
+.gitignore
+.env
+

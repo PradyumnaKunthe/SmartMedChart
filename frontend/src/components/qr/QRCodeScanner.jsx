@@ -193,7 +193,7 @@ export default function QRCodeScanner({ onScanSuccess }) {
         } else {
           setError(
             lastError?.message ||
-              "Unable to open camera stream. Please verify camera permissions or use manual QR token input.",
+            "Unable to open camera stream. Please verify camera permissions or use manual QR token input.",
           )
         }
       }

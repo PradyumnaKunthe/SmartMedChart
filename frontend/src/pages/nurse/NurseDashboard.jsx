@@ -24,6 +24,10 @@ import {
   User,
   Users,
   Zap,
+  Bell,
+  BellRing,
+  CirclePause,
+  ExternalLink,
 } from "lucide-react"
 
 import MainLayout from "../../components/layout/MainLayout"
@@ -38,7 +42,12 @@ import {
   getNurseMedications,
   getNurseMedicationHistory,
   getNursePatients,
-} from "../../services/medications"
+  getNurseNotifications,
+  acknowledgeNurseNotification,
+  readNurseNotification,
+  getNurseNotificationsHistory,
+  holdMedication,
+} from "../../services/medications" 
 import { hideTestPatients } from "../../utils/patientFilter"
 
 function normalizeStatus(status) {
@@ -181,6 +190,22 @@ export default function NurseDashboard() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [selectedPatientModal, setSelectedPatientModal] = useState(null)
 
+  // 5-Minute Pre-Dose Notifications State
+  const [notifications, setNotifications] = useState([])
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false)
+  const [showNotifHistoryModal, setShowNotifHistoryModal] = useState(false)
+  const [notifHistoryList, setNotifHistoryList] = useState([])
+  const [notifLoading, setNotifLoading] = useState(false)
+
+  // Direct Hold Modal State
+  const [showHoldModal, setShowHoldModal] = useState(false)
+  const [holdingSchedule, setHoldingSchedule] = useState(null)
+  const [holdReason, setHoldReason] = useState("PHYSICIAN VERBAL ORDER")
+  const [customHoldReason, setCustomHoldReason] = useState("")
+  const [holdNotes, setHoldNotes] = useState("")
+  const [submittingHold, setSubmittingHold] = useState(false)
+  const [holdError, setHoldError] = useState("")
+
   async function loadMedications() {
     setLoading(true)
     setError("")
@@ -228,8 +253,119 @@ export default function NurseDashboard() {
     }
   }
 
+  async function loadNotifications() {
+    try {
+      const data = await getNurseNotifications({ unread_only: false, limit: 50 })
+      const list = Array.isArray(data) ? data : []
+      setNotifications(list)
+
+      // Trigger browser push notification if permitted and active unread reminders exist
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        const unread = list.filter((n) => !n.read)
+        if (unread.length > 0) {
+          const topNotif = unread[0]
+          try {
+            new Notification("SmartMedChart: 5-Minute Medication Reminder", {
+              body: `${topNotif.patient_name} — ${topNotif.medicine_name} (${topNotif.dose}) due in 5 mins at ${formatTime(topNotif.scheduled_time)} (${topNotif.ward_bed})`,
+              icon: "/vite.svg",
+            })
+          } catch {
+            // Browser push notification error handled gracefully
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load notifications:", err)
+    }
+  }
+
+  async function handleAcknowledgeNotification(notifId) {
+    try {
+      await acknowledgeNurseNotification(notifId)
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notifId ? { ...n, acknowledged: true, read: true } : n))
+      )
+    } catch (err) {
+      console.error("Failed to acknowledge notification:", err)
+    }
+  }
+
+  async function handleReadNotification(notifId) {
+    try {
+      await readNurseNotification(notifId)
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notifId ? { ...n, read: true } : n))
+      )
+    } catch (err) {
+      console.error("Failed to mark notification read:", err)
+    }
+  }
+
+  async function loadNotifHistory() {
+    setNotifLoading(true)
+    try {
+      const data = await getNurseNotificationsHistory(100)
+      setNotifHistoryList(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error("Failed to load notification history:", err)
+    } finally {
+      setNotifLoading(false)
+    }
+  }
+
+  function openHoldModal(schedule) {
+    setHoldingSchedule(schedule)
+    setHoldReason("PHYSICIAN VERBAL ORDER")
+    setCustomHoldReason("")
+    setHoldNotes("")
+    setHoldError("")
+    setShowHoldModal(true)
+  }
+
+  async function handleConfirmHold(e) {
+    e.preventDefault()
+    if (!holdingSchedule) return
+
+    const finalReason = holdReason === "OTHER" ? customHoldReason.trim() : holdReason
+    if (!finalReason) {
+      setHoldError("Please specify a clinical rationale for holding this medication.")
+      return
+    }
+
+    setSubmittingHold(true)
+    setHoldError("")
+    try {
+      await holdMedication(holdingSchedule.id, {
+        reason: finalReason,
+        notes: holdNotes.trim() || null,
+      })
+      setShowHoldModal(false)
+      setHoldingSchedule(null)
+      await loadMedications()
+      await loadNotifications()
+    } catch (err) {
+      setHoldError(err?.response?.data?.detail || "Failed to hold medication.")
+    } finally {
+      setSubmittingHold(false)
+    }
+  }
+
+  function requestBrowserPushPermission() {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      Notification.requestPermission()
+    }
+  }
+
   useEffect(() => {
     loadMedications()
+    loadNotifications()
+
+    // 15-second background polling for 5-minute pre-dose reminders
+    const interval = setInterval(() => {
+      loadNotifications()
+    }, 15000)
+
+    return () => clearInterval(interval)
   }, [])
 
   function togglePatient(key) {
@@ -393,6 +529,19 @@ export default function NurseDashboard() {
               </Button>
               <Button
                 variant="outline"
+                icon={BellRing}
+                className="border-white/30 text-white hover:bg-white/10 backdrop-blur-sm relative"
+                onClick={() => setShowNotificationsModal(true)}
+              >
+                <span>5-Min Reminders</span>
+                {notifications.filter((n) => !n.read).length > 0 && (
+                  <span className="ml-1.5 px-2 py-0.5 text-xs font-black bg-rose-500 text-white rounded-full animate-bounce">
+                    {notifications.filter((n) => !n.read).length}
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant="outline"
                 icon={History}
                 className="border-white/30 text-white hover:bg-white/10 backdrop-blur-sm"
                 onClick={() => {
@@ -414,6 +563,57 @@ export default function NurseDashboard() {
             </div>
           </div>
         </div>
+
+        {/* 5-Minute Pre-Dose Medication Reminder Banner */}
+        {notifications.filter((n) => !n.acknowledged).length > 0 && (
+          <div className="p-4 bg-gradient-to-r from-sky-500/15 via-sky-500/5 to-transparent border-l-4 border-sky-600 rounded-r-2xl flex flex-wrap items-center justify-between gap-4 animate-fade-in shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                <BellRing className="w-5 h-5 animate-bounce" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black tracking-wider uppercase text-sky-900 bg-sky-100 px-2 py-0.5 rounded">
+                    MEDICATION REMINDER (DUE IN 5 MINUTES)
+                  </span>
+                  <span className="text-xs text-slate-500 font-semibold">
+                    {notifications.filter((n) => !n.acknowledged).length} active reminder(s)
+                  </span>
+                </div>
+                <p className="text-sm font-bold text-slate-900 mt-0.5">
+                  Patient: {notifications.filter((n) => !n.acknowledged)[0].patient_name} (ID: {notifications.filter((n) => !n.acknowledged)[0].patient_code}) · {notifications.filter((n) => !n.acknowledged)[0].ward_bed} · {notifications.filter((n) => !n.acknowledged)[0].medicine_name} ({notifications.filter((n) => !n.acknowledged)[0].dose}, {notifications.filter((n) => !n.acknowledged)[0].route}) due at {formatTime(notifications.filter((n) => !n.acknowledged)[0].scheduled_time)}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() =>
+                  navigate(`/nurse/medications/${notifications.filter((n) => !n.acknowledged)[0].medication_schedule_id}`)
+                }
+              >
+                VIEW MEDICATION
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  handleAcknowledgeNotification(notifications.filter((n) => !n.acknowledged)[0].id)
+                }
+              >
+                Acknowledge
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowNotificationsModal(true)}
+              >
+                View All ({notifications.length})
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Global Error Banner */}
         {error && (
@@ -841,25 +1041,51 @@ export default function NurseDashboard() {
                                   </div>
                                 </div>
 
-                                <Button
-                                  size="sm"
-                                  variant={
-                                    schedule.monitoring_status === "DUE" ||
-                                    schedule.monitoring_status === "OVERDUE" ||
-                                    normalizeStatus(schedule.status) === "UPCOMING"
-                                      ? "primary"
-                                      : "outline"
-                                  }
-                                  onClick={() =>
-                                    navigate(`/nurse/medications/${schedule.id}`)
-                                  }
-                                >
-                                  {schedule.monitoring_status === "DUE" ||
-                                  schedule.monitoring_status === "OVERDUE" ||
-                                  normalizeStatus(schedule.status) === "UPCOMING"
-                                    ? "Administer"
-                                    : "View"}
-                                </Button>
+                                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                                  {notifications.some((n) => n.medication_schedule_id === schedule.id) && (
+                                    <span className="text-[10px] font-bold bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                      <Bell className="w-3 h-3 text-sky-600" /> 5m Alert
+                                    </span>
+                                  )}
+
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-xs text-slate-600 hover:text-slate-900"
+                                    onClick={() => navigate(`/nurse/medications/${schedule.id}`)}
+                                  >
+                                    View Medication
+                                  </Button>
+
+                                  {normalizeStatus(schedule.status) !== "GIVEN" &&
+                                    normalizeStatus(schedule.status) !== "HELD" && (
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="text-xs text-orange-600 border-orange-200 hover:bg-orange-50"
+                                          onClick={() => openHoldModal(schedule)}
+                                        >
+                                          Mark as Held
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant={
+                                            schedule.monitoring_status === "DUE" ||
+                                            schedule.monitoring_status === "OVERDUE" ||
+                                            normalizeStatus(schedule.status) === "UPCOMING"
+                                              ? "primary"
+                                              : "outline"
+                                          }
+                                          onClick={() =>
+                                            navigate(`/nurse/medications/${schedule.id}/administration`)
+                                          }
+                                        >
+                                          Mark as Administered
+                                        </Button>
+                                      </>
+                                    )}
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1060,6 +1286,294 @@ export default function NurseDashboard() {
                   Verify Patient QR
                 </Button>
               </div>
+            </div>
+          )}
+        </Modal>
+        {/* MODAL: 5-Minute Pre-Dose Medication Reminders Drawer */}
+        <Modal
+          open={showNotificationsModal}
+          onClose={() => setShowNotificationsModal(false)}
+          title="5-Minute Pre-Dose Medication Reminders"
+          subtitle="Automatic alerts delivered 5 minutes before scheduled dose administration"
+          maxWidth="max-w-3xl"
+        >
+          <div className="space-y-4 p-2">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <span className="text-xs text-slate-500">
+                Active reminders for your assigned patients: <strong>{notifications.length}</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setShowNotificationsModal(false)
+                    setShowNotifHistoryModal(true)
+                    loadNotifHistory()
+                  }}
+                >
+                  Notification History
+                </Button>
+                {typeof window !== "undefined" && "Notification" in window && Notification.permission !== "granted" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={requestBrowserPushPermission}
+                  >
+                    Enable Browser Push
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {notifications.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 text-sm">
+                No medication reminders pending at this time. Reminders appear 5 minutes before scheduled dose times.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {notifications.map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`p-4 rounded-2xl border transition-all ${
+                      notif.acknowledged
+                        ? "bg-slate-50 border-slate-200 opacity-75"
+                        : "bg-sky-50/70 border-sky-200 ring-1 ring-sky-300"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-900">
+                            {notif.patient_name}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                            {notif.patient_code}
+                          </span>
+                          <span className="text-xs text-sky-800 font-semibold">
+                            {notif.ward_bed}
+                          </span>
+                        </div>
+
+                        <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                          <Pill className="w-4 h-4 text-sky-600" />
+                          <span>{notif.medicine_name}</span>
+                          <span className="text-xs text-slate-600 font-normal">
+                            ({notif.dose} · {notif.route})
+                          </span>
+                        </div>
+
+                        <div className="text-xs text-slate-600 flex items-center gap-2">
+                          <Clock className="w-3.5 h-3.5 text-slate-400" />
+                          <span>Scheduled Dose: <strong>{formatTime(notif.scheduled_time)}</strong></span>
+                          <span>•</span>
+                          <span className="text-sky-700 font-medium">Alert issued at {formatTime(notif.notification_time)}</span>
+                        </div>
+
+                        <p className="text-xs text-sky-950 font-medium italic mt-1">
+                          "{notif.message}"
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => {
+                            setShowNotificationsModal(false)
+                            navigate(`/nurse/medications/${notif.medication_schedule_id}`)
+                          }}
+                        >
+                          VIEW MEDICATION
+                        </Button>
+                        {!notif.acknowledged && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleAcknowledgeNotification(notif.id)}
+                          >
+                            Acknowledge
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Modal>
+
+        {/* MODAL: Direct Hold Medication */}
+        <Modal
+          open={showHoldModal}
+          onClose={() => {
+            if (!submittingHold) {
+              setShowHoldModal(false)
+              setHoldingSchedule(null)
+            }
+          }}
+          title="Hold Scheduled Medication"
+          subtitle="Document a clinical hold with mandatory clinical justification"
+          maxWidth="max-w-lg"
+        >
+          {holdingSchedule && (
+            <form onSubmit={handleConfirmHold} className="space-y-4 p-2">
+              {holdError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+                  {holdError}
+                </div>
+              )}
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1 text-xs">
+                <div className="font-bold text-slate-900 text-sm">
+                  {holdingSchedule.medicine_name} ({holdingSchedule.dosage || holdingSchedule.dose})
+                </div>
+                <div className="text-slate-600">
+                  Patient: {holdingSchedule.patient_name || `#${holdingSchedule.patient_id}`} · Scheduled for {formatTime(holdingSchedule.scheduled_time)}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Clinical Hold Rationale <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={holdReason}
+                  onChange={(e) => setHoldReason(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                >
+                  <option value="PHYSICIAN VERBAL ORDER">PHYSICIAN VERBAL ORDER TO HOLD</option>
+                  <option value="NPO FOR PROCEDURE">NPO STATUS / FASTING FOR PROCEDURE</option>
+                  <option value="PATIENT TEMPORARILY OFF-UNIT">PATIENT TEMPORARILY OFF-UNIT (DIALYSIS/TESTING)</option>
+                  <option value="VITAL SIGNS ABNORMALITY">HEMODYNAMIC / VITAL SIGNS ABNORMALITY</option>
+                  <option value="ADVERSE REACTION CONCERN">ADVERSE REACTION / ALLERGY CONCERN</option>
+                  <option value="PATIENT REFUSAL">PATIENT DECLINED / REFUSED DOSE</option>
+                  <option value="OTHER">OTHER CLINICAL REASON (SPECIFY BELOW)</option>
+                </select>
+              </div>
+
+              {holdReason === "OTHER" && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Specific Reason <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter clinical rationale..."
+                    value={customHoldReason}
+                    onChange={(e) => setCustomHoldReason(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 uppercase"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Clinical Documentation Notes (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Additional observations or physician communication details..."
+                  value={holdNotes}
+                  onChange={(e) => setHoldNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-none"
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowHoldModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  loading={submittingHold}
+                  className="bg-orange-600 hover:bg-orange-700 text-white"
+                >
+                  Confirm Hold
+                </Button>
+              </div>
+            </form>
+          )}
+        </Modal>
+
+        {/* MODAL: Full Notification History */}
+        <Modal
+          open={showNotifHistoryModal}
+          onClose={() => setShowNotifHistoryModal(false)}
+          title="Medication Reminder Notification History"
+          subtitle="Audit log of all 5-minute pre-dose notifications delivered to nursing"
+          maxWidth="max-w-4xl"
+        >
+          {notifLoading ? (
+            <div className="p-8">
+              <Loading message="Loading notification history..." />
+            </div>
+          ) : notifHistoryList.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-sm">
+              No historical notifications found.
+            </div>
+          ) : (
+            <div className="overflow-x-auto text-xs">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase">
+                    <th className="p-3">Alert Time</th>
+                    <th className="p-3">Scheduled Dose</th>
+                    <th className="p-3">Patient</th>
+                    <th className="p-3">Medication</th>
+                    <th className="p-3">Recipient RN</th>
+                    <th className="p-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {notifHistoryList.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="p-3 font-semibold text-slate-700 whitespace-nowrap">
+                        {formatTime(item.notification_time)}
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
+                        <span className="font-bold text-sky-800">{formatTime(item.scheduled_time)}</span>
+                        <div className="text-[10px] text-slate-400">{item.scheduled_date}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">{item.patient_name}</div>
+                        <div className="text-[10px] text-slate-500">{item.patient_code} · {item.ward_bed}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-bold text-slate-900">{item.medicine_name}</div>
+                        <div className="text-[10px] text-slate-500">{item.dose} · {item.route}</div>
+                      </td>
+                      <td className="p-3">
+                        {item.is_supervisor_alert ? (
+                          <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                            Supervisor Alert (No RN Assigned)
+                          </span>
+                        ) : (
+                          <div className="font-medium text-slate-800">{item.recipient_nurse_name || "Assigned RN"}</div>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        {item.acknowledged ? (
+                          <Badge variant="success" size="sm">Acknowledged</Badge>
+                        ) : item.read ? (
+                          <Badge variant="neutral" size="sm">Read</Badge>
+                        ) : (
+                          <Badge variant="primary" size="sm">Unread</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </Modal>
