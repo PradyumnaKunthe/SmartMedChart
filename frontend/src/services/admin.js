@@ -1,4 +1,7 @@
 import api from "./api"
+import { getHospitalDoctors } from "./hospital"
+
+export { getHospitalDoctors }
 
 
 // =========================================================
@@ -339,21 +342,6 @@ export async function generatePatientQR(
 // Compatibility aliases
 export const generatePatientQr =
   generatePatientQR
-
-
-// =========================================================
-// HOSPITAL DOCTORS
-// =========================================================
-// Doctors shown in Add Patient are loaded from
-// active registered Doctor accounts.
-
-export async function getHospitalDoctors() {
-  const response = await api.get(
-    "/api/hospital/doctors",
-  )
-
-  return response.data
-}
 
 
 // =========================================================
