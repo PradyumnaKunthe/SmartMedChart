@@ -9,6 +9,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.mongo_client import mongo_db
 from app.security import get_current_user, require_permission
+from app.schemas.patient_registration import PatientRegistrationRequest
 
 
 router = APIRouter(
@@ -602,11 +603,16 @@ def get_registration_ward_beds(
 
 @router.post("/patients")
 def create_hospital_patient(
-    request: dict,
+    request: PatientRegistrationRequest,
     current_user=Depends(
         require_patient_registration_permission
     ),
 ):
+    # FastAPI supplies the typed Pydantic model in normal HTTP requests.
+    # Keep direct dictionary calls working for the existing integration tests.
+    if isinstance(request, PatientRegistrationRequest):
+        request = request.model_dump(exclude_unset=True)
+
     # Support full_name shorthand
     if "full_name" in request and (not request.get("first_name") or not request.get("last_name")):
         raw_full = str(request["full_name"]).strip()
