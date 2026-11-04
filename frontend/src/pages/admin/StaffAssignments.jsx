@@ -44,6 +44,7 @@ import {
   removePatientAssignment,
   removePatientFromDoctor,
 } from "../../services/admin"
+import { getApiErrorMessage } from "../../services/api"
 
 export default function StaffAssignments() {
   const [activeTab, setActiveTab] = useState("assignments") // 'assignments', 'assign_new', 'add_staff'
@@ -127,8 +128,10 @@ export default function StaffAssignments() {
     } catch (err) {
       console.error("Load assignments error:", err)
       setError(
-        err?.response?.data?.detail ||
+        getApiErrorMessage(
+          err,
           "Unable to load staff and assignments data.",
+        ),
       )
     } finally {
       setLoading(false)
@@ -140,6 +143,23 @@ export default function StaffAssignments() {
     loadData()
   }, [])
 
+  // Auto-dismiss transient notifications
+  useEffect(() => {
+    if (!successMessage) return
+    const timer = setTimeout(() => {
+      setSuccessMessage("")
+    }, 8000)
+    return () => clearTimeout(timer)
+  }, [successMessage])
+
+  useEffect(() => {
+    if (!errorMessage) return
+    const timer = setTimeout(() => {
+      setErrorMessage("")
+    }, 8000)
+    return () => clearTimeout(timer)
+  }, [errorMessage])
+
   // Create Staff
   async function handleCreateStaff(e) {
     e.preventDefault()
@@ -147,16 +167,49 @@ export default function StaffAssignments() {
     setSuccessMessage("")
     setErrorMessage("")
 
+    const fullName = staffForm.full_name.trim()
+    const username = staffForm.username.trim()
+    const email = staffForm.email.trim()
+    const password = staffForm.password
+    const role = staffForm.role
+
+    if (!fullName || !username || !email || !password || !role) {
+      setErrorMessage("All fields are required to create a staff account.")
+      setSavingStaff(false)
+      return
+    }
+
+    if (password.length < 8) {
+      setErrorMessage("Password must be at least 8 characters long.")
+      setSavingStaff(false)
+      return
+    }
+
     try {
-      const result = await createStaff(
-        staffForm.full_name.trim(),
-        staffForm.username.trim(),
-        staffForm.email.trim(),
-        staffForm.password,
-        staffForm.role,
+      const payload = {
+        full_name: fullName,
+        username,
+        email,
+        password,
+        role,
+      }
+
+      const result = await createStaff(payload)
+
+      const roleLabel =
+        role === "doctor"
+          ? "Doctor"
+          : role === "nurse"
+          ? "Nurse"
+          : role === "receptionist"
+          ? "Receptionist"
+          : "Staff"
+
+      setSuccessMessage(
+        result?.message || `${roleLabel} account registered successfully.`,
       )
 
-      setSuccessMessage(result?.message || "Staff account created successfully.")
+      // Clear the form only after successful registration
       setStaffForm({
         full_name: "",
         username: "",
@@ -165,11 +218,14 @@ export default function StaffAssignments() {
         role: "nurse",
       })
 
-      // Reload
+      // Refresh staff, doctor, nurse, and assignment rosters without page reload
       await loadData(true)
-      setActiveTab("assignments")
+
+      // Keep administrator on /admin/staff and on the creation tab
     } catch (err) {
-      setErrorMessage(err?.response?.data?.detail || "Unable to create staff.")
+      setErrorMessage(
+        getApiErrorMessage(err, "Unable to create staff account."),
+      )
     } finally {
       setSavingStaff(false)
     }
@@ -198,7 +254,7 @@ export default function StaffAssignments() {
       await loadData(true)
       setActiveTab("assignments")
     } catch (err) {
-      setErrorMessage(err?.response?.data?.detail || "Unable to assign nurse.")
+      setErrorMessage(getApiErrorMessage(err, "Unable to assign nurse."))
     } finally {
       setAssigningNurse(false)
     }
@@ -227,7 +283,7 @@ export default function StaffAssignments() {
       await loadData(true)
       setActiveTab("assignments")
     } catch (err) {
-      setErrorMessage(err?.response?.data?.detail || "Unable to assign doctor.")
+      setErrorMessage(getApiErrorMessage(err, "Unable to assign doctor."))
     } finally {
       setAssigningDoctor(false)
     }
@@ -243,7 +299,7 @@ export default function StaffAssignments() {
       setSuccessMessage("Nurse assignment removed.")
       await loadData(true)
     } catch (err) {
-      alert(err?.response?.data?.detail || "Unable to remove assignment.")
+      setErrorMessage(getApiErrorMessage(err, "Unable to remove assignment."))
     } finally {
       setRemovingId(null)
     }
@@ -259,7 +315,7 @@ export default function StaffAssignments() {
       setSuccessMessage("Doctor encounter assignment removed.")
       await loadData(true)
     } catch (err) {
-      alert(err?.response?.data?.detail || "Unable to remove doctor assignment.")
+      setErrorMessage(getApiErrorMessage(err, "Unable to remove doctor assignment."))
     } finally {
       setDoctorRemovingId(null)
     }
@@ -839,6 +895,38 @@ export default function StaffAssignments() {
               </div>
             </div>
 
+            {successMessage && (
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-800 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{successMessage}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSuccessMessage("")}
+                  className="text-emerald-600 hover:text-emerald-900"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {errorMessage && (
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-800 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>{errorMessage}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setErrorMessage("")}
+                  className="text-rose-600 hover:text-rose-900"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
             <form onSubmit={handleCreateStaff} className="mt-6 space-y-4">
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
@@ -881,6 +969,7 @@ export default function StaffAssignments() {
                   >
                     <option value="nurse">Nurse</option>
                     <option value="doctor">Doctor</option>
+                    <option value="receptionist">Receptionist</option>
                   </select>
                 </div>
               </div>
@@ -906,10 +995,10 @@ export default function StaffAssignments() {
                 <input
                   type="password"
                   required
-                  minLength={6}
+                  minLength={8}
                   value={staffForm.password}
                   onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
-                  placeholder="Minimum 6 characters"
+                  placeholder="Minimum 8 characters"
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:border-sky-500 focus:bg-white focus:ring-2 focus:ring-sky-100"
                 />
               </div>

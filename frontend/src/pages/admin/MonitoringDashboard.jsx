@@ -33,6 +33,7 @@ import {
   getDoctorWorkload,
   getNurseWorkload,
 } from "../../services/admin"
+import { getApiErrorMessage } from "../../services/api"
 
 // =========================================================
 // HELPERS
@@ -327,8 +328,10 @@ export default function MonitoringDashboard() {
     } catch (requestError) {
       console.error("Workload loading error:", requestError)
       setError(
-        requestError?.response?.data?.detail ||
+        getApiErrorMessage(
+          requestError,
           "Unable to load clinical staff workload data. Check server connectivity.",
+        ),
       )
     } finally {
       setLoading(false)

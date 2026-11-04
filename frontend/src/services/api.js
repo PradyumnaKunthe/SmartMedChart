@@ -92,4 +92,56 @@ api.interceptors.response.use(
   },
 )
 
+/**
+ * Safely extracts a clean, human-readable string from any API error or Axios response.
+ * Handles FastAPI 422 arrays of validation objects, { detail: "..." }, { detail: [...] }, network errors, etc.
+ * Never returns raw objects or arrays of objects, preventing React child rendering crashes.
+ */
+export function getApiErrorMessage(error, fallback = "An unexpected error occurred.") {
+  if (!error) return fallback
+
+  const responseData = error?.response?.data
+  const detail = responseData?.detail ?? responseData?.message ?? error?.message
+
+  if (!detail) return fallback
+
+  if (typeof detail === "string") {
+    return detail.trim() || fallback
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (!item) return ""
+        if (typeof item === "string") return item.trim()
+        if (typeof item === "object") {
+          // FastAPI validation shape: { loc: ["body", "field"], msg: "...", type: "..." }
+          const field = Array.isArray(item.loc)
+            ? item.loc.filter((part) => part !== "body" && part !== "query").join(" ")
+            : ""
+          const msg = item.msg || item.message || "Invalid input"
+          return field ? `${field}: ${msg}` : msg
+        }
+        return String(item)
+      })
+      .filter(Boolean)
+
+    if (messages.length > 0) {
+      return messages.join(". ")
+    }
+  }
+
+  if (typeof detail === "object") {
+    if (detail.msg) return String(detail.msg)
+    if (detail.message) return String(detail.message)
+    try {
+      return JSON.stringify(detail)
+    } catch {
+      return fallback
+    }
+  }
+
+  return String(detail)
+}
+
 export default api

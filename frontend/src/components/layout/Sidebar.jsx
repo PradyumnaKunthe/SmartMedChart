@@ -5,7 +5,6 @@ import {
   Building2,
   CalendarCheck,
   ClipboardList,
-  HeartPulse,
   History,
   LayoutDashboard,
   LogOut,
@@ -160,12 +159,6 @@ export default function Sidebar() {
         label: "Patient QR Generator",
         icon: QrCode,
         path: "/admin/qr",
-      },
-      {
-        label: "Hospital Portal",
-        icon: HeartPulse,
-  History,
-        path: "/hospital/dashboard",
       },
     )
   }

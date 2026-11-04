@@ -446,8 +446,8 @@ def get_hospital_doctors(
 
     doctors = list(
         mongo_db.users.find({
-            "role_id": role["id"],
-            "is_active": {"$in": [True, 1]},
+            "role_id": {"$in": [role.get("id"), role.get("_id"), 1]},
+            "is_active": {"$in": [True, 1, "true", "1"]},
         }).sort("full_name", 1)
     )
 

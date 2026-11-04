@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   StopCircle,
   TrendingUp,
+  UserCheck,
   UserRound,
   XCircle,
 } from "lucide-react"
@@ -49,6 +50,7 @@ import {
   getCurrentMedications,
   getPrescriptionHistory,
   getDoctorPatientAssessments,
+  getPatientAssignedNurse,
   stopPrescription,
   createPatientAllergy,
   deletePatientAllergy,
@@ -69,6 +71,41 @@ function formatDate(value) {
   }
 }
 
+function formatDateTime(value) {
+  if (!value) return "—"
+  try {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return String(value)
+    return new Intl.DateTimeFormat("en-IN", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d)
+  } catch {
+    return String(value)
+  }
+}
+
+function getRxStatusInfo(rx) {
+  const status = String(
+    rx.status || rx.prescription_status || (rx.is_active !== false ? "ACTIVE" : "STOPPED")
+  ).toUpperCase()
+  switch (status) {
+    case "ACTIVE":
+      return { status, variant: "success", label: "Active Prescription", isActive: true }
+    case "SUPERSEDED":
+      return { status, variant: "warning", label: "Superseded / Replaced", isActive: false }
+    case "STOPPED":
+      return { status, variant: "danger", label: "Stopped Regimen", isActive: false }
+    case "COMPLETED":
+      return { status, variant: "neutral", label: "Completed", isActive: false }
+    default:
+      return { status, variant: "neutral", label: status, isActive: false }
+  }
+}
+
 function getSeverityBadge(severity) {
   const s = String(severity || "").toUpperCase()
   if (s === "SEVERE" || s === "HIGH") return "danger"
@@ -85,6 +122,7 @@ export default function PatientProfile() {
   const [medications, setMedications] = useState([])
   const [prescriptions, setPrescriptions] = useState([])
   const [assessments, setAssessments] = useState([])
+  const [assignedNurse, setAssignedNurse] = useState(null)
 
   const [activeTab, setActiveTab] = useState("medications") // 'medications', 'prescriptions', 'allergies', 'summary'
   const [loading, setLoading] = useState(true)
@@ -181,13 +219,14 @@ export default function PatientProfile() {
     setError("")
 
     try {
-      const [patientData, allergyData, medicationData, prescriptionData, assessmentData] =
+      const [patientData, allergyData, medicationData, prescriptionData, assessmentData, assignedNurseData] =
         await Promise.all([
           getDoctorPatient(patientId),
           getPatientAllergies(patientId),
           getCurrentMedications(patientId),
           getPrescriptionHistory(patientId),
           getDoctorPatientAssessments(patientId).catch(() => []),
+          getPatientAssignedNurse(patientId).catch(() => null),
         ])
 
       setPatient(patientData)
@@ -195,6 +234,7 @@ export default function PatientProfile() {
       setMedications(Array.isArray(medicationData) ? medicationData : [])
       setPrescriptions(Array.isArray(prescriptionData) ? prescriptionData : [])
       setAssessments(Array.isArray(assessmentData) ? assessmentData : [])
+      setAssignedNurse(assignedNurseData?.assigned_nurse || null)
     } catch (requestError) {
       setError(
         requestError?.response?.data?.detail ||
@@ -220,9 +260,20 @@ export default function PatientProfile() {
   }
 
   function handleEditPrescription(prescription) {
+    const rxId = prescription.prescription_id || prescription.id
     navigate(
-      `/doctor/prescriptions/${prescription.prescription_id}/edit?patient=${patient.id}`,
+      `/doctor/prescriptions/${rxId}/edit?patient=${patient.id}`,
     )
+  }
+
+  function handleReplacePrescription(prescription) {
+    if (patient && (!patient.is_active || patient.lifecycle_status === "DISCHARGED")) {
+      alert("Cannot replace prescription for a discharged patient.")
+      return
+    }
+    const targetId = patient?.id || patientId
+    const rxId = prescription.prescription_id || prescription.id
+    navigate(`/doctor/prescriptions/create?patient=${targetId}&replaces=${rxId}`)
   }
 
   async function handleStopPrescription(prescriptionId) {
@@ -397,6 +448,20 @@ export default function PatientProfile() {
                   <span className="flex items-center gap-1 font-semibold text-slate-700">
                     <Building2 className="h-3.5 w-3.5 text-slate-400" />
                     {patient.bed_id ? `Bed ${patient.bed_id}` : "No Ward Bed Assigned"}
+                  </span>
+                  <span>·</span>
+                  <span className="flex items-center gap-1 font-semibold text-slate-700">
+                    <UserCheck className="h-3.5 w-3.5 text-teal-600" />
+                    {assignedNurse ? (
+                      <span>
+                        Assigned Nurse: <strong className="text-slate-900">{assignedNurse.nurse_name}</strong>
+                        {assignedNurse.nurse_username && (
+                          <span className="text-slate-500 font-mono"> (@{assignedNurse.nurse_username})</span>
+                        )}
+                      </span>
+                    ) : (
+                      "No Nurse Assigned"
+                    )}
                   </span>
                 </div>
               </div>
@@ -657,41 +722,65 @@ export default function PatientProfile() {
             ) : (
               <div className="space-y-4">
                 {prescriptions.map((rx) => {
-                  const isActiveRx = rx.is_active !== false
-                  const items = Array.isArray(rx.items) ? rx.items : []
-                  const isStopping = stoppingId === rx.prescription_id
+                  const rxId = rx.prescription_id || rx.id
+                  const statusInfo = getRxStatusInfo(rx)
+                  const isActiveRx = statusInfo.isActive
+                  const items = Array.isArray(rx.items) && rx.items.length > 0
+                    ? rx.items
+                    : (rx.medicine_name ? [rx] : [])
+                  const isStopping = stoppingId === rxId
 
                   return (
                     <div
-                      key={rx.prescription_id}
+                      key={rxId}
                       className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs transition hover:border-sky-300"
                     >
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-100">
                         <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 font-bold">
+                          <div className={`flex h-10 w-10 items-center justify-center rounded-xl font-bold ${
+                            isActiveRx
+                              ? "bg-indigo-50 text-indigo-600"
+                              : statusInfo.status === "SUPERSEDED"
+                              ? "bg-amber-50 text-amber-600"
+                              : statusInfo.status === "STOPPED"
+                              ? "bg-rose-50 text-rose-600"
+                              : "bg-slate-100 text-slate-500"
+                          }`}>
                             <ClipboardList className="h-5 w-5" />
                           </div>
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               <span className="font-mono text-xs font-bold text-slate-600">
-                                #{rx.prescription_id}
+                                #{rxId}
                               </span>
                               <Badge
-                                variant={isActiveRx ? "success" : "neutral"}
+                                variant={statusInfo.variant}
                                 size="sm"
                                 dot
                               >
-                                {isActiveRx ? "Active Prescription" : "Stopped / Inactive"}
+                                {statusInfo.label}
                               </Badge>
+                              {rx.replaces_prescription_id && (
+                                <span className="text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                                  Replaces #{rx.replaces_prescription_id}
+                                </span>
+                              )}
+                              {rx.superseded_by && (
+                                <span className="text-[11px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                                  Superseded by #{rx.superseded_by}
+                                </span>
+                              )}
                             </div>
-                            <p className="text-xs text-slate-400 mt-0.5">
-                              Ordered on {formatDate(rx.start_date || rx.created_at)} · Doctor ID: {rx.doctor_id}
+                            <p className="text-xs text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span>Issued {formatDateTime(rx.created_at || rx.start_date)}</span>
+                              <span>·</span>
+                              <span>Prescribing Doctor: <strong className="font-semibold text-slate-600">{rx.doctor_name || `Dr. ID #${rx.doctor_id}`}</strong></span>
                             </p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
-                          {isActiveRx && (
+                          {isActiveRx ? (
                             <>
                               <Button
                                 variant="secondary"
@@ -702,15 +791,27 @@ export default function PatientProfile() {
                                 Edit Rx
                               </Button>
                               <Button
+                                variant="outline"
+                                size="sm"
+                                icon={RefreshCw}
+                                onClick={() => handleReplacePrescription(rx)}
+                              >
+                                Replace Rx
+                              </Button>
+                              <Button
                                 variant="danger"
                                 size="sm"
                                 icon={StopCircle}
                                 loading={isStopping}
-                                onClick={() => handleStopPrescription(rx.prescription_id)}
+                                onClick={() => handleStopPrescription(rxId)}
                               >
                                 Stop Regimen
                               </Button>
                             </>
+                          ) : (
+                            <span className="text-xs text-slate-400 font-medium px-2.5 py-1 bg-slate-50 rounded-lg border border-slate-100">
+                              Historical Archive (Read-only)
+                            </span>
                           )}
                         </div>
                       </div>
@@ -723,29 +824,47 @@ export default function PatientProfile() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                           {items.map((item, idx) => (
                             <div
-                              key={item.id || idx}
-                              className="rounded-xl bg-slate-50/80 p-3 border border-slate-100 flex items-center justify-between text-xs"
+                              key={item.id || item.prescription_item_id || idx}
+                              className="rounded-xl bg-slate-50/80 p-3.5 border border-slate-100 flex flex-col justify-between text-xs space-y-1.5"
                             >
-                              <div>
-                                <p className="font-bold text-slate-900">
-                                  {item.medicine_name}
-                                </p>
-                                <p className="text-slate-500 text-[11px] mt-0.5">
-                                  {item.dosage} · Route: {item.route || "Oral"} · {item.frequency}
-                                </p>
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-bold text-slate-900 text-sm">
+                                    {item.medicine_name}
+                                  </p>
+                                  {item.generic_name && (
+                                    <p className="text-[11px] text-slate-400">
+                                      {item.generic_name} {item.strength ? `(${item.strength})` : ""}
+                                    </p>
+                                  )}
+                                </div>
+                                <span className="text-[11px] font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200 shrink-0">
+                                  {item.duration_days} days
+                                </span>
                               </div>
-                              <span className="text-[11px] font-semibold text-slate-500">
-                                {item.duration_days} days
-                              </span>
+
+                              <div className="text-slate-600 text-[11px] pt-1 border-t border-slate-200/60 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                <span><strong className="text-slate-700">Dose:</strong> {item.dose || item.dosage}</span>
+                                <span>·</span>
+                                <span><strong className="text-slate-700">Route:</strong> {item.route || "Oral"}</span>
+                                <span>·</span>
+                                <span><strong className="text-slate-700">Freq:</strong> {item.frequency}</span>
+                              </div>
+
+                              {item.instructions && (
+                                <p className="text-[11px] text-slate-500 italic bg-white/70 p-1.5 rounded border border-slate-100 mt-1">
+                                  Instructions: {item.instructions}
+                                </p>
+                              )}
                             </div>
                           ))}
                         </div>
                       </div>
 
-                      {rx.notes && (
+                      {(rx.notes || rx.prescription_notes) && (
                         <p className="mt-3 text-xs text-slate-600 bg-sky-50/50 p-2.5 rounded-xl border border-sky-100">
                           <span className="font-semibold text-sky-800">Doctor Notes: </span>
-                          {rx.notes}
+                          {rx.notes || rx.prescription_notes}
                         </p>
                       )}
                     </div>

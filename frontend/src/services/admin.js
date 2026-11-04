@@ -26,7 +26,19 @@ export async function getAdminDoctors() {
 }
 
 
-export async function createAdminStaff(payload) {
+export async function createAdminStaff(payloadOrFullName, username, email, password, role) {
+  let payload = payloadOrFullName
+
+  if (typeof payloadOrFullName === "string" && username) {
+    payload = {
+      full_name: payloadOrFullName,
+      username,
+      email,
+      password,
+      role,
+    }
+  }
+
   const response = await api.post(
     "/api/admin/staff",
     payload,

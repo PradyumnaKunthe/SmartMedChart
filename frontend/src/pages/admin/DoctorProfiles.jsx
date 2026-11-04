@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import MainLayout from "../../components/layout/MainLayout";
 import {
   getCareMatchDoctors,
@@ -109,12 +109,34 @@ function MultiSelectDropdown({
   label,
   placeholder,
   options,
-  selectedValues,
+  selectedValues = [],
   onChange,
   allowCustom = true,
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const dropdownRef = useRef(null);
+
+  // Close when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+
+    if (open) {
+      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("touchstart", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
+  }, [open]);
+
+  const safeSelected = Array.isArray(selectedValues) ? selectedValues : [];
 
   const filteredOptions = options.filter((option) =>
     option.toLowerCase().includes(search.trim().toLowerCase()),
@@ -122,22 +144,25 @@ function MultiSelectDropdown({
 
   const customValue = search.trim();
 
-  const alreadyExists = selectedValues.some(
+  const alreadyExists = safeSelected.some(
     (item) => item.toLowerCase() === customValue.toLowerCase(),
   );
 
   function toggleOption(option) {
-    const selected = selectedValues.some(
-      (item) => item.toLowerCase() === option.toLowerCase(),
+    const trimmed = option.trim();
+    const isSelected = safeSelected.some(
+      (item) => item.toLowerCase() === trimmed.toLowerCase(),
     );
 
-    onChange(
-      selected
-        ? selectedValues.filter(
-            (item) => item.toLowerCase() !== option.toLowerCase(),
-          )
-        : [...selectedValues, option],
-    );
+    if (isSelected) {
+      onChange(
+        safeSelected.filter(
+          (item) => item.toLowerCase() !== trimmed.toLowerCase(),
+        ),
+      );
+    } else {
+      onChange([...safeSelected, trimmed]);
+    }
   }
 
   function addCustomValue() {
@@ -145,12 +170,12 @@ function MultiSelectDropdown({
       return;
     }
 
-    onChange([...selectedValues, customValue]);
+    onChange([...safeSelected, customValue]);
     setSearch("");
   }
 
   return (
-    <div className="relative">
+    <div ref={dropdownRef} className={`relative ${open ? "z-40" : "z-10"}`}>
       <label htmlFor={`${id}-search`} className={labelClass}>
         {label}
       </label>
@@ -160,11 +185,11 @@ function MultiSelectDropdown({
         aria-expanded={open}
         aria-controls={`${id}-menu`}
         onClick={() => setOpen((current) => !current)}
-        className={`${inputClass} flex items-center justify-between gap-3 text-left`}
+        className={`${inputClass} flex items-center justify-between gap-3 text-left cursor-pointer`}
       >
         <span className="truncate">
-          {selectedValues.length
-            ? `${selectedValues.length} selected`
+          {safeSelected.length
+            ? `${safeSelected.length} selected`
             : placeholder}
         </span>
 
@@ -174,40 +199,54 @@ function MultiSelectDropdown({
       {open && (
         <div
           id={`${id}-menu`}
-          className="absolute left-0 right-0 z-30 mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+          className="absolute left-0 right-0 z-50 mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
         >
           <input
             id={`${id}-search`}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                if (allowCustom && customValue && !alreadyExists) {
+                  addCustomValue();
+                }
+              }
+            }}
             placeholder={`Search ${label.toLowerCase()}...`}
             className={inputClass}
+            autoFocus
           />
 
-          <div className="mt-2 max-h-52 overflow-y-auto">
+          <div className="mt-2 max-h-52 overflow-y-auto divide-y divide-slate-100">
             {filteredOptions.map((option) => {
-              const checked = selectedValues.some(
+              const checked = safeSelected.some(
                 (item) => item.toLowerCase() === option.toLowerCase(),
               );
 
               return (
-                <label
+                <div
                   key={option}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-sm hover:bg-cyan-50"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleOption(option);
+                  }}
+                  className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-sm hover:bg-cyan-50 select-none transition"
                 >
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={() => toggleOption(option)}
-                    className="h-4 w-4 accent-cyan-700"
+                    readOnly
+                    tabIndex={-1}
+                    className="h-4 w-4 accent-cyan-700 pointer-events-none cursor-pointer"
                   />
-                  <span>{option}</span>
-                </label>
+                  <span className="text-slate-800 font-medium">{option}</span>
+                </div>
               );
             })}
 
             {filteredOptions.length === 0 && (
-              <p className="p-3 text-sm text-slate-500">
+              <p className="p-3 text-sm text-slate-500 text-center">
                 No matching options found.
               </p>
             )}
@@ -216,8 +255,11 @@ function MultiSelectDropdown({
           {allowCustom && customValue && !alreadyExists && (
             <button
               type="button"
-              onClick={addCustomValue}
-              className="mt-2 w-full rounded-lg bg-cyan-50 px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                addCustomValue();
+              }}
+              className="mt-2 w-full rounded-lg bg-cyan-50 px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-100 transition"
             >
               + Add custom value: "{customValue}"
             </button>
@@ -229,27 +271,30 @@ function MultiSelectDropdown({
               setOpen(false);
               setSearch("");
             }}
-            className="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+            className="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition"
           >
             Done
           </button>
         </div>
       )}
 
-      {selectedValues.length > 0 && (
+      {safeSelected.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {selectedValues.map((value) => (
+          {safeSelected.map((value) => (
             <span
               key={value}
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-900"
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-900 border border-cyan-200"
             >
               {value}
 
               <button
                 type="button"
                 aria-label={`Remove ${value}`}
-                onClick={() => toggleOption(value)}
-                className="ml-1 font-bold hover:text-red-600"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleOption(value);
+                }}
+                className="ml-1 font-bold hover:text-red-600 focus:outline-none"
               >
                 ×
               </button>
@@ -258,8 +303,11 @@ function MultiSelectDropdown({
 
           <button
             type="button"
-            onClick={() => onChange([])}
-            className="text-xs text-slate-500 underline"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange([]);
+            }}
+            className="text-xs text-slate-500 underline hover:text-slate-800 self-center"
           >
             Clear all
           </button>
@@ -295,6 +343,15 @@ export default function DoctorProfiles() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  // Updates specific field in React form state
+  function updateField(field, value) {
+    setForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+    setError("");
+  }
 
   async function loadDoctors() {
     setLoading(true);
@@ -343,139 +400,98 @@ export default function DoctorProfiles() {
     setError("");
   }
 
- 
-async function handleSubmit(event) {
-  event.preventDefault();
-  setError("");
-  setSuccess("");
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setError("");
+    setSuccess("");
 
-  if (!selectedDoctorId) {
-    setError("Select a doctor first.");
-    return;
-  }
+    if (!selectedDoctorId) {
+      setError("Select a doctor first.");
+      return;
+    }
 
-  const experience = Number(form.experience_years);
-  const fee =
-    form.consultation_fee.trim() === ""
-      ? null
-      : Number(form.consultation_fee);
+    const experience = Number(form.experience_years);
+    const fee =
+      form.consultation_fee.trim() === ""
+        ? null
+        : Number(form.consultation_fee);
 
-  if (
-    !Number.isInteger(experience) ||
-    experience < 0 ||
-    experience > 80
-  ) {
-    setError("Experience must be a whole number from 0 to 80.");
-    return;
-  }
+    if (
+      !Number.isInteger(experience) ||
+      experience < 0 ||
+      experience > 80
+    ) {
+      setError("Experience must be a whole number from 0 to 80.");
+      return;
+    }
 
-  if (fee !== null && (!Number.isFinite(fee) || fee < 0)) {
-    setError("Enter a valid consultation fee.");
-    return;
-  }
+    if (fee !== null && (!Number.isFinite(fee) || fee < 0)) {
+      setError("Enter a valid consultation fee.");
+      return;
+    }
 
-  const payload = {
-    qualifications: form.qualifications.join(", "),
-    specializations: form.specializations,
-    experience_years: experience,
-    expertise_keywords: form.expertise_keywords,
-    languages: form.languages,
-    consultation_fee: fee,
-    available_days: form.available_days,
-    is_available: form.is_available,
-  };
+    const payload = {
+      qualifications: form.qualifications,
+      specializations: form.specializations,
+      experience_years: experience,
+      expertise_keywords: form.expertise_keywords,
+      languages: form.languages,
+      consultation_fee: fee,
+      available_days: form.available_days,
+      is_available: form.is_available,
+    };
 
-  const savedDoctorId = String(selectedDoctorId);
-  const savedDoctorName =
-    selectedDoctor?.full_name || "the selected doctor";
+    const savedDoctorId = String(selectedDoctorId);
+    const savedDoctorName =
+      selectedDoctor?.full_name || "the selected doctor";
 
-  setSaving(true);
+    setSaving(true);
 
-  try {
-    // Save current doctor's profile
-    const response = await saveCareMatchDoctorProfile(
-      Number(savedDoctorId),
-      payload,
-    );
-
-    // Immediately update the saved doctor locally
-    setDoctors((current) =>
-      current.map((doctor) =>
-        String(doctor.id) === savedDoctorId
-          ? {
-              ...doctor,
-              profile: response.profile,
-              profile_configured: true,
-            }
-          : doctor,
-      ),
-    );
-
-    // Refresh doctor list from backend
     try {
-      const refreshedResponse = await getCareMatchDoctors();
-
-      const refreshedDoctors = Array.isArray(
-        refreshedResponse?.doctors
-      )
-        ? refreshedResponse.doctors
-        : [];
-
-      setDoctors(refreshedDoctors);
-
-      // Search for the next unconfigured doctor
-      const currentIndex = refreshedDoctors.findIndex(
-        (doctor) => String(doctor.id) === savedDoctorId
+      // Save current doctor's profile to MongoDB
+      const response = await saveCareMatchDoctorProfile(
+        Number(savedDoctorId),
+        payload,
       );
 
-      const orderedDoctors = [
-        ...refreshedDoctors.slice(currentIndex + 1),
-        ...refreshedDoctors.slice(0, currentIndex + 1),
-      ];
+      // Refresh doctor list from backend to reflect updated profile metadata
+      try {
+        const refreshedResponse = await getCareMatchDoctors();
+        const refreshedDoctors = Array.isArray(refreshedResponse?.doctors)
+          ? refreshedResponse.doctors
+          : [];
 
-      const nextDoctor = orderedDoctors.find(
-        (doctor) =>
-          String(doctor.id) !== savedDoctorId &&
-          !doctor.profile_configured
-      );
+        setDoctors(refreshedDoctors);
 
-      if (nextDoctor) {
-        // Automatically select next doctor
-        setSelectedDoctorId(String(nextDoctor.id));
-
-        // Start with a clean form
-        setForm(EMPTY_FORM);
-
-        setSuccess(
-          `Profile saved successfully for ${savedDoctorName}. Now complete ${nextDoctor.full_name}'s profile.`
+        // Keep current doctor selected and sync loaded form with persisted values
+        const currentDoc = refreshedDoctors.find(
+          (d) => String(d.id) === savedDoctorId,
         );
-      } else {
-        // All profiles have been configured
-        setSelectedDoctorId(savedDoctorId);
-        setForm(profileToForm({ profile: response.profile }));
+
+        if (currentDoc) {
+          setForm(profileToForm(currentDoc));
+        } else {
+          setForm(profileToForm({ profile: response.profile }));
+        }
 
         setSuccess(
-          `Profile saved successfully for ${savedDoctorName}. All registered doctors have configured profiles.`
+          `Profile saved successfully for ${savedDoctorName}. All doctor profile values have been persisted.`,
+        );
+      } catch (refreshError) {
+        setForm(profileToForm({ profile: response.profile }));
+        setSuccess(
+          `Profile saved successfully for ${savedDoctorName}.`,
         );
       }
-    } catch (refreshError) {
-      console.error("Doctor list refresh error:", refreshError);
-
-      setForm(profileToForm({ profile: response.profile }));
-
-      setSuccess(
-        `Profile saved successfully for ${savedDoctorName}, but the doctor list could not refresh. Please refresh the page.`
+    } catch (requestError) {
+      setError(
+        requestError?.response?.data?.detail ||
+          "Could not save the profile. Check your permissions and MongoDB.",
       );
+    } finally {
+      setSaving(false);
     }
-  } catch (requestError) {
-    setError(
-      requestError?.response?.data?.detail ||
-        "Could not save the profile. Check your permissions and MongoDB."
-    );
-  } finally {
-    setSaving(false);
   }
-}
 
   return (
     <MainLayout title="CareMatch Doctor Profiles">
@@ -671,14 +687,14 @@ async function handleSubmit(event) {
               />
 
               <div className="md:col-span-2">
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4">
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 hover:bg-slate-50/50 transition">
                   <input
                     type="checkbox"
                     checked={form.is_available}
                     onChange={(event) =>
                       updateField("is_available", event.target.checked)
                     }
-                    className="mt-1 h-4 w-4 accent-cyan-700"
+                    className="mt-1 h-4 w-4 accent-cyan-700 cursor-pointer"
                   />
 
                   <span>
@@ -700,7 +716,7 @@ async function handleSubmit(event) {
                 type="button"
                 disabled={saving}
                 onClick={() => setForm(profileToForm(selectedDoctor))}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 transition"
               >
                 Reset changes
               </button>
@@ -708,7 +724,7 @@ async function handleSubmit(event) {
               <button
                 type="submit"
                 disabled={saving || !selectedDoctorId}
-                className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
+                className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50 transition"
               >
                 {saving ? "Saving..." : "Save doctor profile"}
               </button>

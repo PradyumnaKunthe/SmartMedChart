@@ -1,4 +1,5 @@
 
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -40,7 +41,7 @@ def mongo_bool(value):
 
 
 def active_filter():
-    return {"$in": [True, 1]}
+    return {"$in": [True, 1, "true", "1"]}
 
 
 def next_admin_mongo_id(collection_name: str) -> int:
@@ -137,8 +138,12 @@ def require_bed_assignment_permission(
 
 def get_role(role_name: str):
     role = mongo_db.roles.find_one({
-        "name": role_name
+        "name": {"$regex": f"^{re.escape(role_name)}$", "$options": "i"}
     })
+    if role is None:
+        role = mongo_db.roles.find_one({
+            "name": role_name
+        })
 
     if role is None:
         raise HTTPException(
@@ -150,12 +155,13 @@ def get_role(role_name: str):
 
 
 def serialize_staff(user):
+    role_id = user.get("role_id")
     role = mongo_db.roles.find_one({
-        "_id": user.get("role_id")
+        "$or": [{"_id": role_id}, {"id": role_id}]
     })
 
     return {
-        "id": user.get("id"),
+        "id": user.get("id", user.get("_id")),
         "username": user.get("username"),
         "email": user.get("email"),
         "full_name": user.get("full_name"),
@@ -276,10 +282,11 @@ def get_nurses(
     require_admin_permission(current_user)
 
     nurse_role = get_role("Nurse")
+    nurse_role_id = nurse_role.get("id", nurse_role.get("_id", 2))
 
     nurses = list(
         mongo_db.users.find({
-            "role_id": nurse_role["id"],
+            "role_id": {"$in": [nurse_role_id, nurse_role.get("_id"), 2]},
             "is_active": active_filter(),
         }).sort("full_name", 1)
     )
@@ -299,10 +306,11 @@ def get_doctors(
     require_admin_permission(current_user)
 
     doctor_role = get_role("Doctor")
+    doctor_role_id = doctor_role.get("id", doctor_role.get("_id", 1))
 
     doctors = list(
         mongo_db.users.find({
-            "role_id": doctor_role["id"],
+            "role_id": {"$in": [doctor_role_id, doctor_role.get("_id"), 1]},
             "is_active": active_filter(),
         }).sort("full_name", 1)
     )
@@ -344,19 +352,27 @@ def create_staff(
     username = request.username.strip()
     email = request.email.strip()
 
-    if mongo_db.users.find_one({"username": username}):
+    if mongo_db.users.find_one({
+        "username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}
+    }):
         raise HTTPException(
             status_code=409,
             detail="Username already exists.",
         )
 
-    if mongo_db.users.find_one({"email": email}):
+    if mongo_db.users.find_one({
+        "email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}
+    }):
         raise HTTPException(
             status_code=409,
             detail="Email already exists.",
         )
 
     role = get_role(actual_role_name)
+    role_id = role.get(
+        "id",
+        role.get("_id", 1 if actual_role_name == "Doctor" else 2),
+    )
     now = admin_mongo_now()
     user_id = next_admin_mongo_id("users")
 
@@ -367,7 +383,7 @@ def create_staff(
         "email": email,
         "password_hash": hash_password(request.password),
         "full_name": request.full_name.strip(),
-        "role_id": role["id"],
+        "role_id": role_id,
         "is_active": True,
         "created_at": now,
         "updated_at": now,
@@ -824,10 +840,11 @@ def get_nurse_workload(
     require_admin_permission(current_user)
 
     nurse_role = get_role("Nurse")
+    nurse_role_id = nurse_role.get("id", nurse_role.get("_id", 2))
 
     nurses = list(
         mongo_db.users.find({
-            "role_id": nurse_role["id"],
+            "role_id": {"$in": [nurse_role_id, nurse_role.get("_id"), 2]},
             "is_active": active_filter(),
         }).sort([
             ("full_name", 1),
@@ -838,9 +855,10 @@ def get_nurse_workload(
     result = []
 
     for nurse in nurses:
+        nurse_numeric_id = nurse.get("id", nurse.get("_id"))
         assignments = list(
             mongo_db.nurse_patient_assignments.find({
-                "nurse_id": nurse["id"],
+                "nurse_id": nurse_numeric_id,
                 "is_active": active_filter(),
             }).sort("assigned_at", -1)
         )
@@ -862,7 +880,7 @@ def get_nurse_workload(
             patients.append(patient_data)
 
         result.append({
-            "id": nurse["id"],
+            "id": nurse_numeric_id,
             "full_name": nurse.get("full_name"),
             "username": nurse.get("username"),
             "email": nurse.get("email"),
@@ -885,10 +903,11 @@ def get_doctor_workload(
     require_admin_permission(current_user)
 
     doctor_role = get_role("Doctor")
+    doctor_role_id = doctor_role.get("id", doctor_role.get("_id", 1))
 
     doctors = list(
         mongo_db.users.find({
-            "role_id": doctor_role["id"],
+            "role_id": {"$in": [doctor_role_id, doctor_role.get("_id"), 1]},
             "is_active": active_filter(),
         }).sort([
             ("full_name", 1),
@@ -899,9 +918,10 @@ def get_doctor_workload(
     result = []
 
     for doctor in doctors:
+        doctor_numeric_id = doctor.get("id", doctor.get("_id"))
         encounters = list(
             mongo_db.encounters.find({
-                "doctor_id": doctor["id"],
+                "doctor_id": doctor_numeric_id,
                 "status": "ACTIVE",
             }).sort("created_at", -1)
         )
@@ -937,7 +957,7 @@ def get_doctor_workload(
             patients.append(patient_data)
 
         result.append({
-            "id": doctor["id"],
+            "id": doctor_numeric_id,
             "full_name": doctor.get("full_name"),
             "username": doctor.get("username"),
             "email": doctor.get("email"),

@@ -115,9 +115,11 @@ export default function AddPatient() {
   const [recommendationLoading, setRecommendationLoading] = useState(false)
   const [recommendationMessage, setRecommendationMessage] = useState("")
   const [recommendationError, setRecommendationError] = useState(false)
+  const [emergencyWarning, setEmergencyWarning] = useState("")
 
   // Ref to track last recommended search query to prevent duplicate requests
   const lastQueryRef = useRef("")
+  const requestIdRef = useRef(0)
 
   // =======================================================
   // UPPERCASE INPUT HANDLER
@@ -178,6 +180,7 @@ export default function AddPatient() {
       form.chief_complaint.trim() ? `COMPLAINT: ${form.chief_complaint.trim()}` : "",
       form.symptom_duration.trim() ? `DURATION: ${form.symptom_duration.trim()}` : "",
       form.symptom_severity ? `SEVERITY: ${form.symptom_severity}` : "",
+      form.preferred_language.trim() ? `LANGUAGE: ${form.preferred_language.trim()}` : "",
       form.visit_notes.trim() ? `NOTES: ${form.visit_notes.trim()}` : "",
     ].filter(Boolean)
 
@@ -187,19 +190,24 @@ export default function AddPatient() {
     form.chief_complaint,
     form.symptom_duration,
     form.symptom_severity,
+    form.preferred_language,
     form.visit_notes,
   ])
 
   async function recommendDoctors() {
     if (!form.problem_category && !form.chief_complaint.trim()) {
       setRecommendedDoctors([])
-      setRecommendationError(true)
-      setRecommendationMessage("SELECT A PROBLEM CATEGORY OR ENTER CHIEF COMPLAINT TO FIND MATCHING DOCTORS.")
+      setRecommendationError(false)
+      setRecommendationMessage("")
+      setEmergencyWarning("")
+      lastQueryRef.current = ""
       return
     }
 
     const query = constructedVisitReason || form.problem_category || form.chief_complaint.trim()
     lastQueryRef.current = query
+
+    const currentRequestId = ++requestIdRef.current
 
     setRecommendationLoading(true)
     setRecommendationError(false)
@@ -210,8 +218,16 @@ export default function AddPatient() {
         visit_reason: query,
         problem_category: form.problem_category || undefined,
         chief_complaint: form.chief_complaint.trim() || undefined,
+        symptoms: form.chief_complaint.trim() || undefined,
         preferred_language: form.preferred_language.trim() || undefined,
+        symptom_duration: form.symptom_duration.trim() || undefined,
+        symptom_severity: form.symptom_severity || undefined,
       })
+
+      // Check if another request finished after this one
+      if (currentRequestId !== requestIdRef.current) {
+        return
+      }
 
       const suggestions = Array.isArray(response.data?.recommendations)
         ? response.data.recommendations
@@ -219,18 +235,23 @@ export default function AddPatient() {
 
       setRecommendedDoctors(suggestions)
 
+      if (response.data?.emergency_escalation && response.data?.emergency_warning) {
+        setEmergencyWarning(response.data.emergency_warning)
+      } else {
+        setEmergencyWarning("")
+      }
+
       if (suggestions.length > 0) {
         setRecommendationMessage(
           `${suggestions.length} MATCHING SPECIALIST(S) IDENTIFIED BY CAREMATCH AI.`
         )
         setRecommendationError(false)
-        // If no doctor currently selected, auto-select the highest match
-        if (!form.doctor_id) {
-          setForm((prev) => ({
-            ...prev,
-            doctor_id: String(suggestions[0].doctor_id),
-          }))
-        }
+
+        // Automatically preselect the top recommended specialist
+        setForm((prev) => ({
+          ...prev,
+          doctor_id: String(suggestions[0].doctor_id),
+        }))
       } else {
         setRecommendationMessage(
           response.data?.message ||
@@ -239,21 +260,31 @@ export default function AddPatient() {
         setRecommendationError(false)
       }
     } catch (requestError) {
+      if (currentRequestId !== requestIdRef.current) {
+        return
+      }
       console.error("CareMatch recommendation error:", requestError)
       setRecommendedDoctors([])
       setRecommendationError(true)
+      setEmergencyWarning("")
       setRecommendationMessage(
         requestError?.response?.data?.detail ||
           "UNABLE TO RETRIEVE DOCTOR SUGGESTIONS. PLEASE SELECT ATTENDING DOCTOR MANUALLY."
       )
     } finally {
-      setRecommendationLoading(false)
+      if (currentRequestId === requestIdRef.current) {
+        setRecommendationLoading(false)
+      }
     }
   }
 
   // Automatic recommendation trigger with 400ms debounce
   useEffect(() => {
     if (!form.problem_category && !form.chief_complaint.trim()) {
+      setRecommendedDoctors([])
+      setRecommendationMessage("")
+      setEmergencyWarning("")
+      lastQueryRef.current = ""
       return
     }
 
@@ -267,7 +298,15 @@ export default function AddPatient() {
     }, 400)
 
     return () => clearTimeout(timer)
-  }, [form.problem_category, form.chief_complaint, form.symptom_duration, form.symptom_severity])
+  }, [
+    form.problem_category,
+    form.chief_complaint,
+    form.symptom_duration,
+    form.symptom_severity,
+    form.preferred_language,
+    form.visit_notes,
+    constructedVisitReason,
+  ])
 
   function selectDoctor(doctorId) {
     setForm((prev) => ({
@@ -405,6 +444,7 @@ export default function AddPatient() {
       setShowAdditionalInfo(false)
       setRecommendedDoctors([])
       setRecommendationMessage("")
+      setEmergencyWarning("")
       lastQueryRef.current = ""
     } catch (requestError) {
       console.error("Create hospital patient error:", requestError)
@@ -1025,6 +1065,21 @@ export default function AddPatient() {
                   FIND RECOMMENDED DOCTORS
                 </Button>
               </div>
+
+              {/* Emergency Escalation Notice */}
+              {emergencyWarning && (
+                <div className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-500 text-rose-900 shadow-sm flex items-start gap-3 animate-pulse">
+                  <ShieldAlert className="w-5 h-5 shrink-0 text-rose-600 mt-0.5" />
+                  <div>
+                    <h5 className="text-xs font-black uppercase tracking-wider text-rose-950">
+                      CRITICAL CLINICAL ALERT — POTENTIAL EMERGENCY ESCALATION
+                    </h5>
+                    <p className="text-xs font-bold uppercase tracking-wide text-rose-800 mt-1">
+                      {emergencyWarning}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Status / Notice */}
               {recommendationMessage && (

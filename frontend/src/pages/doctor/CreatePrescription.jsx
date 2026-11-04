@@ -15,10 +15,12 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   ShieldAlert,
   ShieldCheck,
   Trash2,
   User,
+  UserCheck,
   Zap,
 } from "lucide-react"
 
@@ -32,12 +34,15 @@ import {
   createPatientAllergy,
   createPrescription,
   deletePatientAllergy,
+  getAvailableNurses,
   getDoctorMedicines,
   getDoctorPatient,
   getDoctorPatients,
   getDoctorWards,
   getDoctorWardBeds,
   getPatientAllergies,
+  getPatientAssignedNurse,
+  getPrescriptionHistory,
   updatePatientAllergy,
 } from "../../services/doctor"
 
@@ -152,6 +157,7 @@ export default function CreatePrescription() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const patientId = searchParams.get("patient")
+  const replacesId = searchParams.get("replaces")
 
   const [selectedPatientId, setSelectedPatientId] = useState(patientId || "")
   const [assignedPatients, setAssignedPatients] = useState([])
@@ -179,6 +185,14 @@ export default function CreatePrescription() {
   const [loadingBeds, setLoadingBeds] = useState(false)
   const [bedApiError, setBedApiError] = useState("")
   const [isAuthError, setIsAuthError] = useState(false)
+
+  // Nurse Assignment state
+  const [nurses, setNurses] = useState([])
+  const [loadingNurses, setLoadingNurses] = useState(false)
+  const [nurseError, setNurseError] = useState("")
+  const [selectedNurse, setSelectedNurse] = useState("")
+  const [currentAssignedNurse, setCurrentAssignedNurse] = useState(null)
+  const [nurseSearchTerm, setNurseSearchTerm] = useState("")
 
   // Allergy modal state
   const [allergyModalOpen, setAllergyModalOpen] = useState(false)
@@ -251,6 +265,71 @@ export default function CreatePrescription() {
     }
   }
 
+  async function loadNursesData() {
+    setLoadingNurses(true)
+    setNurseError("")
+    try {
+      const res = await getAvailableNurses()
+      const nurseList = Array.isArray(res) ? res : res?.nurses || []
+      setNurses(nurseList)
+      if (nurseList.length === 0) {
+        setNurseError("No active registered nurses found in the hospital.")
+      }
+      return nurseList
+    } catch (err) {
+      console.error("Failed to load nurses", err)
+      setNurseError(
+        err?.response?.data?.detail || "Unable to load nurse directory. Please check connection."
+      )
+      return []
+    } finally {
+      setLoadingNurses(false)
+    }
+  }
+
+  async function loadPatientNurseAssignment(targetPid) {
+    if (!targetPid) {
+      setCurrentAssignedNurse(null)
+      setSelectedNurse("")
+      return null
+    }
+    try {
+      const res = await getPatientAssignedNurse(targetPid)
+      if (res?.assigned_nurse) {
+        setCurrentAssignedNurse(res.assigned_nurse)
+        setSelectedNurse(String(res.assigned_nurse.nurse_id))
+        return res.assigned_nurse
+      } else {
+        setCurrentAssignedNurse(null)
+        setSelectedNurse("")
+        return null
+      }
+    } catch (err) {
+      console.error("Failed to load patient nurse assignment", err)
+      setCurrentAssignedNurse(null)
+      return null
+    }
+  }
+
+  function handleNurseChange(newNurseId) {
+    if (
+      currentAssignedNurse &&
+      currentAssignedNurse.nurse_id &&
+      String(newNurseId) !== String(currentAssignedNurse.nurse_id) &&
+      newNurseId !== ""
+    ) {
+      const selectedObj = nurses.find((n) => String(n.id) === String(newNurseId))
+      const newName = selectedObj?.full_name || selectedObj?.username || `Nurse #${newNurseId}`
+      const confirmed = window.confirm(
+        `Replace current nurse assignment?\n\nThis patient is currently assigned to ${currentAssignedNurse.nurse_name}.\n\nDo you want to reassign this patient to ${newName}?\n\nThe previous assignment will be safely preserved as an inactive historical record.`
+      )
+      if (!confirmed) {
+        return
+      }
+    }
+    setSelectedNurse(newNurseId)
+  }
+
   useEffect(() => {
     async function loadData() {
       setLoading(true)
@@ -260,17 +339,59 @@ export default function CreatePrescription() {
         const activePid = selectedPatientId || patientId
         const medPromise = getDoctorMedicines()
         const wardsPromise = loadWardsData()
+        const nursesPromise = loadNursesData()
+        const nurseAssignPromise = activePid
+          ? loadPatientNurseAssignment(activePid)
+          : Promise.resolve(null)
 
         if (activePid) {
-          const [patientData, medicineData, allergyData] = await Promise.all([
+          const [patientData, medicineData, allergyData, historyData] = await Promise.all([
             getDoctorPatient(activePid),
             medPromise,
             getPatientAllergies(activePid),
+            replacesId ? getPrescriptionHistory(activePid).catch(() => []) : Promise.resolve([]),
             wardsPromise,
+            nursesPromise,
+            nurseAssignPromise,
           ])
           setPatient(patientData)
           setMedicinesCatalogue(Array.isArray(medicineData) ? medicineData : [])
           setAllergies(Array.isArray(allergyData) ? allergyData : [])
+
+          if (replacesId && Array.isArray(historyData)) {
+            const oldRx = historyData.find(
+              (r) => String(r.prescription_id || r.id) === String(replacesId)
+            )
+            if (oldRx) {
+              if (oldRx.notes || oldRx.prescription_notes) {
+                setPrescriptionNotes(oldRx.notes || oldRx.prescription_notes)
+              }
+              const oldItems =
+                Array.isArray(oldRx.items) && oldRx.items.length > 0
+                  ? oldRx.items
+                  : oldRx.medicine_id
+                  ? [oldRx]
+                  : []
+              if (oldItems.length > 0) {
+                const today = new Date().toISOString().split("T")[0]
+                setMedicines(
+                  oldItems.map((it) => ({
+                    id: Date.now() + Math.random(),
+                    medicine_id: String(it.medicine_id),
+                    dose: it.dose || it.dosage || "",
+                    route: it.route || "Oral",
+                    frequency: it.frequency || "ONCE_DAILY",
+                    duration_days: Number(it.duration_days || 5),
+                    start_date: today,
+                    start_time: it.start_time ? String(it.start_time).slice(0, 5) : "08:00",
+                    administration_times: it.administration_times || ["08:00"],
+                    is_stat: Boolean(it.is_stat),
+                    instructions: it.instructions || "",
+                  }))
+                )
+              }
+            }
+          }
 
           if (patientData?.ward_id) {
             setSelectedWard(String(patientData.ward_id))
@@ -284,6 +405,7 @@ export default function CreatePrescription() {
             getDoctorPatients(),
             medPromise,
             wardsPromise,
+            nursesPromise,
           ])
           const list = Array.isArray(patientList) ? patientList : []
           setAssignedPatients(list)
@@ -294,6 +416,7 @@ export default function CreatePrescription() {
             const [pData, aData] = await Promise.all([
               getDoctorPatient(onlyPid),
               getPatientAllergies(onlyPid),
+              loadPatientNurseAssignment(onlyPid),
             ])
             setPatient(pData)
             setAllergies(Array.isArray(aData) ? aData : [])
@@ -321,17 +444,27 @@ export default function CreatePrescription() {
     if (!newPid) {
       setPatient(null)
       setAllergies([])
+      setCurrentAssignedNurse(null)
+      setSelectedNurse("")
       return
     }
     setLoading(true)
     setError("")
     try {
-      const [patientData, allergyData] = await Promise.all([
+      const [patientData, allergyData, nurseData] = await Promise.all([
         getDoctorPatient(newPid),
         getPatientAllergies(newPid),
+        getPatientAssignedNurse(newPid).catch(() => null),
       ])
       setPatient(patientData)
       setAllergies(Array.isArray(allergyData) ? allergyData : [])
+      if (nurseData?.assigned_nurse) {
+        setCurrentAssignedNurse(nurseData.assigned_nurse)
+        setSelectedNurse(String(nurseData.assigned_nurse.nurse_id))
+      } else {
+        setCurrentAssignedNurse(null)
+        setSelectedNurse("")
+      }
     } catch (err) {
       setError(formatApiError(err, "Unable to load selected patient."))
     } finally {
@@ -574,6 +707,11 @@ export default function CreatePrescription() {
         setSubmitting(false)
         return
       }
+      if (!selectedNurse) {
+        setError("Please select an assigned nurse for inpatient admission.")
+        setSubmitting(false)
+        return
+      }
     }
 
     try {
@@ -592,10 +730,12 @@ export default function CreatePrescription() {
 
       const payload = {
         patient_id: Number(targetPatientId),
+        replaces_prescription_id: replacesId ? Number(replacesId) : null,
         notes: prescriptionNotes.trim() || null,
         admit_patient: admitNeeded === "YES",
         ward_id: admitNeeded === "YES" && selectedWard ? Number(selectedWard) : null,
         bed_id: admitNeeded === "YES" && selectedBed ? Number(selectedBed) : null,
+        nurse_id: admitNeeded === "YES" && selectedNurse ? Number(selectedNurse) : null,
         medicines: formattedItems,
         // Legacy backward compatibility fields
         medicine_id: formattedItems[0].medicine_id,
@@ -612,6 +752,11 @@ export default function CreatePrescription() {
 
       const result = await createPrescription(payload)
       setSuccess(result)
+
+      // Synchronize local nurse assignment if returned
+      if (result?.nurse_assignment) {
+        setCurrentAssignedNurse(result.nurse_assignment)
+      }
 
       // Synchronize local patient state & refresh bed availability if bed was assigned
       if (result?.bed_assignment) {
@@ -647,6 +792,17 @@ export default function CreatePrescription() {
 
   const totalDosesAcrossAll = medicines.reduce((acc, m) => acc + calculateDoseCount(m), 0)
 
+  const filteredNurses = nurses.filter((n) => {
+    if (String(n.id) === String(selectedNurse)) return true
+    if (!nurseSearchTerm.trim()) return true
+    const term = nurseSearchTerm.toLowerCase()
+    return (
+      n.full_name?.toLowerCase().includes(term) ||
+      n.username?.toLowerCase().includes(term) ||
+      String(n.id).includes(term)
+    )
+  })
+
   return (
     <MainLayout
       title="Create Prescription"
@@ -679,6 +835,28 @@ export default function CreatePrescription() {
           )}
         </div>
 
+        {/* Prescription Replacement Notice Banner */}
+        {replacesId && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-800 text-sm animate-fade-in">
+            <div className="flex items-center gap-3">
+              <RefreshCw className="w-5 h-5 shrink-0 text-amber-600" />
+              <div>
+                <span className="font-bold">Prescription Replacement Mode:</span> This new regimen will replace and supersede <span className="font-mono font-bold bg-amber-100 px-1.5 py-0.5 rounded text-amber-900">Order #{replacesId}</span>. Remaining future unadministered doses will be cancelled, while completed administrations are preserved.
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => {
+                const backPid = selectedPatientId || patientId || patient?.id
+                navigate(`/doctor/prescriptions/create?patient=${backPid}`)
+              }}
+            >
+              Exit Replacement
+            </Button>
+          </div>
+        )}
+
         {/* Global Error Banner */}
         {error && (
           <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm animate-fade-in">
@@ -695,18 +873,33 @@ export default function CreatePrescription() {
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-900">
-                Prescription Successfully Created
+                {replacesId
+                  ? "Prescription Replaced Successfully"
+                  : "Prescription Successfully Created"}
               </h2>
               <p className="text-sm text-slate-600 mt-1 max-w-lg mx-auto leading-relaxed">
-                Prescription Order #{success.prescription_id} containing{" "}
-                <strong className="text-emerald-700 font-bold">
-                  {success.medicine_count || medicines.length} medicine(s)
-                </strong>{" "}
-                was saved, and{" "}
-                <strong className="text-emerald-700 font-bold">
-                  {success.schedule_count} individual medication dosing schedule(s)
-                </strong>{" "}
-                with 5-minute pre-dose nurse notifications have been scheduled in the queue.
+                {success.bed_assignment && success.nurse_assignment ? (
+                  <>
+                    Prescription Order #{success.prescription_id} containing{" "}
+                    <strong className="text-emerald-700 font-bold">
+                      {success.medicine_count || medicines.length} medicine(s)
+                    </strong>{" "}
+                    was saved. Patient {patient?.first_name} {patient?.last_name} (#{patient?.patient_id || selectedPatientId}) admitted to {success.bed_assignment.ward_name}, Bed #{success.bed_assignment.bed_number}, and assigned to {success.nurse_assignment.nurse_name}.
+                  </>
+                ) : (
+                  <>
+                    Prescription Order #{success.prescription_id} containing{" "}
+                    <strong className="text-emerald-700 font-bold">
+                      {success.medicine_count || medicines.length} medicine(s)
+                    </strong>{" "}
+                    was saved
+                    {replacesId ? ` (superseding previous Order #${replacesId})` : ""}, and{" "}
+                    <strong className="text-emerald-700 font-bold">
+                      {success.schedule_count} individual medication dosing schedule(s)
+                    </strong>{" "}
+                    with 5-minute pre-dose nurse notifications have been scheduled in the queue.
+                  </>
+                )}
               </p>
             </div>
 
@@ -752,6 +945,28 @@ export default function CreatePrescription() {
               </div>
             )}
 
+            {success.nurse_assignment && (
+              <div className="max-w-xl mx-auto p-4 bg-white/80 border border-sky-200/80 rounded-2xl text-left flex items-center justify-between shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center font-bold">
+                    <UserCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-sky-950 uppercase">
+                      Assigned Primary Nurse Confirmed
+                    </div>
+                    <div className="text-xs text-slate-600 font-medium mt-0.5">
+                      Assigned Nurse: <strong className="text-slate-900">{success.nurse_assignment.nurse_name}</strong>{" "}
+                      {success.nurse_assignment.nurse_username && (
+                        <span className="text-slate-500 font-mono">(@{success.nurse_assignment.nurse_username})</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <Badge variant="primary" size="sm">NURSE ASSIGNED</Badge>
+              </div>
+            )}
+
             <div className="flex items-center justify-center gap-3 pt-2">
               <Button
                 variant="primary"
@@ -772,6 +987,9 @@ export default function CreatePrescription() {
                   setSelectedWard("")
                   setSelectedBed("")
                   setAvailableBeds([])
+                  setSelectedNurse("")
+                  setCurrentAssignedNurse(null)
+                  setNurseSearchTerm("")
                 }}
               >
                 Write Another Order
@@ -1434,6 +1652,21 @@ export default function CreatePrescription() {
                   </div>
                 )}
 
+                {currentAssignedNurse && (
+                  <div className="p-3.5 rounded-2xl bg-teal-50 border border-teal-200 text-teal-900 text-xs flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                      <span>
+                        Current Assigned Nurse: <strong>{currentAssignedNurse.nurse_name}</strong>
+                        {currentAssignedNurse.nurse_username && (
+                          <span className="text-teal-700 font-mono"> (@{currentAssignedNurse.nurse_username})</span>
+                        )}
+                      </span>
+                    </div>
+                    <Badge variant="primary" size="sm">ACTIVE NURSE</Badge>
+                  </div>
+                )}
+
                 {admitNeeded === "YES" && (
                   <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 animate-fade-in">
                     {/* Ward Error Alert */}
@@ -1455,7 +1688,26 @@ export default function CreatePrescription() {
                       </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Nurse Error Alert */}
+                    {nurseError && (
+                      <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                          <span>{nurseError}</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          icon={RefreshCw}
+                          onClick={loadNursesData}
+                        >
+                          Retry
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {/* Ward Selection */}
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
@@ -1583,18 +1835,80 @@ export default function CreatePrescription() {
                           </div>
                         )}
                       </div>
+
+                      {/* Nurse Selection */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                            ASSIGN NURSE <span className="text-rose-500">*</span>
+                          </label>
+                          {loadingNurses && (
+                            <span className="text-[11px] font-bold text-sky-600 flex items-center gap-1">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> LOADING NURSES...
+                            </span>
+                          )}
+                        </div>
+
+                        {nurses.length > 3 && (
+                          <div className="relative mb-1.5">
+                            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                              type="text"
+                              placeholder="Search nurse..."
+                              value={nurseSearchTerm}
+                              onChange={(e) => setNurseSearchTerm(e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                            />
+                          </div>
+                        )}
+
+                        <select
+                          value={selectedNurse}
+                          onChange={(e) => handleNurseChange(e.target.value)}
+                          disabled={loadingNurses}
+                          required={admitNeeded === "YES"}
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 disabled:opacity-50"
+                        >
+                          <option value="">
+                            {loadingNurses
+                              ? "LOADING REGISTERED NURSES..."
+                              : nurses.length === 0
+                              ? "-- NO ACTIVE NURSES AVAILABLE --"
+                              : "-- SELECT ASSIGNED NURSE --"}
+                          </option>
+                          {filteredNurses.map((n) => {
+                            const isCurrent =
+                              currentAssignedNurse &&
+                              Number(currentAssignedNurse.nurse_id) === Number(n.id)
+                            return (
+                              <option key={n.id} value={n.id}>
+                                {n.full_name?.toUpperCase()} (@{n.username})
+                                {isCurrent ? " — (CURRENT ASSIGNMENT)" : ""}
+                              </option>
+                            )
+                          })}
+                        </select>
+
+                        {/* Empty state when no active nurses are found */}
+                        {!loadingNurses && !nurseError && nurses.length === 0 && (
+                          <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>NO ACTIVE NURSES REGISTERED. PLEASE CONTACT ADMINISTRATOR.</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Selection Review Banner */}
-                    {selectedWard && selectedBed && (
-                      <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs text-indigo-950 flex items-center justify-between">
+                    {selectedWard && selectedBed && selectedNurse && (
+                      <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs text-indigo-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
                           <span>
-                            Selected Allocation: <strong>{wards.find((w) => String(w.id) === String(selectedWard))?.name?.toUpperCase()}</strong> · Bed <strong>#{availableBeds.find((b) => String(b.id) === String(selectedBed))?.bed_number || selectedBed}</strong>
+                            Selected: <strong>{wards.find((w) => String(w.id) === String(selectedWard))?.name?.toUpperCase()}</strong> · Bed <strong>#{availableBeds.find((b) => String(b.id) === String(selectedBed))?.bed_number || selectedBed}</strong> · Nurse: <strong>{nurses.find((n) => String(n.id) === String(selectedNurse))?.full_name?.toUpperCase() || `Nurse #${selectedNurse}`}</strong>
                           </span>
                         </div>
-                        <Badge variant="primary" size="sm">READY TO ASSIGN</Badge>
+                        <Badge variant="primary" size="sm">READY TO ADMIT & ASSIGN</Badge>
                       </div>
                     )}
                   </div>
@@ -1618,7 +1932,12 @@ export default function CreatePrescription() {
                 variant="primary"
                 icon={Save}
                 loading={submitting}
-                disabled={submitting || medicines.length === 0 || !(selectedPatientId || patientId)}
+                disabled={
+                  submitting ||
+                  medicines.length === 0 ||
+                  !(selectedPatientId || patientId) ||
+                  (admitNeeded === "YES" && (!selectedWard || !selectedBed || !selectedNurse))
+                }
               >
                 Authorize & Create Prescription ({medicines.length} Medicines)
               </Button>

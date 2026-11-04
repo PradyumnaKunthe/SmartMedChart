@@ -140,6 +140,23 @@ export async function stopPrescription(
 
   return response.data
 }
+
+
+// ======================================================
+// REPLACE PRESCRIPTION
+// ======================================================
+
+export async function replacePrescription(
+  prescriptionId,
+  data,
+) {
+  const response = await api.post(
+    `/api/doctor/prescriptions/${prescriptionId}/replace`,
+    data,
+  )
+
+  return response.data
+}
 export async function getPatientMedicationSchedules(
   patientId,
 ) {
@@ -228,5 +245,20 @@ export async function getDoctorWardBeds(wardId, patientId = null) {
     params.patient_id = patientId
   }
   const response = await api.get(`/api/doctor/wards/${wardId}/beds`, { params })
+  return response.data
+}
+
+
+// ======================================================
+// AVAILABLE NURSES & NURSE ASSIGNMENT
+// ======================================================
+
+export async function getAvailableNurses() {
+  const response = await api.get("/api/doctor/available-nurses")
+  return response.data
+}
+
+export async function getPatientAssignedNurse(patientId) {
+  const response = await api.get(`/api/doctor/patients/${patientId}/assigned-nurse`)
   return response.data
 }

@@ -335,6 +335,14 @@ def remove_unadministered_schedules(prescription_item_id):
     for schedule in schedules:
         schedule_id = schedule["id"]
 
+        # 1. If schedule was already administered or given, preserve it completely!
+        if (
+            schedule.get("status") in ("ADMINISTERED", "GIVEN")
+            or schedule.get("actual_administration_time") is not None
+        ):
+            continue
+
+        # 2. If it has verification/prediction or other history, mark CANCELLED to preserve audit trail
         if schedule_has_history(schedule_id):
             mongo_db.medication_schedules.update_one(
                 {"_id": schedule_id},
@@ -347,6 +355,12 @@ def remove_unadministered_schedules(prescription_item_id):
             mongo_db.medication_schedules.delete_one({
                 "_id": schedule_id
             })
+
+        # Clean up any pending nurse notifications for this unadministered schedule
+        mongo_db.medication_notifications.delete_many({
+            "medication_schedule_id": schedule_id,
+            "status": "PENDING",
+        })
 
         removed += 1
 
@@ -493,14 +507,20 @@ def get_current_medications(
     patient_id: str,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
-    get_doctor_patient_or_404(
+    patient = get_doctor_patient_or_404(
         patient_id,
         current_user,
     )
 
+    actual_patient_id = int(patient.get("id", patient.get("_id")))
+    patient_str_id = patient.get("patient_id")
+    target_ids = [actual_patient_id, str(actual_patient_id)]
+    if patient_str_id:
+        target_ids.append(patient_str_id)
+
     prescriptions = list(
         mongo_db.prescriptions.find({
-            "patient_id": patient_id,
+            "patient_id": {"$in": target_ids},
             "status": "ACTIVE",
         })
     )
@@ -533,6 +553,7 @@ def get_current_medications(
                 "strength": medicine.get("strength"),
                 "dosage_form": medicine.get("dosage_form"),
                 "dose": item.get("dose"),
+                "dosage": item.get("dose"),
                 "route": item.get("route"),
                 "frequency": item.get("frequency"),
                 "duration_days": item.get("duration_days"),
@@ -547,7 +568,7 @@ def get_current_medications(
 
     result.sort(
         key=lambda item: (
-            item.get("start_date") or "",
+            str(item.get("start_date") or ""),
             item.get("medicine_name") or "",
         )
     )
@@ -569,14 +590,20 @@ def get_patient_medication_schedules(
         require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
-    get_doctor_patient_or_404(
+    patient = get_doctor_patient_or_404(
         patient_id,
         current_user,
     )
 
+    actual_patient_id = int(patient.get("id", patient.get("_id")))
+    patient_str_id = patient.get("patient_id")
+    target_ids = [actual_patient_id, str(actual_patient_id)]
+    if patient_str_id:
+        target_ids.append(patient_str_id)
+
     prescriptions = list(
         mongo_db.prescriptions.find({
-            "patient_id": patient_id
+            "patient_id": {"$in": target_ids}
         })
     )
 
@@ -680,6 +707,85 @@ def get_medicines(
 
 
 # =========================================================
+# AVAILABLE NURSES & PATIENT NURSE ASSIGNMENT (DOCTOR ACCESS)
+# =========================================================
+
+@router.get("/available-nurses")
+def get_available_nurses(
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    Retrieve all registered active nurses for inpatient admission assignment.
+    Doctors must not access admin endpoints; this endpoint provides safe,
+    authenticated nurse directory access.
+    """
+    nurse_role = mongo_db.roles.find_one({"name": {"$regex": "^nurse$", "$options": "i"}})
+    if not nurse_role:
+        return []
+
+    nurse_role_id = nurse_role.get("id", nurse_role.get("_id"))
+
+    nurses = list(
+        mongo_db.users.find({
+            "role_id": nurse_role_id,
+            "is_active": active_filter(),
+        }).sort([("full_name", 1), ("username", 1)])
+    )
+
+    return [
+        {
+            "id": n.get("id", n.get("_id")),
+            "nurse_id": n.get("id", n.get("_id")),
+            "username": n.get("username"),
+            "full_name": n.get("full_name") or n.get("username"),
+            "email": n.get("email"),
+            "role": "Nurse",
+        }
+        for n in nurses
+    ]
+
+
+@router.get("/patients/{patient_id}/assigned-nurse")
+def get_patient_assigned_nurse(
+    patient_id: str,
+    current_user=Depends(require_permission("VIEW_PATIENT")),
+):
+    """
+    Retrieve the current active assigned nurse for the specified patient under doctor's care.
+    """
+    patient = get_doctor_patient_or_404(patient_id, current_user)
+    patient_id_int = int(patient.get("id", patient.get("_id")))
+
+    assignment = mongo_db.nurse_patient_assignments.find_one({
+        "patient_id": patient_id_int,
+        "is_active": {"$in": [1, True]},
+    })
+
+    if not assignment or not assignment.get("nurse_id"):
+        return {"assigned_nurse": None}
+
+    nurse_id = int(assignment["nurse_id"])
+    nurse_user = mongo_db.users.find_one({"$or": [{"_id": nurse_id}, {"id": nurse_id}]})
+    nurse_name = (
+        nurse_user.get("full_name")
+        or nurse_user.get("username")
+        if nurse_user
+        else f"Nurse #{nurse_id}"
+    )
+
+    return {
+        "assigned_nurse": {
+            "assignment_id": assignment.get("id", assignment.get("_id")),
+            "nurse_id": nurse_id,
+            "nurse_name": nurse_name,
+            "username": nurse_user.get("username") if nurse_user else None,
+            "assigned_at": assignment.get("assigned_at"),
+            "is_active": True,
+        }
+    }
+
+
+# =========================================================
 # CREATE PRESCRIPTION
 # =========================================================
 
@@ -721,10 +827,35 @@ def create_prescription(
 
     # 2. Comprehensive validation across all items BEFORE writing to DB
     validated_items = []
+
+    replaced_rx = None
+    if getattr(request, "replaces_prescription_id", None):
+        target_pid = patient["id"]
+        replaced_rx = mongo_db.prescriptions.find_one({
+            "$or": [
+                {"_id": request.replaces_prescription_id},
+                {"id": request.replaces_prescription_id},
+            ],
+            "patient_id": {"$in": [target_pid, str(target_pid), patient.get("patient_id")]},
+        })
+        if not replaced_rx:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prescription #{request.replaces_prescription_id} not found for this patient.",
+            )
+        if replaced_rx.get("status") != "ACTIVE":
+            raise HTTPException(
+                status_code=400,
+                detail="Only active prescriptions can be replaced.",
+            )
+
     active_rx_ids = mongo_db.prescriptions.distinct(
         "_id",
-        {"patient_id": patient["id"], "status": "ACTIVE"}
+        {"patient_id": {"$in": [patient["id"], str(patient["id"]), patient.get("patient_id")]}, "status": "ACTIVE"}
     )
+    if replaced_rx:
+        rep_id = int(replaced_rx.get("id") or replaced_rx.get("_id"))
+        active_rx_ids = [rid for rid in active_rx_ids if rid != rep_id and str(rid) != str(rep_id)]
 
     seen_in_request = set()
 
@@ -818,6 +949,7 @@ def create_prescription(
         "doctor_id": current_user.id,
         "status": "ACTIVE",
         "notes": request.notes,
+        "replaces_prescription_id": int(replaced_rx.get("id") or replaced_rx.get("_id")) if replaced_rx else None,
         "item_count": len(validated_items),
         "created_at": now,
         "updated_at": now,
@@ -827,6 +959,10 @@ def create_prescription(
     created_schedule_ids = []
     created_items_summary = []
     all_schedules_for_notifs = []
+    allocated_bed_id = None
+    prev_bed_id = None
+    new_assignment_created_id = None
+    deactivated_prev_assignment_id = None
 
     try:
         mongo_db.prescriptions.insert_one(prescription)
@@ -913,6 +1049,7 @@ def create_prescription(
 
         # Handle inpatient admission & bed allocation if requested
         bed_info = None
+        nurse_info = None
         admit_patient_requested = getattr(request, "admit_patient", False)
         if admit_patient_requested:
             if not request.ward_id or not request.bed_id:
@@ -930,6 +1067,30 @@ def create_prescription(
 
             req_ward_id = int(request.ward_id)
             req_bed_id = int(request.bed_id)
+
+            # Validate nurse if provided
+            req_nurse_id = getattr(request, "nurse_id", None)
+            nurse_user = None
+            if req_nurse_id is not None:
+                try:
+                    req_nurse_id = int(req_nurse_id)
+                except (ValueError, TypeError):
+                    raise HTTPException(status_code=400, detail="Invalid nurse ID format.")
+
+                nurse_user = mongo_db.users.find_one({
+                    "$or": [{"_id": req_nurse_id}, {"id": req_nurse_id}],
+                })
+                if not nurse_user:
+                    raise HTTPException(status_code=404, detail="Selected nurse not found.")
+
+                if not mongo_bool(nurse_user.get("is_active")):
+                    raise HTTPException(status_code=400, detail="Selected nurse account is inactive.")
+
+                # Validate Nurse role
+                nurse_role = mongo_db.roles.find_one({"name": {"$regex": "^nurse$", "$options": "i"}})
+                nurse_role_id = nurse_role.get("id", nurse_role.get("_id")) if nurse_role else 2
+                if nurse_user.get("role_id") != nurse_role_id:
+                    raise HTTPException(status_code=400, detail="Selected staff member does not have the Nurse role.")
 
             # 2. Validate ward exists and is active
             ward = mongo_db.wards.find_one({
@@ -952,7 +1113,6 @@ def create_prescription(
             patient_id_int = int(patient.get("id") or patient.get("_id"))
 
             # 4. Atomic bed allocation with safe concurrency control:
-            # Bed must be either unoccupied OR already assigned to THIS patient
             allocation_res = mongo_db.beds.update_one(
                 {
                     "_id": actual_bed_id,
@@ -976,8 +1136,10 @@ def create_prescription(
                     detail="Selected bed is already occupied by another patient.",
                 )
 
-            # 5. Release previous bed if patient was assigned elsewhere
+            allocated_bed_id = actual_bed_id
             prev_bed_id = patient.get("bed_id")
+
+            # 5. Release previous bed if patient was assigned elsewhere
             if prev_bed_id and int(prev_bed_id) != req_bed_id:
                 mongo_db.beds.update_one(
                     {"$or": [{"_id": int(prev_bed_id)}, {"id": int(prev_bed_id)}, {"_id": str(prev_bed_id)}]},
@@ -1017,7 +1179,122 @@ def create_prescription(
                 "bed_number": bed.get("bed_number"),
             }
 
+            # 8. Create or update nurse-patient assignment
+            if req_nurse_id and nurse_user:
+                prev_active_assignment = mongo_db.nurse_patient_assignments.find_one({
+                    "patient_id": patient_id_int,
+                    "is_active": {"$in": [1, True]},
+                })
+
+                if prev_active_assignment:
+                    if prev_active_assignment.get("nurse_id") == req_nurse_id:
+                        # Already assigned to this exact nurse
+                        pass
+                    else:
+                        deactivated_prev_assignment_id = prev_active_assignment["_id"]
+                        mongo_db.nurse_patient_assignments.update_one(
+                            {"_id": prev_active_assignment["_id"]},
+                            {"$set": {
+                                "is_active": False,
+                                "ended_at": now,
+                                "updated_at": now,
+                            }}
+                        )
+                        reactivate_doc = mongo_db.nurse_patient_assignments.find_one({
+                            "nurse_id": req_nurse_id,
+                            "patient_id": patient_id_int,
+                        })
+                        if reactivate_doc:
+                            mongo_db.nurse_patient_assignments.update_one(
+                                {"_id": reactivate_doc["_id"]},
+                                {"$set": {
+                                    "is_active": True,
+                                    "assigned_at": now,
+                                    "assigned_by": current_user.id,
+                                    "updated_at": now,
+                                }}
+                            )
+                        else:
+                            assign_id = next_mongo_id("nurse_patient_assignments")
+                            new_assignment_created_id = assign_id
+                            mongo_db.nurse_patient_assignments.insert_one({
+                                "_id": assign_id,
+                                "id": assign_id,
+                                "nurse_id": req_nurse_id,
+                                "patient_id": patient_id_int,
+                                "assigned_at": now,
+                                "assigned_by": current_user.id,
+                                "is_active": True,
+                                "created_at": now,
+                                "updated_at": now,
+                            })
+                else:
+                    reactivate_doc = mongo_db.nurse_patient_assignments.find_one({
+                        "nurse_id": req_nurse_id,
+                        "patient_id": patient_id_int,
+                    })
+                    if reactivate_doc:
+                        mongo_db.nurse_patient_assignments.update_one(
+                            {"_id": reactivate_doc["_id"]},
+                            {"$set": {
+                                "is_active": True,
+                                "assigned_at": now,
+                                "assigned_by": current_user.id,
+                                "updated_at": now,
+                            }}
+                        )
+                    else:
+                        assign_id = next_mongo_id("nurse_patient_assignments")
+                        new_assignment_created_id = assign_id
+                        mongo_db.nurse_patient_assignments.insert_one({
+                            "_id": assign_id,
+                            "id": assign_id,
+                            "nurse_id": req_nurse_id,
+                            "patient_id": patient_id_int,
+                            "assigned_at": now,
+                            "assigned_by": current_user.id,
+                            "is_active": True,
+                            "created_at": now,
+                            "updated_at": now,
+                        })
+
+                nurse_info = {
+                    "nurse_id": req_nurse_id,
+                    "nurse_name": nurse_user.get("full_name") or nurse_user.get("username") or f"Nurse #{req_nurse_id}",
+                    "username": nurse_user.get("username"),
+                }
+
+        # If replacing an existing active prescription, supersede old prescription and cancel unadministered future schedules
+        if replaced_rx:
+            old_rx_id = int(replaced_rx.get("id") or replaced_rx.get("_id"))
+            mongo_db.prescriptions.update_one(
+                {"_id": old_rx_id},
+                {"$set": {
+                    "status": "SUPERSEDED",
+                    "superseded_by": prescription_id,
+                    "updated_at": now,
+                }}
+            )
+            old_items = list(mongo_db.prescription_items.find({"prescription_id": old_rx_id}))
+            for o_item in old_items:
+                mongo_db.prescription_items.update_one(
+                    {"_id": o_item["id"]},
+                    {"$set": {
+                        "status": "SUPERSEDED",
+                        "updated_at": now,
+                    }}
+                )
+                remove_unadministered_schedules(o_item["id"])
+
     except HTTPException:
+        if new_assignment_created_id:
+            mongo_db.nurse_patient_assignments.delete_one({"_id": new_assignment_created_id})
+        if deactivated_prev_assignment_id:
+            mongo_db.nurse_patient_assignments.update_one({"_id": deactivated_prev_assignment_id}, {"$set": {"is_active": True}})
+        if allocated_bed_id:
+            mongo_db.beds.update_one({"_id": allocated_bed_id}, {"$set": {"is_occupied": 0, "occupied_by_patient_id": None}})
+            if prev_bed_id:
+                mongo_db.beds.update_one({"$or": [{"_id": int(prev_bed_id)}, {"id": int(prev_bed_id)}]}, {"$set": {"is_occupied": 1, "occupied_by_patient_id": patient_id_int}})
         if created_schedule_ids:
             mongo_db.medication_schedules.delete_many({"_id": {"$in": created_schedule_ids}})
             mongo_db.medication_notifications.delete_many({"medication_schedule_id": {"$in": created_schedule_ids}})
@@ -1026,6 +1303,14 @@ def create_prescription(
         mongo_db.prescriptions.delete_one({"_id": prescription_id})
         raise
     except Exception as exc:
+        if new_assignment_created_id:
+            mongo_db.nurse_patient_assignments.delete_one({"_id": new_assignment_created_id})
+        if deactivated_prev_assignment_id:
+            mongo_db.nurse_patient_assignments.update_one({"_id": deactivated_prev_assignment_id}, {"$set": {"is_active": True}})
+        if allocated_bed_id:
+            mongo_db.beds.update_one({"_id": allocated_bed_id}, {"$set": {"is_occupied": 0, "occupied_by_patient_id": None}})
+            if prev_bed_id:
+                mongo_db.beds.update_one({"$or": [{"_id": int(prev_bed_id)}, {"id": int(prev_bed_id)}]}, {"$set": {"is_occupied": 1, "occupied_by_patient_id": patient_id_int}})
         if created_schedule_ids:
             mongo_db.medication_schedules.delete_many({"_id": {"$in": created_schedule_ids}})
             mongo_db.medication_notifications.delete_many({"medication_schedule_id": {"$in": created_schedule_ids}})
@@ -1047,6 +1332,14 @@ def create_prescription(
         "medicines": created_items_summary,
         "schedule_count": len(created_schedule_ids),
         "bed_assignment": bed_info,
+        "nurse_assignment": nurse_info,
+        "prescription_id": prescription_id,
+        "patient_id": patient["id"],
+        "doctor_id": current_user.id,
+        "medicine_count": len(created_items_summary),
+        "medicines": created_items_summary,
+        "schedule_count": len(created_schedule_ids),
+        "bed_assignment": bed_info,
         # Legacy fields for backward compatibility
         "prescription_item_id": first_item.get("id"),
         "medicine_id": first_item.get("medicine_id"),
@@ -1058,7 +1351,24 @@ def create_prescription(
         "start_date": first_item.get("start_date"),
         "start_time": first_item.get("start_time"),
         "is_stat": first_item.get("is_stat", False),
+        "replaces_prescription_id": prescription.get("replaces_prescription_id"),
     }
+
+
+# =========================================================
+# REPLACE PRESCRIPTION
+# =========================================================
+
+@router.post("/prescriptions/{prescription_id}/replace")
+def replace_prescription(
+    prescription_id: int,
+    request: PrescriptionCreate,
+    current_user=Depends(
+        require_permission("CREATE_PRESCRIPTION")
+    ),
+):
+    request.replaces_prescription_id = prescription_id
+    return create_prescription(request=request, current_user=current_user)
 
 
 # =========================================================
@@ -1228,7 +1538,7 @@ def stop_prescription(
     ),
 ):
     prescription = mongo_db.prescriptions.find_one({
-        "_id": prescription_id
+        "$or": [{"_id": prescription_id}, {"id": prescription_id}]
     })
 
     if prescription is None:
@@ -1243,10 +1553,11 @@ def stop_prescription(
             detail="Only active prescriptions can be stopped.",
         )
 
+    actual_rx_id = int(prescription.get("id") or prescription.get("_id"))
     now = mongo_now()
 
     mongo_db.prescriptions.update_one(
-        {"_id": prescription_id},
+        {"_id": actual_rx_id},
         {"$set": {
             "status": "STOPPED",
             "updated_at": now,
@@ -1255,7 +1566,7 @@ def stop_prescription(
 
     items = list(
         mongo_db.prescription_items.find({
-            "prescription_id": prescription_id
+            "prescription_id": actual_rx_id
         })
     )
 
@@ -1276,7 +1587,7 @@ def stop_prescription(
 
     return {
         "message": "Prescription stopped successfully.",
-        "prescription_id": prescription_id,
+        "prescription_id": actual_rx_id,
         "status": "STOPPED",
         "removed_future_schedules": removed_schedules,
     }
@@ -1294,58 +1605,119 @@ def get_prescription_history(
     patient_id: str,
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
-    get_doctor_patient_history_or_404(
+    patient = get_doctor_patient_history_or_404(
         patient_id,
         current_user,
     )
 
+    actual_patient_id = int(patient.get("id", patient.get("_id")))
+    patient_str_id = patient.get("patient_id")
+    target_ids = [actual_patient_id, str(actual_patient_id)]
+    if patient_str_id:
+        target_ids.append(patient_str_id)
+
     prescriptions = list(
         mongo_db.prescriptions.find({
-            "patient_id": patient_id
+            "patient_id": {"$in": target_ids}
         }).sort("created_at", -1)
     )
 
+    doctor_cache = {}
     result = []
 
     for prescription in prescriptions:
+        rx_id = int(prescription.get("id") or prescription.get("_id"))
+        doc_id = prescription.get("doctor_id")
+
+        if doc_id not in doctor_cache:
+            doc_user = mongo_db.users.find_one({"$or": [{"_id": doc_id}, {"id": doc_id}]})
+            if doc_user:
+                full_name = doc_user.get("full_name") or doc_user.get("username")
+                doctor_cache[doc_id] = f"Dr. {full_name}" if full_name and not str(full_name).startswith("Dr.") else (full_name or f"Dr. #{doc_id}")
+            else:
+                doctor_cache[doc_id] = f"Dr. #{doc_id}"
+
+        doctor_name = doctor_cache[doc_id]
+
         items = list(
             mongo_db.prescription_items.find({
-                "prescription_id": prescription["id"]
-            }).sort("id", -1)
+                "prescription_id": rx_id
+            }).sort("id", 1)
         )
 
+        formatted_items = []
         for item in items:
             medicine = mongo_db.medicines.find_one({
-                "_id": item["medicine_id"]
+                "$or": [{"_id": item["medicine_id"]}, {"id": item["medicine_id"]}]
             })
 
-            if medicine is None:
-                continue
+            med_name = medicine.get("name") if medicine else (item.get("medicine_name") or f"Medicine #{item.get('medicine_id')}")
+            gen_name = medicine.get("generic_name") if medicine else None
+            strength = medicine.get("strength") if medicine else None
+            dosage_form = medicine.get("dosage_form") if medicine else None
 
-            result.append({
-                "prescription_id": prescription["id"],
+            item_dict = {
+                "id": item["id"],
                 "prescription_item_id": item["id"],
-                "patient_id": prescription["patient_id"],
-                "doctor_id": prescription["doctor_id"],
-                "medicine_id": medicine["id"],
-                "medicine_name": medicine.get("name"),
-                "generic_name": medicine.get("generic_name"),
-                "strength": medicine.get("strength"),
-                "dosage_form": medicine.get("dosage_form"),
-                "dose": item.get("dose"),
-                "route": item.get("route"),
-                "frequency": item.get("frequency"),
-                "duration_days": item.get("duration_days"),
-                "start_date": item.get("start_date"),
-                "start_time": item.get("start_time"),
+                "prescription_id": rx_id,
+                "medicine_id": item["medicine_id"],
+                "medicine_name": med_name,
+                "generic_name": gen_name,
+                "strength": strength,
+                "dosage_form": dosage_form,
+                "dose": item.get("dose") or "",
+                "dosage": item.get("dose") or "",
+                "route": item.get("route") or "Oral",
+                "frequency": item.get("frequency") or "ONCE_DAILY",
+                "duration_days": int(item.get("duration_days") or 1),
+                "start_date": str(item.get("start_date") or ""),
+                "start_time": str(item.get("start_time") or "08:00"),
+                "administration_times": item.get("administration_times") or [],
                 "is_stat": mongo_bool(item.get("is_stat")),
                 "instructions": item.get("instructions"),
-                "prescription_status": prescription.get("status"),
-                "item_status": item.get("status"),
-                "prescription_notes": prescription.get("notes"),
-                "created_at": prescription.get("created_at"),
-                "updated_at": prescription.get("updated_at"),
-            })
+                "status": item.get("status", "ACTIVE"),
+                "item_status": item.get("status", "ACTIVE"),
+            }
+            formatted_items.append(item_dict)
+
+        first_item = formatted_items[0] if formatted_items else {}
+        rx_status = str(prescription.get("status") or "ACTIVE").upper()
+
+        rx_record = {
+            "id": rx_id,
+            "prescription_id": rx_id,
+            "patient_id": actual_patient_id,
+            "doctor_id": doc_id,
+            "doctor_name": doctor_name,
+            "status": rx_status,
+            "prescription_status": rx_status,
+            "is_active": rx_status == "ACTIVE",
+            "notes": prescription.get("notes"),
+            "prescription_notes": prescription.get("notes"),
+            "replaces_prescription_id": prescription.get("replaces_prescription_id"),
+            "superseded_by": prescription.get("superseded_by"),
+            "items": formatted_items,
+            # Top-level flat compatibility fields
+            "prescription_item_id": first_item.get("id"),
+            "medicine_id": first_item.get("medicine_id"),
+            "medicine_name": first_item.get("medicine_name"),
+            "generic_name": first_item.get("generic_name"),
+            "strength": first_item.get("strength"),
+            "dosage_form": first_item.get("dosage_form"),
+            "dose": first_item.get("dose"),
+            "dosage": first_item.get("dosage"),
+            "route": first_item.get("route"),
+            "frequency": first_item.get("frequency"),
+            "duration_days": first_item.get("duration_days"),
+            "start_date": first_item.get("start_date"),
+            "start_time": first_item.get("start_time"),
+            "is_stat": first_item.get("is_stat", False),
+            "instructions": first_item.get("instructions"),
+            "item_status": first_item.get("item_status"),
+            "created_at": prescription.get("created_at"),
+            "updated_at": prescription.get("updated_at"),
+        }
+        result.append(rx_record)
 
     return result
 

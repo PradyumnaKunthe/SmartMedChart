@@ -68,6 +68,16 @@ class PrescriptionCreate(BaseModel):
 
     bed_id: Optional[int] = None
 
+    nurse_id: Optional[int] = Field(
+        default=None,
+        description="Optional ID of the registered nurse assigned to the patient upon inpatient admission.",
+    )
+
+    replaces_prescription_id: Optional[int] = Field(
+        default=None,
+        description="Optional ID of an existing active prescription that is being replaced and superseded by this new order.",
+    )
+
     # Multiple medicines per prescription
     medicines: List[PrescriptionItemCreate] = Field(
         default_factory=list,

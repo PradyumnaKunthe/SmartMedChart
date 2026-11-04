@@ -79,7 +79,9 @@ export default function EditPrescription() {
 
         const historyList = Array.isArray(historyData) ? historyData : []
         const currentPrescription = historyList.find(
-          (item) => String(item.id) === String(prescriptionId)
+          (item) =>
+            String(item.id) === String(prescriptionId) ||
+            String(item.prescription_id) === String(prescriptionId)
         )
 
         if (!currentPrescription) {
