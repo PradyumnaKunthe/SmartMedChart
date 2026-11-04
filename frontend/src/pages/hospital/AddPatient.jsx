@@ -33,7 +33,7 @@ import Card, { CardHeader } from "../../components/common/Card"
 import Button from "../../components/common/Button"
 import Badge from "../../components/common/Badge"
 import api from "../../services/api"
-import { getHospitalDoctors } from "../../services/admin"
+import { createHospitalPatient, getHospitalDoctors } from "../../services/hospital"
 
 const PROBLEM_CATEGORIES = [
   "GENERAL MEDICINE",
@@ -368,8 +368,8 @@ export default function AddPatient() {
         bed_id: null,
       }
 
-      const response = await api.post("/api/hospital/patients", payload)
-      const createdPatient = response.data?.patient
+      const response = await createHospitalPatient(payload)
+      const createdPatient = response?.patient
 
       setSuccessPatient(createdPatient || { full_name: form.full_name })
 
