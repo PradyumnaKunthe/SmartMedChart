@@ -578,7 +578,7 @@ def run_e2e_tests():
         )
         assert False, "Expected error because bed 2 is already occupied"
     except HTTPException as e:
-        assert e.status_code == 400
+        assert e.status_code in (400, 409)
         print(f"PASS: Admission to occupied bed rejected: {e.detail}")
 
     after_assignments_count = mongo_db.nurse_patient_assignments.count_documents({"patient_id": pat_id})

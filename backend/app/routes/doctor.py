@@ -1,6 +1,7 @@
 
 from datetime import date, datetime, time, timedelta
 import re
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -80,7 +81,7 @@ def next_mongo_id(collection_name: str) -> int:
         return_document=True,
     )
 
-    return int(result["value"])
+    return int(result["value"]) if result else 1
 
 
 def patient_response(patient):
@@ -105,7 +106,7 @@ def get_doctor_patient_or_404(patient_id: Any, current_user):
     Return only an active patient assigned to the
     currently logged-in doctor through an active encounter.
     """
-    queries = [{"patient_id": str(patient_id).strip()}]
+    queries: list[dict[str, Any]] = [{"patient_id": str(patient_id).strip()}]
     try:
         numeric_id = int(patient_id)
         queries.extend([{"_id": numeric_id}, {"id": numeric_id}])
@@ -148,7 +149,7 @@ def get_doctor_patient_history_or_404(patient_id: Any, current_user):
     Verify that the patient exists and has at least one clinical
     encounter linked to the logged-in doctor (active or discharged).
     """
-    queries = [{"patient_id": str(patient_id).strip()}]
+    queries: list[dict[str, Any]] = [{"patient_id": str(patient_id).strip()}]
     try:
         numeric_id = int(patient_id)
         queries.extend([{"_id": numeric_id}, {"id": numeric_id}])
@@ -392,7 +393,7 @@ def doctor_test(
     response_model=list[PatientSearchResponse],
 )
 def search_patients(
-    search: str | None = Query(
+    search: Optional[str] = Query(
         default=None,
         min_length=1,
         max_length=100,
@@ -800,6 +801,7 @@ def create_prescription(
         request.patient_id,
         current_user,
     )
+    patient_id_int = int(patient.get("id") or patient.get("_id"))
 
     # 1. Normalize list of medicine items (support multi-medicine or legacy single-medicine)
     raw_medicines = []
@@ -2092,7 +2094,7 @@ def get_doctor_wards(
 @router.get("/wards/{ward_id}/beds")
 def get_doctor_ward_beds(
     ward_id: int,
-    patient_id: Any = Query(None, description="Optional patient ID to include current bed"),
+    patient_id: Optional[str] = Query(None, description="Optional patient ID to include current bed"),
     current_user=Depends(require_permission("VIEW_PATIENT")),
 ):
     """
