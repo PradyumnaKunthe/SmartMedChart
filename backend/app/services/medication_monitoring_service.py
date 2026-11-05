@@ -19,9 +19,12 @@ DEFAULT_HOSPITAL_POLICY = {
 
 def get_hospital_policy() -> Dict[str, Any]:
     """Retrieve hospital policy from MongoDB or fallback to standard policy."""
-    policy = mongo_db.hospital_policies.find_one({"_id": "medication_administration"})
-    if policy:
-        return {**DEFAULT_HOSPITAL_POLICY, **policy}
+    try:
+        policy = mongo_db.hospital_policies.find_one({"_id": "medication_administration"})
+        if policy:
+            return {**DEFAULT_HOSPITAL_POLICY, **policy}
+    except Exception:
+        pass
     return DEFAULT_HOSPITAL_POLICY
 
 
@@ -133,27 +136,46 @@ def compute_monitoring_status(
         return raw_status, 0.0
 
     # 2. Administered medication outcomes
-    if actual_time_val or raw_status in {"GIVEN", "GIVEN_ON_TIME", "GIVEN_LATE"}:
+    if actual_time_val or raw_status in {"GIVEN", "GIVEN_ON_TIME", "GIVEN_LATE", "GIVEN_EARLY"}:
         actual_dt = parse_iso_or_sql_datetime(actual_time_val)
         if actual_dt and scheduled_dt:
-            # Normalize to naive for direct difference if one is timezone-aware
-            act = actual_dt.replace(tzinfo=None) if actual_dt.tzinfo else actual_dt
+            # Handle timezone: if actual_dt is timezone-aware (e.g. UTC from authoritative server clock),
+            # convert to hospital timezone (Asia/Kolkata) to compare with scheduled local hospital datetime.
+            if actual_dt.tzinfo is not None:
+                try:
+                    from zoneinfo import ZoneInfo
+                    hosp_tz = ZoneInfo("Asia/Kolkata")
+                except Exception:
+                    hosp_tz = timezone(timedelta(hours=5, minutes=30))
+                act = actual_dt.astimezone(hosp_tz).replace(tzinfo=None)
+            else:
+                act = actual_dt
             sch = scheduled_dt.replace(tzinfo=None) if scheduled_dt.tzinfo else scheduled_dt
             diff_minutes = (act - sch).total_seconds() / 60.0
-            
-            if diff_minutes <= grace_after:
+
+            if diff_minutes < -grace_before:
+                return "GIVEN_EARLY", round(diff_minutes, 1)
+            elif diff_minutes <= grace_after:
                 return "GIVEN_ON_TIME", round(diff_minutes, 1)
             else:
                 return "GIVEN_LATE", round(diff_minutes, 1)
-        
+
         # Fallback if actual_time_val is missing but status was recorded
-        if raw_status == "GIVEN_LATE":
-            return "GIVEN_LATE", 65.0
+        if raw_status in {"GIVEN_LATE", "GIVEN_EARLY"}:
+            return raw_status, 65.0 if raw_status == "GIVEN_LATE" else -35.0
         return "GIVEN_ON_TIME", 0.0
 
     # 3. Unadministered schedules evaluated against current time
     if scheduled_dt:
-        cur = current_dt.replace(tzinfo=None) if current_dt.tzinfo else current_dt
+        if current_dt.tzinfo is not None:
+            try:
+                from zoneinfo import ZoneInfo
+                hosp_tz = ZoneInfo("Asia/Kolkata")
+            except Exception:
+                hosp_tz = timezone(timedelta(hours=5, minutes=30))
+            cur = current_dt.astimezone(hosp_tz).replace(tzinfo=None)
+        else:
+            cur = current_dt
         sch = scheduled_dt.replace(tzinfo=None) if scheduled_dt.tzinfo else scheduled_dt
         diff_minutes = (cur - sch).total_seconds() / 60.0
 
@@ -326,6 +348,7 @@ def get_monitoring_dashboard(
         "due": 0,
         "given_on_time": 0,
         "given_late": 0,
+        "given_early": 0,
         "overdue": 0,
         "missed": 0,
         "held": 0,
@@ -454,7 +477,7 @@ def get_monitoring_dashboard(
         detailed_schedules.append(row)
 
     # Compute overall compliance percentages
-    total_completed = counts["given_on_time"] + counts["given_late"]
+    total_completed = counts["given_on_time"] + counts["given_late"] + counts.get("given_early", 0)
     total_actioned = total_completed + counts["held"] + counts["refused"] + counts["not_given"]
     on_time_rate = round((counts["given_on_time"] / total_completed * 100), 1) if total_completed > 0 else 100.0
     overall_compliance = round(((counts["given_on_time"] + counts["held"]) / counts["total_scheduled"] * 100), 1) if counts["total_scheduled"] > 0 else 100.0
@@ -518,6 +541,9 @@ def get_compliance_reports() -> Dict[str, Any]:
             entry["given_on_time"] += 1
         elif st == "GIVEN_LATE":
             entry["given_late"] += 1
+        elif st == "GIVEN_EARLY":
+            entry.setdefault("given_early", 0)
+            entry["given_early"] += 1
         elif st == "HELD":
             entry["held"] += 1
         elif st == "REFUSED":
@@ -530,7 +556,7 @@ def get_compliance_reports() -> Dict[str, Any]:
 
     by_nurse_list = []
     for entry in nurse_stats.values():
-        total_given = entry["given_on_time"] + entry["given_late"]
+        total_given = entry["given_on_time"] + entry["given_late"] + entry.get("given_early", 0)
         on_time_pct = round((entry["given_on_time"] / total_given * 100), 1) if total_given > 0 else 100.0
         by_nurse_list.append({**entry, "on_time_pct": on_time_pct})
 
@@ -546,6 +572,7 @@ def get_compliance_reports() -> Dict[str, Any]:
                 "total_scheduled": 0,
                 "given_on_time": 0,
                 "given_late": 0,
+                "given_early": 0,
                 "overdue": 0,
                 "missed": 0,
             }
@@ -556,6 +583,8 @@ def get_compliance_reports() -> Dict[str, Any]:
             w["given_on_time"] += 1
         elif st == "GIVEN_LATE":
             w["given_late"] += 1
+        elif st == "GIVEN_EARLY":
+            w["given_early"] += 1
         elif st == "OVERDUE":
             w["overdue"] += 1
         elif st == "MISSED":
@@ -563,7 +592,7 @@ def get_compliance_reports() -> Dict[str, Any]:
 
     by_ward_list = []
     for w in ward_stats.values():
-        completed = w["given_on_time"] + w["given_late"]
+        completed = w["given_on_time"] + w["given_late"] + w.get("given_early", 0)
         comp_rate = round((w["given_on_time"] / w["total_scheduled"] * 100), 1) if w["total_scheduled"] > 0 else 100.0
         by_ward_list.append({**w, "compliance_rate": comp_rate})
 

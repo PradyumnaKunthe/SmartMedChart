@@ -29,6 +29,18 @@ function normalizeStatus(status) {
   return String(status || "").trim().toUpperCase().replace(/_/g, " ")
 }
 
+function formatApiError(err, fallback = "Unable to retrieve medication schedule.") {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === "string") return detail
+  if (Array.isArray(detail)) {
+    return detail.map((e) => (typeof e === "string" ? e : e?.msg || JSON.stringify(e))).join("; ")
+  }
+  if (detail && typeof detail === "object") {
+    return detail.message || JSON.stringify(detail)
+  }
+  return err?.message || fallback
+}
+
 function getStatusBadgeVariant(status) {
   switch (normalizeStatus(status)) {
     case "GIVEN":
@@ -85,9 +97,7 @@ export default function MedicationDetails() {
         const data = await getMedicationSchedule(scheduleId)
         setMedication(data)
       } catch (err) {
-        setError(
-          err?.response?.data?.detail || "Unable to retrieve medication schedule."
-        )
+        setError(formatApiError(err, "Unable to retrieve medication schedule."))
       } finally {
         setLoading(false)
       }

@@ -1,16 +1,11 @@
 import React, { useCallback, useState } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import {
-  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  Clock,
   LoaderCircle,
   Pill,
-  QrCode,
   RotateCcw,
-  ShieldCheck,
-  Sparkles,
   User,
   XCircle,
 } from "lucide-react"
@@ -107,8 +102,8 @@ export default function QRScanner() {
 
   return (
     <MainLayout
-      title="Bedside Patient Verification & Smart Countdown"
-      subtitle="Scan patient wristband to verify identity, retrieve active medication schedules, and monitor countdown to next scheduled dose"
+      title="Bedside Verification & Daily Medication Tracker"
+      subtitle="Scan patient wristband to verify identity, track daily medication schedules, and record administrations"
     >
       <div className="mx-auto max-w-4xl space-y-6">
         {/* Navigation */}
@@ -178,10 +173,10 @@ export default function QRScanner() {
                 )}
               </div>
               <div className="min-w-0">
-                <div className="text-xs font-bold">2. Smart Countdown</div>
+                <div className="text-xs font-bold">2. Daily Tracker & Countdown</div>
                 <div className="text-[11px] text-slate-500 truncate">
                   {patientId && (!medicationResult || medicationResult?.valid)
-                    ? "Schedule synchronized"
+                    ? "Doses synchronized"
                     : "Pending scan"}
                 </div>
               </div>
@@ -195,7 +190,7 @@ export default function QRScanner() {
               <div className="min-w-0">
                 <div className="text-xs font-bold">3. Bedside Administration</div>
                 <div className="text-[11px] text-slate-500 truncate">
-                  Five-Rights Check
+                  Mark as Given & Safety
                 </div>
               </div>
             </div>

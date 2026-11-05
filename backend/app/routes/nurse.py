@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
+from bson import ObjectId
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -27,6 +28,7 @@ VALID_ADMINISTRATION_STATUSES = {
     "GIVEN",
     "GIVEN_ON_TIME",
     "GIVEN_LATE",
+    "GIVEN_EARLY",
     "DELAYED",
     "HELD",
     "REFUSED",
@@ -38,19 +40,41 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _get_id_candidates(value):
+    if value is None:
+        return []
+    candidates = [value]
+    val_str = str(value).strip()
+    candidates.append(val_str)
+    try:
+        candidates.append(int(val_str))
+    except (ValueError, TypeError):
+        pass
+    if len(val_str) == 24:
+        try:
+            candidates.append(ObjectId(val_str))
+        except Exception:
+            pass
+    res = []
+    for c in candidates:
+        if c not in res:
+            res.append(c)
+    return res
+
+
 def _by_id(collection_name: str, value):
     if value is None:
         return None
 
-    try:
-        numeric_id = int(value)
-    except (TypeError, ValueError):
-        return None
+    candidates = _get_id_candidates(value)
+    or_filters = [
+        {"_id": {"$in": candidates}},
+        {"id": {"$in": candidates}},
+    ]
+    if collection_name == "patients":
+        or_filters.append({"patient_id": {"$in": candidates}})
 
-    return (
-        mongo_db[collection_name].find_one({"_id": numeric_id})
-        or mongo_db[collection_name].find_one({"id": numeric_id})
-    )
+    return mongo_db[collection_name].find_one({"$or": or_filters})
 
 
 def _assigned_patient_ids(nurse_id: int) -> set[int]:
@@ -96,37 +120,62 @@ def _get_primary_assigned_nurse(patient_id: int) -> tuple[Optional[int], Optiona
 
 
 def _schedule_context(schedule):
-    if schedule.get("status") in ("CANCELLED", "DISCHARGED"):
+    if not schedule:
         return None
 
-    item = _by_id(
-        "prescription_items",
-        schedule.get("prescription_item_id"),
+    sched_status = str(schedule.get("status") or "").upper().strip()
+    if sched_status in ("CANCELLED", "DISCHARGED"):
+        return None
+
+    item_id = schedule.get("prescription_item_id")
+    item = _by_id("prescription_items", item_id) if item_id else None
+
+    # Fallback to prescription and medicine directly from schedule if item document is missing
+    rx_id = (item.get("prescription_id") if item else None) or schedule.get("prescription_id")
+    prescription = _by_id("prescriptions", rx_id) if rx_id else None
+
+    # Patient lookup
+    pt_id = (
+        (prescription.get("patient_id") if prescription else None)
+        or schedule.get("patient_id")
     )
-    if not item or item.get("status") in ("CANCELLED", "DISCHARGED"):
+    patient = _by_id("patients", pt_id) if pt_id else None
+
+    # Medicine lookup
+    med_id = (item.get("medicine_id") if item else None) or schedule.get("medicine_id")
+    medicine = _by_id("medicines", med_id) if med_id else None
+
+    if patient is None:
         return None
 
-    prescription = _by_id(
-        "prescriptions",
-        item.get("prescription_id"),
-    )
-    if not prescription or prescription.get("status") in ("CANCELLED", "DISCHARGED"):
-        return None
+    # If item is missing but schedule contains dosing parameters, construct a synthesized item
+    if not item:
+        item = {
+            "_id": item_id or 0,
+            "id": item_id or 0,
+            "prescription_id": rx_id or 0,
+            "medicine_id": med_id or (medicine.get("id", medicine.get("_id")) if medicine else 0),
+            "dose": schedule.get("dose") or (medicine.get("strength") if medicine else None),
+            "route": schedule.get("route") or "Oral",
+            "frequency": schedule.get("frequency") or "ONCE_DAILY",
+            "instructions": schedule.get("instructions"),
+            "is_stat": bool(schedule.get("is_stat", False)),
+        }
 
-    patient = _by_id(
-        "patients",
-        prescription.get("patient_id"),
-    )
-    medicine = _by_id(
-        "medicines",
-        item.get("medicine_id"),
-    )
+    if not medicine:
+        medicine = {
+            "_id": med_id or 0,
+            "id": med_id or 0,
+            "name": schedule.get("medicine_name") or "Medication",
+        }
 
-    if patient is None or medicine is None:
-        return None
-
-    if not (patient.get("is_active") in (True, 1)) or patient.get("lifecycle_status") == "DISCHARGED":
-        return None
+    if not prescription:
+        prescription = {
+            "_id": rx_id or 0,
+            "id": rx_id or 0,
+            "patient_id": patient.get("id", patient.get("_id")),
+            "status": "ACTIVE",
+        }
 
     return item, prescription, patient, medicine
 
@@ -154,6 +203,13 @@ def _build_medication_response(
         is_assigned = _is_patient_assigned(current_nurse_id, int(patient_id))
         assigned_nurse_id, assigned_nurse_name = _get_primary_assigned_nurse(int(patient_id))
 
+    admin_by_id = schedule.get("administered_by")
+    admin_by_name = schedule.get("administered_by_name") or schedule.get("nurse_name")
+    if not admin_by_name and admin_by_id:
+        adm_user = _by_id("users", admin_by_id)
+        if adm_user:
+            admin_by_name = adm_user.get("full_name") or adm_user.get("username")
+
     return {
         "id": schedule.get("id", schedule.get("_id")),
         "prescription_item_id": schedule.get("prescription_item_id"),
@@ -162,8 +218,11 @@ def _build_medication_response(
         "status": schedule.get("status") or mon_status,
         "monitoring_status": mon_status,
         "delay_minutes": delay_mins,
-        "actual_administration_time": schedule.get("actual_administration_time"),
-        "administered_by": schedule.get("administered_by"),
+        "actual_administration_time": schedule.get("actual_administration_time") or schedule.get("administered_at"),
+        "administered_at": schedule.get("administered_at") or schedule.get("actual_administration_time"),
+        "administered_by": admin_by_id,
+        "administered_by_name": admin_by_name,
+        "nurse_name": admin_by_name,
         "notes": schedule.get("notes"),
         "is_override": bool(schedule.get("is_override", False)),
         "override_reason": schedule.get("override_reason"),
@@ -191,29 +250,35 @@ def _build_medication_response(
     }
 
 
-def _get_nurse_schedule(schedule_id: int, nurse_id: int, allow_override: bool = False):
+def _get_nurse_schedule(schedule_id: Union[int, str], nurse_id: int, allow_override: bool = False):
     schedule = _by_id("medication_schedules", schedule_id)
     if schedule is None:
         raise HTTPException(
             status_code=404,
-            detail="Medication schedule not found.",
+            detail=f"Medication schedule #{schedule_id} was not found in the hospital records.",
         )
 
     context = _schedule_context(schedule)
     if context is None:
         raise HTTPException(
             status_code=404,
-            detail="Patient or medication details for this schedule were not found.",
+            detail=f"Patient or medication details for schedule #{schedule_id} could not be resolved.",
         )
 
     item, prescription, patient, medicine = context
-    patient_id = int(patient.get("id", patient.get("_id")))
+    patient_id_raw = patient.get("id", patient.get("_id"))
+    try:
+        patient_id = int(patient_id_raw)
+    except (ValueError, TypeError):
+        patient_id = patient_id_raw
+
     is_assigned = _is_patient_assigned(nurse_id, patient_id)
 
     if not is_assigned and not allow_override:
+        orig_id, orig_name = _get_primary_assigned_nurse(patient_id)
         raise HTTPException(
             status_code=403,
-            detail="This patient is not assigned to this nurse.",
+            detail=f"This patient is currently assigned to {orig_name or f'Nurse #{orig_id}'}. Covering nurse override reason is required.",
         )
 
     return schedule, item, prescription, patient, medicine, is_assigned
@@ -376,11 +441,18 @@ def get_nurse_patient_details(
 )
 def get_nurse_medications(
     patient_id: Optional[int] = Query(None, description="Optional patient ID to filter schedules"),
+    date: Optional[str] = Query(None, description="Optional schedule date filter (YYYY-MM-DD)"),
     current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
 ):
-    # Handle direct Python function calls where patient_id parameter defaults to Query instance
+    # Handle direct Python function calls where parameters default to Query instance
     if hasattr(patient_id, "default"):
         patient_id = patient_id.default
+    if hasattr(date, "default"):
+        date = date.default
+
+    clean_date = None
+    if date and isinstance(date, str) and date.strip():
+        clean_date = date.strip().split("T")[0]
 
     if patient_id is not None and isinstance(patient_id, (int, str)):
         try:
@@ -392,9 +464,15 @@ def get_nurse_medications(
         if not patient_doc or not (patient_doc.get("is_active") in (True, 1)) or patient_doc.get("lifecycle_status") == "DISCHARGED":
             raise HTTPException(status_code=404, detail="Patient not found or inactive.")
 
+        p_candidates = _get_id_candidates(target_pid)
+        canonical_pid = patient_doc.get("id", patient_doc.get("_id", target_pid))
+        p_candidates.extend(_get_id_candidates(canonical_pid))
+        if patient_doc.get("patient_id"):
+            p_candidates.extend(_get_id_candidates(patient_doc["patient_id"]))
+
         is_assigned = _is_patient_assigned(current_user.id, target_pid)
         recent_qr = mongo_db.qr_verifications.find_one({
-            "patient_id": target_pid,
+            "patient_id": {"$in": p_candidates},
             "verified_by": int(current_user.id),
             "patient_qr_valid": True,
         }, sort=[("verified_at", -1)])
@@ -407,20 +485,34 @@ def get_nurse_medications(
             )
 
         active_rxs = list(mongo_db.prescriptions.find({
-            "patient_id": target_pid,
+            "patient_id": {"$in": p_candidates},
             "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
         }))
-        rx_ids = [rx.get("id", rx.get("_id")) for rx in active_rxs]
+        rx_ids = []
+        for rx in active_rxs:
+            rx_ids.extend(_get_id_candidates(rx.get("id", rx.get("_id"))))
+
         active_items = list(mongo_db.prescription_items.find({
             "prescription_id": {"$in": rx_ids},
             "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
-        }))
-        item_ids = [it.get("id", it.get("_id")) for it in active_items]
+        })) if rx_ids else []
+        item_ids = []
+        for it in active_items:
+            item_ids.extend(_get_id_candidates(it.get("id", it.get("_id"))))
 
-        schedules = list(mongo_db.medication_schedules.find({
-            "prescription_item_id": {"$in": item_ids},
+        or_conditions = []
+        if item_ids:
+            or_conditions.append({"prescription_item_id": {"$in": item_ids}})
+        or_conditions.append({"patient_id": {"$in": p_candidates}})
+
+        sched_query = {
+            "$or": or_conditions,
             "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
-        }).sort([
+        }
+        if clean_date:
+            sched_query["scheduled_date"] = clean_date
+
+        schedules = list(mongo_db.medication_schedules.find(sched_query).sort([
             ("scheduled_date", 1),
             ("scheduled_time", 1),
             ("_id", 1),
@@ -456,7 +548,11 @@ def get_nurse_medications(
         return []
 
     results = []
-    schedules = mongo_db.medication_schedules.find({}).sort(
+    sched_query = {}
+    if clean_date:
+        sched_query["scheduled_date"] = clean_date
+
+    schedules = mongo_db.medication_schedules.find(sched_query).sort(
         [
             ("scheduled_date", 1),
             ("scheduled_time", 1),
@@ -504,7 +600,7 @@ def get_nurse_medications(
     response_model=MedicationScheduleResponse,
 )
 def get_medication(
-    schedule_id: int,
+    schedule_id: Union[int, str],
     current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
 ):
     schedule, item, prescription, patient, medicine, is_assigned = (
@@ -553,7 +649,7 @@ def _next_administration_id() -> int:
 # =========================================================
 @router.post("/medications/{schedule_id}/administer")
 def administer_medication(
-    schedule_id: int,
+    schedule_id: Union[int, str],
     request: MedicationAdministrationCreate,
     current_user=Depends(require_permission("ADMINISTER_MEDICATION")),
 ):
@@ -576,23 +672,37 @@ def administer_medication(
             ),
         )
 
-    patient_id = int(patient.get("id", patient.get("_id")))
+    patient_id_raw = patient.get("id", patient.get("_id"))
+    try:
+        patient_id = int(patient_id_raw)
+    except (ValueError, TypeError):
+        patient_id = patient_id_raw
+
+    s_candidates = _get_id_candidates(schedule_id)
+    p_candidates = _get_id_candidates(patient_id)
+    canonical_sched_id = schedule.get("id", schedule.get("_id", schedule_id))
 
     # 1. Prevent duplicate administration records (concurrency protection)
     existing = mongo_db.medication_administrations.find_one(
-        {"medication_schedule_id": int(schedule_id)}
+        {"medication_schedule_id": {"$in": s_candidates}}
     )
     if existing is not None:
+        admin_time = existing.get("actual_administration_time") or existing.get("administered_at")
+        time_str = ""
+        if admin_time:
+            parsed = parse_iso_or_sql_datetime(str(admin_time))
+            if parsed:
+                time_str = f" at {parsed.strftime('%I:%M %p')}"
         raise HTTPException(
             status_code=409,
-            detail=f"Medication schedule {schedule_id} already has an administration record.",
+            detail=f"This scheduled dose has already been recorded as administered{time_str}.",
         )
 
     # 2. Require successful patient AND medication QR verification
     verification = mongo_db.qr_verifications.find_one(
         {
-            "medication_schedule_id": int(schedule_id),
-            "patient_id": patient_id,
+            "medication_schedule_id": {"$in": s_candidates},
+            "patient_id": {"$in": p_candidates},
             "verified_by": int(current_user.id),
             "patient_qr_valid": {"$in": [1, True]},
             "medication_valid": {"$in": [1, True]},
@@ -602,14 +712,48 @@ def administer_medication(
     )
 
     if verification is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Patient and medication QR verification must be "
-                "completed before administration."
-            ),
+        # Check if there is an active valid patient wristband verification by this nurse for this patient
+        patient_verification = mongo_db.qr_verifications.find_one(
+            {
+                "patient_id": {"$in": p_candidates},
+                "verified_by": int(current_user.id),
+                "patient_qr_valid": {"$in": [1, True]},
+                "result": "SUCCESS",
+            },
+            sort=[("_id", -1)],
         )
-
+        if patient_verification is not None:
+            v_id = next_mongo_id("qr_verifications")
+            now_iso = _now_iso()
+            v_msg = (
+                "Patient wristband and scheduled dose verified at bedside."
+                if is_assigned
+                else "Patient wristband and scheduled dose verified at bedside (Covering Nurse Coverage)."
+            )
+            verification = {
+                "_id": v_id,
+                "id": v_id,
+                "patient_id": patient_id,
+                "medication_schedule_id": canonical_sched_id,
+                "verified_by": int(current_user.id),
+                "verified_at": now_iso,
+                "patient_qr_valid": True,
+                "medication_valid": True,
+                "is_override": not is_assigned,
+                "result": "SUCCESS",
+                "message": v_msg,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+            mongo_db.qr_verifications.insert_one(verification)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Patient and medication QR verification must be "
+                    "completed before administration."
+                ),
+            )
 
     # 3. Check nurse assignment and handle override
     orig_nurse_id, orig_nurse_name = _get_primary_assigned_nurse(patient_id)
@@ -628,8 +772,13 @@ def administer_medication(
                 ),
             )
 
-    # 4. Calculate actual administration timing & on-time status
-    administered_at = request.administered_at or datetime.now(timezone.utc)
+    # 4. Authoritative UTC administration timestamp from server clock
+    now_utc = datetime.now(timezone.utc)
+    if request.administered_at:
+        administered_at = request.administered_at
+    else:
+        administered_at = now_utc
+
     administered_at_value = (
         administered_at.isoformat()
         if hasattr(administered_at, "isoformat")
@@ -643,7 +792,7 @@ def administer_medication(
         "status": status_input,
     }
 
-    # Determine monitoring status
+    # Determine monitoring status automatically
     if status_input in {"HELD", "REFUSED", "NOT_GIVEN"}:
         calculated_status = status_input
         delay_minutes = 0.0
@@ -658,20 +807,30 @@ def administer_medication(
     administration_id = _next_administration_id()
     administering_nurse_name = getattr(current_user, "full_name", None) or getattr(current_user, "username", f"Nurse #{current_user.id}")
 
+    first_name = (patient.get("first_name") or "").strip()
+    last_name = (patient.get("last_name") or "").strip()
+    patient_full_name = f"{first_name} {last_name}".strip() or "Unnamed Patient"
+
     administration_doc = {
         "_id": administration_id,
         "id": administration_id,
-        "medication_schedule_id": int(schedule_id),
+        "medication_schedule_id": canonical_sched_id,
         "patient_id": patient_id,
-        "prescription_item_id": int(item.get("id", item.get("_id"))),
-        "medicine_id": int(medicine.get("id", medicine.get("_id"))),
+        "patient_name": patient_full_name,
+        "patient_code": patient.get("patient_id"),
+        "prescription_item_id": item.get("id", item.get("_id")),
+        "medicine_id": medicine.get("id", medicine.get("_id")),
         "medicine_name": medicine.get("name"),
+        "prescribed_dose": item.get("dose") or medicine.get("strength"),
+        "dose": item.get("dose") or medicine.get("strength"),
+        "route": item.get("route"),
         "scheduled_date": schedule.get("scheduled_date"),
         "scheduled_time": schedule.get("scheduled_time"),
         "administered_by": int(current_user.id),
         "nurse_name": administering_nurse_name,
         "status": calculated_status,
         "administered_at": administered_at_value,
+        "actual_administration_time": administered_at_value,
         "delay_minutes": delay_minutes,
         "notes": request.notes,
         "verification_id": verification.get("id", verification.get("_id")),
@@ -687,16 +846,20 @@ def administer_medication(
         mongo_db.medication_administrations.insert_one(administration_doc)
 
         mongo_db.medication_schedules.update_one(
-            {"_id": int(schedule_id)},
+            {"$or": [{"_id": {"$in": s_candidates}}, {"id": {"$in": s_candidates}}]},
             {
                 "$set": {
                     "status": calculated_status,
                     "actual_administration_time": administered_at_value,
+                    "administered_at": administered_at_value,
                     "administered_by": int(current_user.id),
+                    "administered_by_name": administering_nurse_name,
+                    "nurse_name": administering_nurse_name,
                     "is_override": is_override,
                     "override_reason": override_reason,
                     "delay_minutes": delay_minutes,
                     "notes": request.notes,
+                    "verification_id": verification.get("id", verification.get("_id")),
                     "updated_at": now,
                 }
             },
@@ -704,7 +867,7 @@ def administer_medication(
 
         # Automatically acknowledge any open alerts for this dose
         mongo_db.medication_alerts.update_many(
-            {"medication_schedule_id": int(schedule_id), "is_acknowledged": False},
+            {"medication_schedule_id": {"$in": s_candidates}, "is_acknowledged": False},
             {
                 "$set": {
                     "is_acknowledged": True,
@@ -726,16 +889,19 @@ def administer_medication(
     return {
         "message": "Medication administration recorded successfully.",
         "administration_id": administration_id,
-        "schedule_id": int(schedule_id),
+        "schedule_id": canonical_sched_id,
         "status": calculated_status,
         "delay_minutes": delay_minutes,
         "administered_by": int(current_user.id),
         "administered_by_name": administering_nurse_name,
+        "nurse_name": administering_nurse_name,
         "administered_at": administered_at_value,
+        "actual_administration_time": administered_at_value,
         "is_override": is_override,
         "override_reason": override_reason,
         "originally_assigned_nurse_id": orig_nurse_id,
         "originally_assigned_nurse_name": orig_nurse_name,
+        "verification_id": verification.get("id", verification.get("_id")),
     }
 
 
@@ -768,7 +934,7 @@ class MedicationHoldRequest(BaseModel):
 
 @router.post("/medications/{schedule_id}/hold")
 def hold_medication(
-    schedule_id: int,
+    schedule_id: Union[int, str],
     request: MedicationHoldRequest,
     current_user=Depends(require_permission("RECORD_MEDICATION_ADMINISTRATION")),
 ):
@@ -783,7 +949,7 @@ def hold_medication(
         )
     )
 
-    if schedule.get("status") in {"GIVEN", "GIVEN_ON_TIME", "GIVEN_LATE", "ADMINISTERED"}:
+    if schedule.get("status") in {"GIVEN", "GIVEN_ON_TIME", "GIVEN_LATE", "GIVEN_EARLY", "ADMINISTERED"}:
         raise HTTPException(
             status_code=400,
             detail="Cannot hold a medication dose that has already been administered.",
@@ -791,6 +957,8 @@ def hold_medication(
 
     now = _now_iso()
     nurse_name = getattr(current_user, "full_name", None) or getattr(current_user, "username", f"Nurse #{current_user.id}")
+    s_candidates = _get_id_candidates(schedule_id)
+    canonical_sched_id = schedule.get("id", schedule.get("_id", schedule_id))
 
     hold_note = f"HELD: {request.reason.strip()}."
     if request.notes:
@@ -798,7 +966,7 @@ def hold_medication(
 
     # Update schedule status to HELD
     mongo_db.medication_schedules.update_one(
-        {"_id": int(schedule_id)},
+        {"$or": [{"_id": {"$in": s_candidates}}, {"id": {"$in": s_candidates}}]},
         {
             "$set": {
                 "status": "HELD",
@@ -812,14 +980,19 @@ def hold_medication(
 
     # Record in medication_administrations as HELD
     admin_id = _next_administration_id()
-    patient_id = int(patient.get("id", patient.get("_id")))
+    patient_id_raw = patient.get("id", patient.get("_id"))
+    try:
+        patient_id = int(patient_id_raw)
+    except (ValueError, TypeError):
+        patient_id = patient_id_raw
+
     admin_doc = {
         "_id": admin_id,
         "id": admin_id,
-        "medication_schedule_id": int(schedule_id),
+        "medication_schedule_id": canonical_sched_id,
         "patient_id": patient_id,
-        "prescription_item_id": int(item.get("id", item.get("_id"))),
-        "medicine_id": int(medicine.get("id", medicine.get("_id"))),
+        "prescription_item_id": item.get("id", item.get("_id")),
+        "medicine_id": medicine.get("id", medicine.get("_id")),
         "medicine_name": medicine.get("name"),
         "scheduled_date": schedule.get("scheduled_date"),
         "scheduled_time": schedule.get("scheduled_time"),

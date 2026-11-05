@@ -28,6 +28,18 @@ function normalizeStatus(status) {
   return String(status || "").trim().toUpperCase().replace(/_/g, " ")
 }
 
+function formatApiError(err, fallback = "Unable to prepare medication administration.") {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === "string") return detail
+  if (Array.isArray(detail)) {
+    return detail.map((e) => (typeof e === "string" ? e : e?.msg || JSON.stringify(e))).join("; ")
+  }
+  if (detail && typeof detail === "object") {
+    return detail.message || JSON.stringify(detail)
+  }
+  return err?.message || fallback
+}
+
 function formatTime(timeString) {
   if (!timeString) return "—"
   const [hour, minute] = String(timeString).slice(0, 5).split(":").map(Number)
@@ -64,8 +76,8 @@ export default function Administration() {
         // Fetch AI risk & safety in parallel with graceful fallbacks
         try {
           const [aiRes, safetyRes] = await Promise.all([
-            predictMedicationRisk(Number(scheduleId)).catch(() => null),
-            checkMedicationSafety(Number(scheduleId)).catch(() => null),
+            predictMedicationRisk(scheduleId).catch(() => null),
+            checkMedicationSafety(scheduleId).catch(() => null),
           ])
           if (aiRes?.prediction) setPrediction(aiRes.prediction)
           if (safetyRes) setSafety(safetyRes)
@@ -73,9 +85,7 @@ export default function Administration() {
           // AI and safety are advisory; do not block administration if unavailable
         }
       } catch (err) {
-        setError(
-          err?.response?.data?.detail || "Unable to prepare medication administration."
-        )
+        setError(formatApiError(err, "Unable to prepare medication administration."))
       } finally {
         setLoading(false)
       }
@@ -101,7 +111,7 @@ export default function Administration() {
           </Button>
           <div className="p-6 bg-rose-50 border border-rose-200 rounded-3xl text-rose-700 space-y-2">
             <h3 className="font-bold text-rose-900">Unable to load medication</h3>
-            <p className="text-sm">{error || "Medication record not found."}</p>
+            <p className="text-sm font-medium">{error || "Medication record not found in system."}</p>
           </div>
         </div>
       </MainLayout>
@@ -141,11 +151,44 @@ export default function Administration() {
               </h2>
               <p className="text-sm text-slate-600 mt-1.5 max-w-md mx-auto">
                 Status has been recorded as{" "}
-                <strong className="text-emerald-700 font-bold uppercase">
-                  {success.status || "COMPLETED"}
+                <strong
+                  className={`font-bold uppercase ${
+                    success.status === "GIVEN_ON_TIME"
+                      ? "text-emerald-700"
+                      : success.status === "GIVEN_LATE"
+                      ? "text-amber-700"
+                      : success.status === "GIVEN_EARLY"
+                      ? "text-sky-700"
+                      : "text-slate-800"
+                  }`}
+                >
+                  {normalizeStatus(success.status) || "COMPLETED"}
                 </strong>
                 . Patient EMR and shift nursing log have been updated in real-time.
               </p>
+              {success.actual_administration_time && (
+                <div className="mt-3 p-3 bg-white/70 border border-emerald-200/60 rounded-xl inline-block text-xs text-slate-700 space-y-1">
+                  <div>
+                    <strong>Administration Time:</strong>{" "}
+                    {new Date(success.actual_administration_time).toLocaleTimeString("en-IN", {
+                      timeZone: "Asia/Kolkata",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}{" "}
+                    IST
+                    {typeof success.delay_minutes === "number" && success.delay_minutes > 0
+                      ? ` (${Math.round(success.delay_minutes)}m delay)`
+                      : ""}
+                  </div>
+                  {(success.administered_by_name || success.nurse_name) && (
+                    <div>
+                      <strong>Administering Nurse:</strong>{" "}
+                      {success.administered_by_name || success.nurse_name}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex items-center justify-center gap-3 pt-3">
               <Button

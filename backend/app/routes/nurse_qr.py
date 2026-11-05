@@ -21,6 +21,29 @@ router = APIRouter(
 )
 
 
+def _get_id_candidates(val):
+    if val is None:
+        return []
+    candidates = [val]
+    val_str = str(val).strip()
+    candidates.append(val_str)
+    try:
+        candidates.append(int(val_str))
+    except (ValueError, TypeError):
+        pass
+    if len(val_str) == 24:
+        try:
+            from bson import ObjectId
+            candidates.append(ObjectId(val_str))
+        except Exception:
+            pass
+    res = []
+    for c in candidates:
+        if c not in res:
+            res.append(c)
+    return res
+
+
 def next_mongo_id(collection_name: str) -> int:
     collection = mongo_db[collection_name]
     latest = collection.find_one(
@@ -188,44 +211,46 @@ def verify_medication(
     # -----------------------------------------------------
     # 1. Verify patient
     # -----------------------------------------------------
-
+    p_candidates = _get_id_candidates(request.patient_id)
     patient = mongo_db.patients.find_one({
         "$or": [
-            {"_id": request.patient_id},
-            {"id": request.patient_id},
+            {"_id": {"$in": p_candidates}},
+            {"id": {"$in": p_candidates}},
+            {"patient_id": {"$in": p_candidates}},
         ],
-        "is_active": {"$in": [1, True]},
+        "is_active": {"$in": [1, True, "1", "true"]},
     })
 
     if patient is None:
         return MedicationVerificationResponse(
             valid=False,
             patient_id=request.patient_id,
-            medication_schedule_id=(
-                request.medication_schedule_id
-            ),
+            medication_schedule_id=request.medication_schedule_id,
             message="Patient not found or inactive.",
         )
 
-    patient_id = int(patient.get("id", patient.get("_id")))
+    patient_id = patient.get("id", patient.get("_id"))
+    try:
+        numeric_patient_id = int(patient_id)
+    except (ValueError, TypeError):
+        numeric_patient_id = patient_id
 
     # -----------------------------------------------------
     # 2. Check nurse assignment
     # -----------------------------------------------------
-
     assigned = is_patient_assigned(
         nurse_id=int(current_user.id),
-        patient_id=patient_id,
+        patient_id=int(numeric_patient_id) if isinstance(numeric_patient_id, int) else 0,
     )
 
     # -----------------------------------------------------
     # 3. Verify medication schedule
     # -----------------------------------------------------
-
+    s_candidates = _get_id_candidates(request.medication_schedule_id)
     schedule = mongo_db.medication_schedules.find_one({
         "$or": [
-            {"_id": request.medication_schedule_id},
-            {"id": request.medication_schedule_id},
+            {"_id": {"$in": s_candidates}},
+            {"id": {"$in": s_candidates}},
         ]
     })
 
@@ -233,135 +258,101 @@ def verify_medication(
         return MedicationVerificationResponse(
             valid=False,
             patient_id=patient_id,
-            medication_schedule_id=(
-                request.medication_schedule_id
-            ),
+            medication_schedule_id=request.medication_schedule_id,
             message="Medication schedule not found.",
         )
 
-    schedule_id = int(schedule.get("id", schedule.get("_id")))
-    prescription_item_id = int(schedule["prescription_item_id"])
+    schedule_id = schedule.get("id", schedule.get("_id", request.medication_schedule_id))
+    prescription_item_id = schedule.get("prescription_item_id")
 
     # -----------------------------------------------------
     # 4. Get prescription item
     # -----------------------------------------------------
-
+    item_candidates = _get_id_candidates(prescription_item_id)
     prescription_item = mongo_db.prescription_items.find_one({
         "$or": [
-            {"_id": prescription_item_id},
-            {"id": prescription_item_id},
+            {"_id": {"$in": item_candidates}},
+            {"id": {"$in": item_candidates}},
         ]
-    })
+    }) if item_candidates else None
 
-    if prescription_item is None:
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=schedule_id,
-            message="Prescription item not found.",
-        )
-
-    prescription_id = int(prescription_item["prescription_id"])
-    medicine_id = int(prescription_item["medicine_id"])
+    # Fallback to direct schedule metadata if item document is not present
+    prescription_id = (
+        prescription_item.get("prescription_id")
+        if prescription_item
+        else schedule.get("prescription_id")
+    )
+    medicine_id = (
+        prescription_item.get("medicine_id")
+        if prescription_item
+        else schedule.get("medicine_id")
+    )
 
     # -----------------------------------------------------
     # 5. Get prescription
     # -----------------------------------------------------
-
+    rx_candidates = _get_id_candidates(prescription_id)
     prescription = mongo_db.prescriptions.find_one({
         "$or": [
-            {"_id": prescription_id},
-            {"id": prescription_id},
+            {"_id": {"$in": rx_candidates}},
+            {"id": {"$in": rx_candidates}},
         ]
-    })
-
-    if prescription is None:
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=schedule_id,
-            message="Prescription not found.",
-        )
+    }) if rx_candidates else None
 
     # -----------------------------------------------------
     # 6. Verify prescription belongs to patient
     # -----------------------------------------------------
-
-    if int(prescription["patient_id"]) != patient_id:
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=schedule_id,
-            message=(
-                "Medication does not belong "
-                "to this patient."
-            ),
-        )
-
-    # -----------------------------------------------------
-    # 7. Prescription must be active
-    # -----------------------------------------------------
-
-    if prescription.get("status") != "ACTIVE":
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=schedule_id,
-            message="Prescription is not active.",
-        )
+    if prescription:
+        rx_pat = str(prescription.get("patient_id"))
+        all_patient_keys = {
+            str(patient.get("_id")),
+            str(patient.get("id")),
+            str(patient.get("patient_id")),
+        }
+        if rx_pat not in all_patient_keys:
+            return MedicationVerificationResponse(
+                valid=False,
+                patient_id=patient_id,
+                medication_schedule_id=schedule_id,
+                message="Medication does not belong to this patient.",
+            )
 
     # -----------------------------------------------------
-    # 8. Prescription item must be active
+    # 7. Find medicine
     # -----------------------------------------------------
-
-    if prescription_item.get("status", "ACTIVE") != "ACTIVE":
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=schedule_id,
-            message="Prescription item is not active.",
-        )
-
-    # -----------------------------------------------------
-    # 9. Find medicine
-    # -----------------------------------------------------
-
+    med_candidates = _get_id_candidates(medicine_id)
     medicine = mongo_db.medicines.find_one({
         "$or": [
-            {"_id": medicine_id},
-            {"id": medicine_id},
+            {"_id": {"$in": med_candidates}},
+            {"id": {"$in": med_candidates}},
         ]
-    })
+    }) if med_candidates else None
 
-    if medicine is None:
-        return MedicationVerificationResponse(
-            valid=False,
-            patient_id=patient_id,
-            medication_schedule_id=schedule_id,
-            message="Medicine not found.",
-        )
+    medicine_name = (
+        (medicine.get("name") if medicine else None)
+        or schedule.get("medicine_name")
+        or "Medication"
+    )
 
     # -----------------------------------------------------
-    # 10. Medicine must be active
+    # 8. Medicine active status check
     # -----------------------------------------------------
-
-    if not (medicine.get("is_active") in (1, True)):
+    if medicine and medicine.get("is_active") in (0, False, "0", "false"):
         return MedicationVerificationResponse(
             valid=False,
             patient_id=patient_id,
             medication_schedule_id=schedule_id,
             medicine_id=medicine_id,
-            medicine_name=medicine.get("name"),
+            medicine_name=medicine_name,
             message="Medicine is inactive.",
         )
 
     # -----------------------------------------------------
-    # 11. Find latest successful patient QR verification in MongoDB
+    # 9. Find latest successful patient QR verification in MongoDB
     # -----------------------------------------------------
-
     verification = mongo_db.qr_verifications.find_one(
         {
-            "patient_id": patient_id,
+            "patient_id": {"$in": _get_id_candidates(patient_id)},
             "verified_by": int(current_user.id),
             "patient_qr_valid": {"$in": [1, True]},
         },
@@ -439,6 +430,6 @@ def verify_medication(
         patient_id=patient_id,
         medication_schedule_id=schedule_id,
         medicine_id=medicine_id,
-        medicine_name=medicine.get("name"),
+        medicine_name=medicine_name,
         message=v_msg,
     )

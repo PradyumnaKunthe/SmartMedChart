@@ -10,8 +10,8 @@ class MedicationScheduleResponse(BaseModel):
     # -----------------------------------------------------
     # Schedule information
     # -----------------------------------------------------
-    id: int
-    prescription_item_id: int
+    id: int | str
+    prescription_item_id: int | str | None = None
 
     scheduled_date: date
     scheduled_time: time
@@ -20,21 +20,24 @@ class MedicationScheduleResponse(BaseModel):
     monitoring_status: str | None = None
     delay_minutes: float | None = None
 
-    actual_administration_time: datetime | None = None
-    administered_by: int | None = None
+    actual_administration_time: datetime | str | None = None
+    administered_at: datetime | str | None = None
+    administered_by: int | str | None = None
+    administered_by_name: str | None = None
+    nurse_name: str | None = None
     notes: str | None = None
 
     # -----------------------------------------------------
     # Patient information
     # -----------------------------------------------------
-    patient_id: int | None = None
+    patient_id: int | str | None = None
     patient_name: str | None = None
     patient_code: str | None = None
 
     # -----------------------------------------------------
     # Medicine / prescription information
     # -----------------------------------------------------
-    medicine_id: int | None = None
+    medicine_id: int | str | None = None
     medicine_name: str | None = None
     generic_name: str | None = None
     strength: str | None = None
