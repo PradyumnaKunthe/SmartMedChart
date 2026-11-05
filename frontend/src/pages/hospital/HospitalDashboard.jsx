@@ -3,23 +3,16 @@ import { useNavigate } from "react-router-dom"
 import {
   Activity,
   ArrowUpDown,
-  Calendar,
-  CheckCircle2,
-  Clock,
   Eye,
-  Filter,
-  Plus,
   RefreshCw,
   Search,
   Sparkles,
-  Stethoscope,
-  User,
   UserPlus,
   Users,
 } from "lucide-react"
 
 import MainLayout from "../../components/layout/MainLayout"
-import Card, { CardHeader } from "../../components/common/Card"
+import Card from "../../components/common/Card"
 import Button from "../../components/common/Button"
 import Badge from "../../components/common/Badge"
 import Loading from "../../components/common/Loading"
@@ -264,13 +257,17 @@ export default function HospitalDashboard() {
           ) : filteredPatients.length === 0 ? (
             <EmptyState
               icon={Users}
-              title="No Patients Found"
-              description="No registered patients matched your search or status filter."
-              actionLabel={search || statusFilter !== "ALL" ? "Clear Filters" : "Admit New Patient"}
+              title={search.trim() ? "No Matching Patients" : "No Patients Found"}
+              description={
+                search.trim()
+                  ? "No registered active patients matched your search criteria."
+                  : "There are currently no active inpatients in the hospital directory."
+              }
+              actionLabel={search.trim() ? "Clear Search" : "Register Patient"}
               onAction={() => {
-                if (search || statusFilter !== "ALL") {
+                if (search.trim()) {
                   setSearch("")
-                  setStatusFilter("ALL")
+                  setCurrentPage(1)
                 } else {
                   navigate("/hospital/patients/new")
                 }

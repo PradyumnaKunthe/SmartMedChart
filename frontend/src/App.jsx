@@ -712,6 +712,7 @@ export default function App() {
                 "administrator",
                 "hospital",
                 "hospital_staff",
+                "receptionist",
               ]}
             >
               <HospitalPatientProfile />
