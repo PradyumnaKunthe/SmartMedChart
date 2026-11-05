@@ -1,9 +1,10 @@
 import api from "./api"
 
 
-export async function getNurseMedications() {
+export async function getNurseMedications(params = {}) {
   const response = await api.get(
     "/api/nurse/medications",
+    { params },
   )
 
   return response.data

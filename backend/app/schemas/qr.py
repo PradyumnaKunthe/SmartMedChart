@@ -22,3 +22,7 @@ class QRVerifyResponse(BaseModel):
     valid: bool
     patient_id: int | None = None
     message: str
+    patient_name: str | None = None
+    patient_code: str | None = None
+    ward_name: str | None = None
+    bed_number: str | None = None

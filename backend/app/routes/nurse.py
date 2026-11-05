@@ -375,8 +375,82 @@ def get_nurse_patient_details(
     response_model=list[MedicationScheduleResponse],
 )
 def get_nurse_medications(
+    patient_id: Optional[int] = Query(None, description="Optional patient ID to filter schedules"),
     current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
 ):
+    # Handle direct Python function calls where patient_id parameter defaults to Query instance
+    if hasattr(patient_id, "default"):
+        patient_id = patient_id.default
+
+    if patient_id is not None and isinstance(patient_id, (int, str)):
+        try:
+            target_pid = int(patient_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid patient_id format.")
+
+        patient_doc = _by_id("patients", target_pid)
+        if not patient_doc or not (patient_doc.get("is_active") in (True, 1)) or patient_doc.get("lifecycle_status") == "DISCHARGED":
+            raise HTTPException(status_code=404, detail="Patient not found or inactive.")
+
+        is_assigned = _is_patient_assigned(current_user.id, target_pid)
+        recent_qr = mongo_db.qr_verifications.find_one({
+            "patient_id": target_pid,
+            "verified_by": int(current_user.id),
+            "patient_qr_valid": True,
+        }, sort=[("verified_at", -1)])
+
+        user_role = getattr(getattr(current_user, "role", None), "name", "")
+        if not is_assigned and not recent_qr and user_role.lower() not in ("administrator", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Patient is not assigned to this nurse, and no bedside QR verification was found.",
+            )
+
+        active_rxs = list(mongo_db.prescriptions.find({
+            "patient_id": target_pid,
+            "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
+        }))
+        rx_ids = [rx.get("id", rx.get("_id")) for rx in active_rxs]
+        active_items = list(mongo_db.prescription_items.find({
+            "prescription_id": {"$in": rx_ids},
+            "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
+        }))
+        item_ids = [it.get("id", it.get("_id")) for it in active_items]
+
+        schedules = list(mongo_db.medication_schedules.find({
+            "prescription_item_id": {"$in": item_ids},
+            "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
+        }).sort([
+            ("scheduled_date", 1),
+            ("scheduled_time", 1),
+            ("_id", 1),
+        ]))
+
+        results = []
+        for schedule in schedules:
+            context = _schedule_context(schedule)
+            if context is None:
+                continue
+            item, prescription, patient, medicine = context
+            results.append(
+                _build_medication_response(
+                    schedule,
+                    item,
+                    patient,
+                    medicine,
+                    current_nurse_id=current_user.id,
+                )
+            )
+
+        results.sort(
+            key=lambda row: (
+                row.get("scheduled_date") or "",
+                row.get("scheduled_time") or "",
+                row.get("id") or 0,
+            )
+        )
+        return results
+
     assigned_patient_ids = _assigned_patient_ids(current_user.id)
     if not assigned_patient_ids:
         return []

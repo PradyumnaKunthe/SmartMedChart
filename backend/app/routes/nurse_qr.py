@@ -131,10 +131,37 @@ def verify_patient_qr(
 
     mongo_db.qr_verifications.insert_one(verification_doc)
 
+    first_name = (patient.get("first_name") or "").strip()
+    last_name = (patient.get("last_name") or "").strip()
+    p_name = f"{first_name} {last_name}".strip() or None
+    p_code = patient.get("patient_id")
+    ward_name = patient.get("ward_name")
+    if not ward_name and patient.get("ward_id"):
+        try:
+            wid = int(patient.get("ward_id"))
+            w = mongo_db.wards.find_one({"$or": [{"_id": wid}, {"id": wid}]})
+            if w:
+                ward_name = w.get("name")
+        except (ValueError, TypeError):
+            pass
+    bed_number = patient.get("bed_number")
+    if not bed_number and patient.get("bed_id"):
+        try:
+            bid = int(patient.get("bed_id"))
+            b = mongo_db.beds.find_one({"$or": [{"_id": bid}, {"id": bid}]})
+            if b:
+                bed_number = b.get("bed_number")
+        except (ValueError, TypeError):
+            pass
+
     return QRVerifyResponse(
         valid=True,
         patient_id=patient_id,
         message=msg,
+        patient_name=p_name,
+        patient_code=p_code,
+        ward_name=ward_name,
+        bed_number=bed_number,
     )
 
 

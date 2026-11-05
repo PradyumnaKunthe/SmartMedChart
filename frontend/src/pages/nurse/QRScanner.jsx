@@ -4,12 +4,13 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  ChevronRight,
   Clock,
   LoaderCircle,
   Pill,
   QrCode,
+  RotateCcw,
   ShieldCheck,
+  Sparkles,
   User,
   XCircle,
 } from "lucide-react"
@@ -19,6 +20,7 @@ import Card, { CardHeader } from "../../components/common/Card"
 import Button from "../../components/common/Button"
 import Badge from "../../components/common/Badge"
 import PatientVerification from "../../components/qr/PatientVerification"
+import SmartMedicationCountdown from "../../components/nurse/SmartMedicationCountdown"
 import { verifyMedication } from "../../services/qr"
 
 export default function QRScanner() {
@@ -31,13 +33,17 @@ export default function QRScanner() {
   const targetPatientCode = location.state?.patientCode || null
 
   const [patientId, setPatientId] = useState(null)
+  const [verifiedPatientInfo, setVerifiedPatientInfo] = useState(null)
   const [medicationResult, setMedicationResult] = useState(null)
   const [verifyingMedication, setVerifyingMedication] = useState(false)
 
   const handlePatientVerified = useCallback(
-    async (verifiedPatientId) => {
+    async (verifiedPatientId, verificationResponse = null) => {
       setPatientId(verifiedPatientId)
       setMedicationResult(null)
+      if (verificationResponse) {
+        setVerifiedPatientInfo(verificationResponse)
+      }
 
       if (targetPatientId && String(verifiedPatientId) !== String(targetPatientId)) {
         setMedicationResult({
@@ -55,7 +61,7 @@ export default function QRScanner() {
           patient_id: verifiedPatientId,
           medication_schedule_id: null,
           message:
-            "Patient identity verified successfully. The patient is confirmed as eligible for bedside care and rounds.",
+            "Patient identity verified successfully. Active medication schedules synchronized.",
         })
         return
       }
@@ -67,15 +73,6 @@ export default function QRScanner() {
           Number(scheduleId)
         )
         setMedicationResult(response)
-
-        // If verified by the backend, route directly to administration
-        if (response.valid) {
-          setTimeout(() => {
-            navigate(`/nurse/medications/${scheduleId}/administration`, {
-              replace: true,
-            })
-          }, 800)
-        }
       } catch (requestError) {
         const message =
           requestError?.response?.data?.detail ||
@@ -91,8 +88,14 @@ export default function QRScanner() {
         setVerifyingMedication(false)
       }
     },
-    [navigate, scheduleId, targetPatientId, targetPatientName]
+    [scheduleId, targetPatientId, targetPatientName]
   )
+
+  function handleResetScan() {
+    setPatientId(null)
+    setMedicationResult(null)
+    setVerifiedPatientInfo(null)
+  }
 
   function goBack() {
     if (scheduleId) {
@@ -104,8 +107,8 @@ export default function QRScanner() {
 
   return (
     <MainLayout
-      title="Bedside Patient Verification"
-      subtitle="Scan patient wristband to enforce Five-Rights safety checks and prevent medication errors"
+      title="Bedside Patient Verification & Smart Countdown"
+      subtitle="Scan patient wristband to verify identity, retrieve active medication schedules, and monitor countdown to next scheduled dose"
     >
       <div className="mx-auto max-w-4xl space-y-6">
         {/* Navigation */}
@@ -114,11 +117,15 @@ export default function QRScanner() {
             {scheduleId ? "Back to Medication Details" : "Back to Medication Queue"}
           </Button>
 
-          {scheduleId && (
+          {scheduleId ? (
             <Badge variant="primary" size="md">
               Verifying Dose Schedule #{scheduleId}
             </Badge>
-          )}
+          ) : patientId ? (
+            <Button variant="outline" size="sm" icon={RotateCcw} onClick={handleResetScan}>
+              Scan Different Patient
+            </Button>
+          ) : null}
         </div>
 
         {/* 3-Step Verification Stepper */}
@@ -134,9 +141,7 @@ export default function QRScanner() {
             >
               <div
                 className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
-                  patientId
-                    ? "bg-emerald-600 text-white"
-                    : "bg-sky-600 text-white"
+                  patientId ? "bg-emerald-600 text-white" : "bg-sky-600 text-white"
                 }`}
               >
                 {patientId ? <CheckCircle2 className="w-4 h-4" /> : "1"}
@@ -144,7 +149,7 @@ export default function QRScanner() {
               <div className="min-w-0">
                 <div className="text-xs font-bold">1. Wristband QR Scan</div>
                 <div className="text-[11px] text-slate-500 truncate">
-                  {patientId ? "Identity confirmed" : "Position camera"}
+                  {patientId ? "Identity confirmed" : "Position camera or token"}
                 </div>
               </div>
             </div>
@@ -152,55 +157,45 @@ export default function QRScanner() {
             {/* Step 2 */}
             <div
               className={`p-3 rounded-xl border flex items-center gap-3 ${
-                patientId && !medicationResult?.valid
-                  ? "border-sky-500 bg-sky-50 text-sky-950 font-bold"
-                  : medicationResult?.valid
+                patientId && (!medicationResult || medicationResult?.valid)
                   ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                  : medicationResult && !medicationResult.valid
+                  ? "border-rose-200 bg-rose-50 text-rose-900"
                   : "border-slate-200 bg-slate-50 text-slate-500"
               }`}
             >
               <div
                 className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
-                  medicationResult?.valid
+                  patientId && (!medicationResult || medicationResult?.valid)
                     ? "bg-emerald-600 text-white"
-                    : patientId
-                    ? "bg-sky-600 text-white"
                     : "bg-slate-200 text-slate-600"
                 }`}
               >
-                {medicationResult?.valid ? <CheckCircle2 className="w-4 h-4" /> : "2"}
+                {patientId && (!medicationResult || medicationResult?.valid) ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  "2"
+                )}
               </div>
               <div className="min-w-0">
-                <div className="text-xs font-bold">2. Rx Cross-Match</div>
+                <div className="text-xs font-bold">2. Smart Countdown</div>
                 <div className="text-[11px] text-slate-500 truncate">
-                  {medicationResult?.valid
-                    ? "Order matched"
-                    : "Validating dose"}
+                  {patientId && (!medicationResult || medicationResult?.valid)
+                    ? "Schedule synchronized"
+                    : "Pending scan"}
                 </div>
               </div>
             </div>
 
             {/* Step 3 */}
-            <div
-              className={`p-3 rounded-xl border flex items-center gap-3 ${
-                medicationResult?.valid
-                  ? "border-sky-500 bg-sky-50 text-sky-950 font-bold"
-                  : "border-slate-200 bg-slate-50 text-slate-500"
-              }`}
-            >
-              <div
-                className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
-                  medicationResult?.valid
-                    ? "bg-sky-600 text-white"
-                    : "bg-slate-200 text-slate-600"
-                }`}
-              >
+            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 flex items-center gap-3">
+              <div className="w-7 h-7 rounded-lg bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold">
                 3
               </div>
               <div className="min-w-0">
-                <div className="text-xs font-bold">3. Administer Dose</div>
+                <div className="text-xs font-bold">3. Bedside Administration</div>
                 <div className="text-[11px] text-slate-500 truncate">
-                  {medicationResult?.valid ? "Ready to record" : "Awaiting match"}
+                  Five-Rights Check
                 </div>
               </div>
             </div>
@@ -208,7 +203,7 @@ export default function QRScanner() {
         </div>
 
         {/* Target Patient Context */}
-        {targetPatientId && (
+        {targetPatientId && !patientId && (
           <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-2xl flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-xs">
@@ -220,7 +215,7 @@ export default function QRScanner() {
                   {targetPatientCode ? ` (${targetPatientCode})` : ""}
                 </h4>
                 <p className="text-xs text-slate-600">
-                  Scan patient wristband to complete bedside identification and verify shift assignment.
+                  Scan patient wristband to complete bedside identification and unlock medication countdown.
                 </p>
               </div>
             </div>
@@ -231,7 +226,7 @@ export default function QRScanner() {
         )}
 
         {/* Selected Dose Context (if scheduleId exists) */}
-        {scheduleId && (
+        {scheduleId && !patientId && (
           <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-2xl flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-xs">
@@ -286,10 +281,7 @@ export default function QRScanner() {
               <Button
                 variant="danger"
                 size="sm"
-                onClick={() => {
-                  setPatientId(null)
-                  setMedicationResult(null)
-                }}
+                onClick={handleResetScan}
               >
                 Scan Again
               </Button>
@@ -300,48 +292,19 @@ export default function QRScanner() {
           </div>
         )}
 
-        {/* Match Success State (if no auto-redirect or general scan) */}
-        {medicationResult && medicationResult.valid && !scheduleId && (
-          <div className="p-6 bg-emerald-50 border border-emerald-200 rounded-3xl space-y-3 shadow-xs">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-emerald-950">
-                  Patient Identity Confirmed
-                </h3>
-                <p className="text-xs text-emerald-800 mt-1">
-                  Patient ID:{" "}
-                  <strong className="font-mono text-emerald-900">
-                    {medicationResult.patient_id}
-                  </strong>
-                </p>
-                <p className="text-xs text-slate-600 mt-1">
-                  {medicationResult.message}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 pt-2 border-t border-emerald-200">
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => navigate("/nurse/dashboard")}
-              >
-                Return to Nurse Station
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/nurse/medications")}
-              >
-                View Medication Queue
-              </Button>
-            </div>
-          </div>
+        {/* ===================================================
+            SMART MEDICATION COUNTDOWN DISPLAY (AFTER VERIFICATION)
+        =================================================== */}
+        {patientId && (!medicationResult || medicationResult.valid) && (
+          <SmartMedicationCountdown
+            patientId={patientId}
+            patientInfo={verifiedPatientInfo}
+            scheduleId={scheduleId}
+            onReset={handleResetScan}
+          />
         )}
 
-        {/* Patient QR Scanner Component */}
+        {/* Patient QR Scanner Component (if patient not verified yet) */}
         {!patientId && (
           <Card>
             <CardHeader
