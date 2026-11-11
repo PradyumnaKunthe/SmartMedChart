@@ -106,6 +106,11 @@ export default function MobileNav({ open, onClose }) {
         path: "/admin/dashboard",
       },
       {
+        label: "Medication Monitoring",
+        icon: Activity,
+        path: "/admin/medication-monitoring",
+      },
+      {
         label: "Pharmacy Management",
         icon: Pill,
         path: "/admin/pharmacy",

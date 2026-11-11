@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../context/AuthContext"
+import { getApiErrorMessage } from "../services/api"
 
 const ROLE_OPTIONS = [
   {
@@ -90,8 +91,14 @@ export default function Login() {
       return
     }
 
-    if (!username.trim()) {
+    const cleanUsername = username.trim()
+    if (!cleanUsername) {
       setError("Please enter your username.")
+      return
+    }
+
+    if (cleanUsername.length < 3) {
+      setError("Username must contain at least 3 characters.")
       return
     }
 
@@ -100,11 +107,16 @@ export default function Login() {
       return
     }
 
+    if (password.length < 8) {
+      setError("Password must contain at least 8 characters.")
+      return
+    }
+
     setLoading(true)
 
     try {
       // Keep the existing AuthContext/backend authentication flow.
-      const currentUser = await login(username.trim(), password)
+      const currentUser = await login(cleanUsername, password)
       const actualRole = normalizeRole(currentUser?.role)
 
       if (!roleMatchesSelection(selectedRole, actualRole)) {
@@ -143,17 +155,9 @@ export default function Login() {
 
       setError("Your account does not have a valid application role.")
     } catch (requestError) {
-      const detail = requestError?.response?.data?.detail
-
-      if (Array.isArray(detail)) {
-        setError(detail.map((item) => item?.msg || "Invalid login data.").join(", "))
-      } else if (typeof detail === "string") {
-        setError(detail)
-      } else if (requestError?.request && !requestError?.response) {
-        setError("Cannot connect to SmartMedChart server. Make sure the backend is running.")
-      } else {
-        setError("Unable to sign in. Please check your credentials.")
-      }
+      setError(
+        getApiErrorMessage(requestError, "Unable to sign in. Please check your credentials.")
+      )
     } finally {
       setLoading(false)
     }

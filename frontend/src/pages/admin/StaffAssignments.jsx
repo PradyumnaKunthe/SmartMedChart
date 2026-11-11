@@ -44,7 +44,7 @@ import {
   removePatientAssignment,
   removePatientFromDoctor,
 } from "../../services/admin"
-import { getApiErrorMessage } from "../../services/api"
+import { getApiErrorMessage, validateEmail, validatePassword } from "../../services/api"
 
 export default function StaffAssignments() {
   const [activeTab, setActiveTab] = useState("assignments") // 'assignments', 'assign_new', 'add_staff'
@@ -179,8 +179,22 @@ export default function StaffAssignments() {
       return
     }
 
-    if (password.length < 8) {
-      setErrorMessage("Password must be at least 8 characters long.")
+    if (username.length < 3) {
+      setErrorMessage("Username must contain at least 3 characters.")
+      setSavingStaff(false)
+      return
+    }
+
+    const emailErr = validateEmail(email)
+    if (emailErr) {
+      setErrorMessage(emailErr)
+      setSavingStaff(false)
+      return
+    }
+
+    const passwordErr = validatePassword(password)
+    if (passwordErr) {
+      setErrorMessage(passwordErr)
       setSavingStaff(false)
       return
     }

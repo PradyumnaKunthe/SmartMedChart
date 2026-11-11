@@ -8,6 +8,7 @@ import {
 import {
   getCurrentUser,
   login as loginRequest,
+  logout as logoutRequest,
 } from "../services/auth"
 import { isTokenExpired } from "../services/api"
 
@@ -76,10 +77,16 @@ export function AuthProvider({ children }) {
     return currentUser
   }
 
-  function logout() {
-    localStorage.removeItem("smartmedchart_token")
-    localStorage.removeItem("smartmedchart_user")
-    setUser(null)
+  async function logout() {
+    try {
+      await logoutRequest()
+    } catch {
+      // Ignore network errors on logout
+    } finally {
+      localStorage.removeItem("smartmedchart_token")
+      localStorage.removeItem("smartmedchart_user")
+      setUser(null)
+    }
   }
 
   const value = {

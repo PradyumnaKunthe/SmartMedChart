@@ -1,7 +1,9 @@
+import hashlib
 import os
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+import uuid
 
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
@@ -17,7 +19,9 @@ ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(ENV_FILE)
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+# Strictly pin algorithm to HS256 to prevent algorithm confusion/downgrade attacks
+ALLOWED_JWT_ALGORITHMS = ["HS256"]
+JWT_ALGORITHM = "HS256"
 
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
     os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30")
@@ -36,6 +40,7 @@ bearer_scheme = HTTPBearer()
 # ==============================
 
 def hash_password(password: str) -> str:
+    """Hash password using pwdlib recommended hasher (Argon2 / bcrypt)."""
     return password_hash.hash(password)
 
 
@@ -43,6 +48,7 @@ def verify_password(
     plain_password: str,
     hashed_password: str
 ) -> bool:
+    """Safely verify plain password against hashed password."""
     return password_hash.verify(
         plain_password,
         hashed_password
@@ -57,17 +63,20 @@ def create_access_token(
     subject: str,
     expires_minutes: int | None = None
 ) -> str:
-
+    """Generate signed JWT access token with fixed HS256 algorithm and claims."""
     if expires_minutes is None:
         expires_minutes = JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=expires_minutes)
+    jti = str(uuid.uuid4())
 
     payload = {
-        "sub": subject,
+        "sub": str(subject),
         "iat": now,
-        "exp": expire
+        "exp": expire,
+        "type": "access",
+        "jti": jti,
     }
 
     return jwt.encode(
@@ -78,16 +87,58 @@ def create_access_token(
 
 
 def decode_access_token(token: str) -> dict:
+    """Decode and validate JWT access token with pinned algorithm and type checks."""
     try:
-        return jwt.decode(
+        payload = jwt.decode(
             token,
             JWT_SECRET_KEY,
-            algorithms=[JWT_ALGORITHM]
+            algorithms=ALLOWED_JWT_ALGORITHMS
         )
     except JWTError as exc:
         raise ValueError(
             "Invalid or expired access token."
         ) from exc
+
+    # Enforce token type if present to prevent token interchange
+    token_type = payload.get("type")
+    if token_type is not None and token_type != "access":
+        raise ValueError("Invalid access token type.")
+
+    return payload
+
+
+def revoke_token(token: str) -> bool:
+    """Revoke a JWT token by storing its jti and token hash in MongoDB until expiration."""
+    try:
+        payload = decode_access_token(token)
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        sub = payload.get("sub")
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        revocation_key = jti or token_hash
+
+        if isinstance(exp, (int, float)):
+            exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+        else:
+            exp_dt = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+
+        mongo_db.revoked_tokens.update_one(
+            {"_id": revocation_key},
+            {
+                "$set": {
+                    "_id": revocation_key,
+                    "jti": jti,
+                    "token_hash": token_hash,
+                    "sub": sub,
+                    "revoked_at": datetime.now(timezone.utc),
+                    "expires_at": exp_dt,
+                }
+            },
+            upsert=True,
+        )
+        return True
+    except Exception:
+        return False
 
 
 # ==============================
@@ -110,6 +161,32 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         ) from exc
 
+    # Check server-side revocation list
+    jti = payload.get("jti")
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    revocation_keys = [token_hash]
+    if jti:
+        revocation_keys.append(jti)
+
+    try:
+        revoked = mongo_db.revoked_tokens.find_one({
+            "$or": [
+                {"_id": {"$in": revocation_keys}},
+                {"jti": jti} if jti else {"_id": token_hash},
+                {"token_hash": token_hash},
+            ]
+        })
+        if revoked:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked.",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     subject = payload.get("sub")
 
     if subject is None:
@@ -126,10 +203,10 @@ def get_current_user(
             detail="Invalid user identifier."
         ) from exc
 
-    # Find user in MongoDB
+    # Find active user in MongoDB
     user = mongo_db.users.find_one({
-        "_id": user_id,
-        "is_active": {"$in": [1, True]}
+        "$or": [{"_id": user_id}, {"id": user_id}],
+        "is_active": {"$in": [1, True, "1", "true", "True"]}
     })
 
     if user is None:
@@ -140,7 +217,7 @@ def get_current_user(
 
     # Find user's role
     role = mongo_db.roles.find_one({
-        "_id": user["role_id"]
+        "$or": [{"_id": user["role_id"]}, {"id": user["role_id"]}],
     })
 
     if role is None:
@@ -149,10 +226,12 @@ def get_current_user(
             detail="User role not found."
         )
 
+    role_id = role.get("id", role.get("_id"))
+
     # Find permissions assigned to role
     role_permissions = list(
         mongo_db.role_permissions.find({
-            "role_id": role["id"]
+            "role_id": role_id
         })
     )
 
@@ -163,13 +242,16 @@ def get_current_user(
 
     permissions = list(
         mongo_db.permissions.find({
-            "_id": {"$in": permission_ids}
+            "$or": [
+                {"_id": {"$in": permission_ids}},
+                {"id": {"$in": permission_ids}},
+            ]
         })
     )
 
     # Build role object
     role_object = SimpleNamespace(
-        id=role["id"],
+        id=role_id,
         name=role["name"],
         permissions=[
             SimpleNamespace(name=p["name"])

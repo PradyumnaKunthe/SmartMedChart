@@ -829,18 +829,6 @@ def save_carematch_appointment(
 
         appointments = mongo_db.carematch_appointments
 
-        # Prevent two bookings for the same doctor at the exact
-        # same date and time.
-        appointments.create_index(
-            [
-                ("doctor_id", 1),
-                ("appointment_date", 1),
-                ("appointment_time", 1),
-            ],
-            unique=True,
-            name="unique_doctor_appointment_slot",
-        )
-
         appointment_doc = {
             "patient_id": actual_patient_id,
             "encounter_id": encounter.get("id", encounter.get("_id")),
@@ -884,3 +872,20 @@ def save_carematch_appointment(
             "status": "BOOKED",
         },
     }
+
+
+def init_carematch_indexes():
+    """Ensure unique doctor appointment slot index exists in MongoDB."""
+    try:
+        mongo_db.carematch_appointments.create_index(
+            [
+                ("doctor_id", 1),
+                ("appointment_date", 1),
+                ("appointment_time", 1),
+            ],
+            unique=True,
+            name="unique_doctor_appointment_slot",
+        )
+    except Exception:
+        pass
+

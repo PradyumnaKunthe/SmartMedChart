@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from pymongo.errors import DuplicateKeyError
+
 from app.mongo_client import mongo_db, next_mongo_id
 
 
@@ -22,6 +24,7 @@ def record_medication_administration(
 ) -> dict:
     """
     Record the result of a medication administration attempt using MongoDB.
+    Enforces atomic uniqueness to prevent duplicate dose administration.
     """
 
     status = status.upper().strip()
@@ -79,7 +82,12 @@ def record_medication_administration(
         "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    mongo_db.medication_administrations.insert_one(administration)
+    try:
+        mongo_db.medication_administrations.insert_one(administration)
+    except DuplicateKeyError as exc:
+        raise ValueError(
+            f"Medication schedule {medication_schedule_id} already has an administration record."
+        ) from exc
 
     # Keep the schedule synchronized with the actual result.
     mongo_db.medication_schedules.update_one(

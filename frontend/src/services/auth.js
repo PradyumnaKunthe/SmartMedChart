@@ -22,3 +22,12 @@ export async function getCurrentUser() {
 
   return response.data
 }
+
+export async function logout() {
+  try {
+    const response = await api.post("/api/auth/logout")
+    return response.data
+  } catch (error) {
+    return null
+  }
+}

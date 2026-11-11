@@ -28,9 +28,31 @@ def get_hospital_policy() -> Dict[str, Any]:
     return DEFAULT_HOSPITAL_POLICY
 
 
-def set_hospital_policy(new_policy: Dict[str, Any]) -> Dict[str, Any]:
-    """Update hospital administration policy."""
-    policy_data = {**DEFAULT_HOSPITAL_POLICY, **new_policy, "updated_at": datetime.now(timezone.utc).isoformat()}
+ALLOWED_POLICY_FIELDS = {
+    "policy_name",
+    "on_time_grace_before_minutes",
+    "on_time_grace_after_minutes",
+    "missed_cutoff_minutes",
+    "require_override_reason",
+}
+
+
+def set_hospital_policy(new_policy: Any) -> Dict[str, Any]:
+    """Update hospital administration policy, strictly accepting validated fields."""
+    if hasattr(new_policy, "model_dump"):
+        policy_dict = new_policy.model_dump(exclude_unset=True)
+    elif isinstance(new_policy, dict):
+        policy_dict = {k: v for k, v in new_policy.items() if k in ALLOWED_POLICY_FIELDS and v is not None}
+    else:
+        policy_dict = {}
+
+    current = get_hospital_policy()
+    current.pop("_id", None)
+    policy_data = {
+        **current,
+        **policy_dict,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
     mongo_db.hospital_policies.update_one(
         {"_id": "medication_administration"},
         {"$set": policy_data},

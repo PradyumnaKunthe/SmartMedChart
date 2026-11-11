@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 from bson import ObjectId
 
@@ -62,6 +62,23 @@ def _get_id_candidates(value):
     return res
 
 
+def parse_verification_time(dt_val) -> datetime:
+    if isinstance(dt_val, datetime):
+        if dt_val.tzinfo is None:
+            return dt_val.replace(tzinfo=timezone.utc)
+        return dt_val
+    if not dt_val:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        clean = str(dt_val).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def _by_id(collection_name: str, value):
     if value is None:
         return None
@@ -117,6 +134,105 @@ def _get_primary_assigned_nurse(patient_id: int) -> tuple[Optional[int], Optiona
     nurse_user = _by_id("users", nurse_id)
     nurse_name = nurse_user.get("full_name") if nurse_user else f"Nurse #{nurse_id}"
     return nurse_id, nurse_name
+
+
+def _is_admin_user(user) -> bool:
+    role = getattr(user, "role", None)
+    if isinstance(role, str) and role.lower() in ("admin", "administrator"):
+        return True
+    if role and getattr(role, "name", "").lower() in ("admin", "administrator"):
+        return True
+    permissions = getattr(user, "permissions", None)
+    if permissions and "MANAGE_SYSTEM" in permissions:
+        return True
+    if role and hasattr(role, "permissions"):
+        perm_names = {getattr(p, "name", str(p)) for p in role.permissions}
+        if "MANAGE_SYSTEM" in perm_names:
+            return True
+    return False
+
+
+def _batch_schedule_contexts(schedules):
+    if not schedules:
+        return {}
+
+    item_ids = set()
+    patient_ids = set()
+    medicine_ids = set()
+    rx_ids = set()
+
+    for s in schedules:
+        if s.get("prescription_item_id"):
+            item_ids.add(s["prescription_item_id"])
+        if s.get("patient_id"):
+            patient_ids.add(s["patient_id"])
+        if s.get("medicine_id"):
+            medicine_ids.add(s["medicine_id"])
+        if s.get("prescription_id"):
+            rx_ids.add(s["prescription_id"])
+
+    items_by_id = {}
+    if item_ids:
+        raw_items = list(mongo_db.prescription_items.find({
+            "$or": [{"id": {"$in": list(item_ids)}}, {"_id": {"$in": list(item_ids)}}]
+        }))
+        for it in raw_items:
+            items_by_id[it.get("id")] = it
+            items_by_id[it.get("_id")] = it
+            if it.get("prescription_id"):
+                rx_ids.add(it["prescription_id"])
+            if it.get("medicine_id"):
+                medicine_ids.add(it["medicine_id"])
+
+    rxs_by_id = {}
+    if rx_ids:
+        raw_rxs = list(mongo_db.prescriptions.find({
+            "$or": [{"id": {"$in": list(rx_ids)}}, {"_id": {"$in": list(rx_ids)}}]
+        }))
+        for rx in raw_rxs:
+            rxs_by_id[rx.get("id")] = rx
+            rxs_by_id[rx.get("_id")] = rx
+            if rx.get("patient_id"):
+                patient_ids.add(rx["patient_id"])
+
+    patients_by_id = {}
+    if patient_ids:
+        raw_patients = list(mongo_db.patients.find({
+            "$or": [{"id": {"$in": list(patient_ids)}}, {"_id": {"$in": list(patient_ids)}}]
+        }))
+        for p in raw_patients:
+            patients_by_id[p.get("id")] = p
+            patients_by_id[p.get("_id")] = p
+            if p.get("patient_id"):
+                patients_by_id[p.get("patient_id")] = p
+
+    meds_by_id = {}
+    if medicine_ids:
+        raw_meds = list(mongo_db.medicines.find({
+            "$or": [{"id": {"$in": list(medicine_ids)}}, {"_id": {"$in": list(medicine_ids)}}]
+        }))
+        for m in raw_meds:
+            meds_by_id[m.get("id")] = m
+            meds_by_id[m.get("_id")] = m
+
+    contexts = {}
+    for s in schedules:
+        sid = s.get("id", s.get("_id"))
+        it = items_by_id.get(s.get("prescription_item_id"))
+        rx = rxs_by_id.get(it.get("prescription_id")) if it else (rxs_by_id.get(s.get("prescription_id")) if s.get("prescription_id") else None)
+        p = patients_by_id.get(s.get("patient_id")) or (patients_by_id.get(rx.get("patient_id")) if rx else None)
+        m = meds_by_id.get(s.get("medicine_id")) or (meds_by_id.get(it.get("medicine_id")) if it else None)
+
+        if not p or not it or not m:
+            contexts[sid] = _schedule_context(s)
+        else:
+            sched_status = str(s.get("status") or "").upper().strip()
+            if sched_status in ("CANCELLED", "DISCHARGED"):
+                contexts[sid] = None
+            else:
+                contexts[sid] = (it, rx, p, m)
+
+    return contexts
 
 
 def _schedule_context(schedule):
@@ -345,7 +461,6 @@ def get_nurse_assigned_patients(
             "bed_id": p.get("bed_id"),
             "bed_number": bed_number or "—",
             "active_prescriptions_count": active_rx_count,
-            "qr_token": p.get("qr_token"),
             "qr_is_active": bool(p.get("qr_is_active", False)),
             "is_assigned": True,
             "is_active": True,
@@ -425,7 +540,6 @@ def get_nurse_patient_details(
         "primary_doctor": doctor_name or "Attending Physician",
         "allergies": allergies,
         "prescriptions_count": len(prescriptions),
-        "qr_token": p.get("qr_token"),
         "qr_is_active": bool(p.get("qr_is_active", False)),
         "is_assigned": is_assigned,
         "is_active": True,
@@ -442,6 +556,8 @@ def get_nurse_patient_details(
 def get_nurse_medications(
     patient_id: Optional[int] = Query(None, description="Optional patient ID to filter schedules"),
     date: Optional[str] = Query(None, description="Optional schedule date filter (YYYY-MM-DD)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=100, description="Items per page"),
     current_user=Depends(require_permission("VIEW_MEDICATION_SCHEDULE")),
 ):
     # Handle direct Python function calls where parameters default to Query instance
@@ -449,10 +565,28 @@ def get_nurse_medications(
         patient_id = patient_id.default
     if hasattr(date, "default"):
         date = date.default
+    if hasattr(page, "default"):
+        page = page.default
+    if hasattr(limit, "default"):
+        limit = limit.default
+
+    try:
+        page = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page = 1
+
+    try:
+        limit = max(1, min(100, int(limit or 50)))
+    except (ValueError, TypeError):
+        limit = 50
+
+    skip = (page - 1) * limit
 
     clean_date = None
     if date and isinstance(date, str) and date.strip():
         clean_date = date.strip().split("T")[0]
+
+    is_admin = _is_admin_user(current_user)
 
     if patient_id is not None and isinstance(patient_id, (int, str)):
         try:
@@ -477,8 +611,7 @@ def get_nurse_medications(
             "patient_qr_valid": True,
         }, sort=[("verified_at", -1)])
 
-        user_role = getattr(getattr(current_user, "role", None), "name", "")
-        if not is_assigned and not recent_qr and user_role.lower() not in ("administrator", "admin"):
+        if not is_assigned and not recent_qr and not is_admin:
             raise HTTPException(
                 status_code=403,
                 detail="Patient is not assigned to this nurse, and no bedside QR verification was found.",
@@ -516,11 +649,12 @@ def get_nurse_medications(
             ("scheduled_date", 1),
             ("scheduled_time", 1),
             ("_id", 1),
-        ]))
+        ]).skip(skip).limit(limit))
 
+        contexts = _batch_schedule_contexts(schedules)
         results = []
         for schedule in schedules:
-            context = _schedule_context(schedule)
+            context = contexts.get(schedule.get("id", schedule.get("_id")))
             if context is None:
                 continue
             item, prescription, patient, medicine = context
@@ -543,31 +677,62 @@ def get_nurse_medications(
         )
         return results
 
+    # patient_id is None: nurse hospital-wide listing restricted to assigned patients (or admin)
     assigned_patient_ids = _assigned_patient_ids(current_user.id)
-    if not assigned_patient_ids:
+    if not assigned_patient_ids and not is_admin:
         return []
 
-    results = []
-    sched_query = {}
+    sched_query = {
+        "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
+    }
     if clean_date:
         sched_query["scheduled_date"] = clean_date
 
-    schedules = mongo_db.medication_schedules.find(sched_query).sort(
-        [
-            ("scheduled_date", 1),
-            ("scheduled_time", 1),
-            ("_id", 1),
-        ]
-    )
+    if not is_admin:
+        all_p_candidates = []
+        for apid in assigned_patient_ids:
+            all_p_candidates.extend(_get_id_candidates(apid))
+            pdoc = _by_id("patients", apid)
+            if pdoc and pdoc.get("patient_id"):
+                all_p_candidates.extend(_get_id_candidates(pdoc["patient_id"]))
 
+        active_rxs = list(mongo_db.prescriptions.find({
+            "patient_id": {"$in": all_p_candidates},
+            "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
+        }, {"id": 1, "_id": 1}))
+        rx_ids = []
+        for rx in active_rxs:
+            rx_ids.extend(_get_id_candidates(rx.get("id", rx.get("_id"))))
+
+        item_ids = []
+        if rx_ids:
+            active_items = list(mongo_db.prescription_items.find({
+                "prescription_id": {"$in": rx_ids},
+                "status": {"$nin": ["CANCELLED", "DISCHARGED"]},
+            }, {"id": 1, "_id": 1}))
+            for it in active_items:
+                item_ids.extend(_get_id_candidates(it.get("id", it.get("_id"))))
+
+        or_conds = [{"patient_id": {"$in": all_p_candidates}}]
+        if item_ids:
+            or_conds.append({"prescription_item_id": {"$in": item_ids}})
+        sched_query["$or"] = or_conds
+
+    schedules = list(mongo_db.medication_schedules.find(sched_query).sort([
+        ("scheduled_date", 1),
+        ("scheduled_time", 1),
+        ("_id", 1),
+    ]).skip(skip).limit(limit))
+
+    contexts = _batch_schedule_contexts(schedules)
+    results = []
     for schedule in schedules:
-        context = _schedule_context(schedule)
+        context = contexts.get(schedule.get("id", schedule.get("_id")))
         if context is None:
             continue
-
         item, prescription, patient, medicine = context
         patient_id = int(patient.get("id", patient.get("_id")))
-        if patient_id not in assigned_patient_ids:
+        if not is_admin and patient_id not in assigned_patient_ids:
             continue
 
         results.append(
@@ -698,7 +863,13 @@ def administer_medication(
             detail=f"This scheduled dose has already been recorded as administered{time_str}.",
         )
 
-    # 2. Require successful patient AND medication QR verification
+    # 2. Require successful, unconsumed patient AND medication QR verification within freshness window
+    policy = get_hospital_policy()
+    qr_validity_minutes = int(policy.get("qr_freshness_minutes", 5))
+    if qr_validity_minutes <= 0 or qr_validity_minutes > 15:
+        qr_validity_minutes = 5
+    max_age_seconds = qr_validity_minutes * 60
+
     verification = mongo_db.qr_verifications.find_one(
         {
             "medication_schedule_id": {"$in": s_candidates},
@@ -707,53 +878,48 @@ def administer_medication(
             "patient_qr_valid": {"$in": [1, True]},
             "medication_valid": {"$in": [1, True]},
             "result": "SUCCESS",
+            "is_consumed": {"$ne": True},
         },
         sort=[("_id", -1)],
     )
 
     if verification is None:
-        # Check if there is an active valid patient wristband verification by this nurse for this patient
-        patient_verification = mongo_db.qr_verifications.find_one(
+        # Check if an already-consumed or expired verification exists for clear user feedback
+        prior_ver = mongo_db.qr_verifications.find_one(
             {
+                "medication_schedule_id": {"$in": s_candidates},
                 "patient_id": {"$in": p_candidates},
                 "verified_by": int(current_user.id),
                 "patient_qr_valid": {"$in": [1, True]},
+                "medication_valid": {"$in": [1, True]},
                 "result": "SUCCESS",
             },
             sort=[("_id", -1)],
         )
-        if patient_verification is not None:
-            v_id = next_mongo_id("qr_verifications")
-            now_iso = _now_iso()
-            v_msg = (
-                "Patient wristband and scheduled dose verified at bedside."
-                if is_assigned
-                else "Patient wristband and scheduled dose verified at bedside (Covering Nurse Coverage)."
+        if prior_ver and prior_ver.get("is_consumed"):
+            raise HTTPException(
+                status_code=409,
+                detail="QR verification has already been consumed. Please scan the patient and medication QR codes again.",
             )
-            verification = {
-                "_id": v_id,
-                "id": v_id,
-                "patient_id": patient_id,
-                "medication_schedule_id": canonical_sched_id,
-                "verified_by": int(current_user.id),
-                "verified_at": now_iso,
-                "patient_qr_valid": True,
-                "medication_valid": True,
-                "is_override": not is_assigned,
-                "result": "SUCCESS",
-                "message": v_msg,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            }
-            mongo_db.qr_verifications.insert_one(verification)
+        elif prior_ver:
+            raise HTTPException(
+                status_code=400,
+                detail="QR verification has expired. Please scan the patient and medication QR codes again.",
+            )
         else:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "Patient and medication QR verification must be "
-                    "completed before administration."
-                ),
+                detail="Patient and medication QR verification must be completed at bedside before administration.",
             )
+
+    # Check freshness of verification timestamp
+    verified_dt = parse_verification_time(verification.get("verified_at"))
+    now_utc = datetime.now(timezone.utc)
+    if (now_utc - verified_dt).total_seconds() > max_age_seconds:
+        raise HTTPException(
+            status_code=400,
+            detail="QR verification has expired. Please scan the patient and medication QR codes again.",
+        )
 
     # 3. Check nurse assignment and handle override
     orig_nurse_id, orig_nurse_name = _get_primary_assigned_nurse(patient_id)
@@ -865,6 +1031,20 @@ def administer_medication(
             },
         )
 
+        # Mark bedside QR verification as consumed to prevent replay
+        v_target_id = verification.get("id", verification.get("_id"))
+        mongo_db.qr_verifications.update_one(
+            {"$or": [{"_id": v_target_id}, {"id": v_target_id}]},
+            {
+                "$set": {
+                    "is_consumed": True,
+                    "consumed_at": now,
+                    "consumed_by": int(current_user.id),
+                    "consumed_for_schedule_id": canonical_sched_id,
+                }
+            },
+        )
+
         # Automatically acknowledge any open alerts for this dose
         mongo_db.medication_alerts.update_many(
             {"medication_schedule_id": {"$in": s_candidates}, "is_acknowledged": False},
@@ -930,6 +1110,7 @@ def get_nurse_history(
 class MedicationHoldRequest(BaseModel):
     reason: str = Field(..., min_length=3, max_length=500, description="Clinical rationale for holding dose")
     notes: Optional[str] = Field(None, max_length=1000)
+    override_reason: Optional[str] = Field(None, max_length=500, description="Mandatory rationale if covering an unassigned patient")
 
 
 @router.post("/medications/{schedule_id}/hold")
@@ -940,6 +1121,7 @@ def hold_medication(
 ):
     """
     Mark a scheduled medication dose as HELD with required clinical rationale.
+    Enforces nurse-patient assignment and requires authorized coverage & rationale for overrides.
     """
     schedule, item, prescription, patient, medicine, is_assigned = (
         _get_nurse_schedule(
@@ -955,6 +1137,52 @@ def hold_medication(
             detail="Cannot hold a medication dose that has already been administered.",
         )
 
+    patient_id_raw = patient.get("id", patient.get("_id"))
+    try:
+        patient_id = int(patient_id_raw)
+    except (ValueError, TypeError):
+        patient_id = patient_id_raw
+
+    orig_nurse_id = None
+    orig_nurse_name = None
+
+    if not is_assigned:
+        orig_nurse_id, orig_nurse_name = _get_primary_assigned_nurse(patient_id)
+        is_admin = _is_admin_user(current_user)
+
+        # Check for fresh bedside QR verification by covering nurse (within 15 minutes)
+        has_covering_scan = False
+        now_dt = datetime.now(timezone.utc)
+        recent_scan = mongo_db.qr_verifications.find_one({
+            "patient_id": {"$in": _get_id_candidates(patient_id)},
+            "verified_by": int(current_user.id),
+            "patient_qr_valid": True,
+        }, sort=[("verified_at", -1)])
+
+        if recent_scan:
+            v_time = recent_scan.get("verified_at")
+            if isinstance(v_time, str):
+                try:
+                    dt = datetime.fromisoformat(v_time.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if now_dt - dt <= timedelta(minutes=15):
+                        has_covering_scan = True
+                except Exception:
+                    pass
+
+        if not is_admin and not has_covering_scan:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Patient is currently assigned to {orig_nurse_name or f'Nurse #{orig_nurse_id}'}. Unassigned staff without active bedside verification coverage cannot hold medications.",
+            )
+
+        if not request.override_reason or not request.override_reason.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="An explicit override_reason is required when holding medication for an unassigned patient.",
+            )
+
     now = _now_iso()
     nurse_name = getattr(current_user, "full_name", None) or getattr(current_user, "username", f"Nurse #{current_user.id}")
     s_candidates = _get_id_candidates(schedule_id)
@@ -963,6 +1191,11 @@ def hold_medication(
     hold_note = f"HELD: {request.reason.strip()}."
     if request.notes:
         hold_note += f" Notes: {request.notes.strip()}"
+    if not is_assigned and request.override_reason:
+        hold_note += f" [Covering Override Rationale: {request.override_reason.strip()}]"
+
+    is_override = not is_assigned
+    override_reason = request.override_reason.strip() if not is_assigned and request.override_reason else None
 
     # Update schedule status to HELD
     mongo_db.medication_schedules.update_one(
@@ -973,6 +1206,10 @@ def hold_medication(
                 "notes": hold_note,
                 "administered_by": int(current_user.id),
                 "actual_administration_time": now,
+                "is_override": is_override,
+                "override_reason": override_reason,
+                "originally_assigned_nurse_id": orig_nurse_id,
+                "originally_assigned_nurse_name": orig_nurse_name,
                 "updated_at": now,
             }
         },
@@ -980,11 +1217,6 @@ def hold_medication(
 
     # Record in medication_administrations as HELD
     admin_id = _next_administration_id()
-    patient_id_raw = patient.get("id", patient.get("_id"))
-    try:
-        patient_id = int(patient_id_raw)
-    except (ValueError, TypeError):
-        patient_id = patient_id_raw
 
     admin_doc = {
         "_id": admin_id,
@@ -1002,7 +1234,10 @@ def hold_medication(
         "administered_at": now,
         "delay_minutes": 0.0,
         "notes": hold_note,
-        "is_override": not is_assigned,
+        "is_override": is_override,
+        "override_reason": override_reason,
+        "originally_assigned_nurse_id": orig_nurse_id,
+        "originally_assigned_nurse_name": orig_nurse_name,
         "created_at": now,
         "updated_at": now,
     }
@@ -1023,6 +1258,8 @@ def hold_medication(
         "schedule_id": int(schedule_id),
         "status": "HELD",
         "reason": request.reason.strip(),
+        "is_override": is_override,
+        "override_reason": override_reason,
         "held_by": int(current_user.id),
         "held_by_name": nurse_name,
         "held_at": now,

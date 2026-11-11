@@ -144,6 +144,56 @@ def get_doctor_patient_or_404(patient_id: Any, current_user):
     return patient
 
 
+def is_admin_user(user) -> bool:
+    """Check if the user has administrative privileges."""
+    role = getattr(user, "role", None)
+    if isinstance(role, str) and role.lower() in ("admin", "administrator"):
+        return True
+    if role and getattr(role, "name", "").lower() in ("admin", "administrator"):
+        return True
+    permissions = getattr(user, "permissions", None)
+    if permissions and "MANAGE_SYSTEM" in permissions:
+        return True
+    if role and hasattr(role, "permissions"):
+        perm_names = {getattr(p, "name", str(p)) for p in role.permissions}
+        if "MANAGE_SYSTEM" in perm_names:
+            return True
+    return False
+
+
+def get_doctor_prescription_or_403(prescription_id: int, current_user, require_active: bool = True):
+    """
+    Retrieve prescription by ID and enforce Object-Level Authorization (BOLA protection).
+    Only the prescribing doctor who authored the prescription or an administrator may
+    modify, replace, or stop a prescription order.
+    """
+    prescription = mongo_db.prescriptions.find_one({
+        "$or": [{"_id": prescription_id}, {"id": prescription_id}]
+    })
+
+    if prescription is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Prescription not found.",
+        )
+
+    # Validate ownership: only authoring doctor or admin
+    is_author = str(prescription.get("doctor_id")) == str(current_user.id)
+    if not (is_author or is_admin_user(current_user)):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to modify or stop this prescription. Access is restricted to the prescribing physician.",
+        )
+
+    if require_active and prescription.get("status") != "ACTIVE":
+        raise HTTPException(
+            status_code=400,
+            detail="Only active prescriptions can be edited, replaced, or stopped.",
+        )
+
+    return prescription
+
+
 def get_doctor_patient_history_or_404(patient_id: Any, current_user):
     """
     Verify that the patient exists and has at least one clinical
@@ -374,10 +424,10 @@ def remove_unadministered_schedules(prescription_item_id):
 
 @router.get("/test")
 def doctor_test(
-    current_user=Depends(require_permission("VIEW_PATIENT")),
+    current_user=Depends(require_permission("MANAGE_SYSTEM")),
 ):
     return {
-        "message": "Doctor API access granted.",
+        "message": "Doctor API test endpoint accessed with system management privileges.",
         "user_id": current_user.id,
         "username": current_user.username,
         "role": current_user.role.name,
@@ -479,7 +529,8 @@ def get_patient_allergies(
 
     allergies = list(
         mongo_db.patient_allergies.find({
-            "patient_id": patient_id
+            "patient_id": patient_id,
+            "is_active": {"$ne": False},
         }).sort("id", 1)
     )
 
@@ -833,22 +884,15 @@ def create_prescription(
     replaced_rx = None
     if getattr(request, "replaces_prescription_id", None):
         target_pid = patient["id"]
-        replaced_rx = mongo_db.prescriptions.find_one({
-            "$or": [
-                {"_id": request.replaces_prescription_id},
-                {"id": request.replaces_prescription_id},
-            ],
-            "patient_id": {"$in": [target_pid, str(target_pid), patient.get("patient_id")]},
-        })
-        if not replaced_rx:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Prescription #{request.replaces_prescription_id} not found for this patient.",
-            )
-        if replaced_rx.get("status") != "ACTIVE":
+        replaced_rx = get_doctor_prescription_or_403(
+            request.replaces_prescription_id,
+            current_user,
+            require_active=True,
+        )
+        if replaced_rx.get("patient_id") not in [target_pid, str(target_pid), patient.get("patient_id")]:
             raise HTTPException(
                 status_code=400,
-                detail="Only active prescriptions can be replaced.",
+                detail=f"Prescription #{request.replaces_prescription_id} does not belong to this patient.",
             )
 
     active_rx_ids = mongo_db.prescriptions.distinct(
@@ -1369,6 +1413,7 @@ def replace_prescription(
         require_permission("CREATE_PRESCRIPTION")
     ),
 ):
+    get_doctor_prescription_or_403(prescription_id, current_user, require_active=True)
     request.replaces_prescription_id = prescription_id
     return create_prescription(request=request, current_user=current_user)
 
@@ -1385,24 +1430,15 @@ def update_prescription(
         require_permission("EDIT_PRESCRIPTION")
     ),
 ):
-    prescription = mongo_db.prescriptions.find_one({
-        "_id": prescription_id
-    })
-
-    if prescription is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Prescription not found.",
-        )
-
-    if prescription.get("status") != "ACTIVE":
-        raise HTTPException(
-            status_code=400,
-            detail="Only active prescriptions can be edited.",
-        )
+    prescription = get_doctor_prescription_or_403(
+        prescription_id,
+        current_user,
+        require_active=True,
+    )
+    actual_rx_id = int(prescription.get("id") or prescription.get("_id"))
 
     item = mongo_db.prescription_items.find_one({
-        "prescription_id": prescription_id
+        "prescription_id": actual_rx_id
     })
 
     if item is None:
@@ -1420,7 +1456,7 @@ def update_prescription(
 
     if notes_were_provided:
         mongo_db.prescriptions.update_one(
-            {"_id": prescription_id},
+            {"_id": actual_rx_id},
             {"$set": {
                 "notes": notes_value,
                 "updated_at": mongo_now(),
@@ -1539,22 +1575,11 @@ def stop_prescription(
         require_permission("STOP_PRESCRIPTION")
     ),
 ):
-    prescription = mongo_db.prescriptions.find_one({
-        "$or": [{"_id": prescription_id}, {"id": prescription_id}]
-    })
-
-    if prescription is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Prescription not found.",
-        )
-
-    if prescription.get("status") != "ACTIVE":
-        raise HTTPException(
-            status_code=400,
-            detail="Only active prescriptions can be stopped.",
-        )
-
+    prescription = get_doctor_prescription_or_403(
+        prescription_id,
+        current_user,
+        require_active=True,
+    )
     actual_rx_id = int(prescription.get("id") or prescription.get("_id"))
     now = mongo_now()
 
@@ -1782,7 +1807,7 @@ def doctor_verify_round_qr(
             bed_number = bed.get("bed_number")
 
     # Allergies
-    allergies = list(mongo_db.patient_allergies.find({"patient_id": p_id}))
+    allergies = list(mongo_db.patient_allergies.find({"patient_id": p_id, "is_active": {"$ne": False}}))
     for a in allergies:
         a["id"] = a.get("id", a.get("_id"))
         if "_id" in a:
@@ -1941,7 +1966,7 @@ def get_doctor_round_patients(
             "chief_complaint": enc.get("chief_complaint") if enc else None,
             "last_assessment": last_assessment,
             "assessment_count": total_assessments,
-            "qr_token": p.get("qr_token"),
+            "qr_is_active": bool(p.get("qr_is_active", False)),
         })
 
     return results

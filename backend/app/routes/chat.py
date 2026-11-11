@@ -1,12 +1,13 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 import json
 import re
+from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.mongo_client import mongo_db
-from app.security import require_permission
+from app.security import get_current_user
 from app.services.medication_safety_service import (
     check_medication_safety,
 )
@@ -122,86 +123,272 @@ def parse_json_list(value):
 
 
 # =========================================================
-# PATIENT FINDER
+# ROLE-AWARE PATIENT AUTHORIZATION & SEARCH
 # =========================================================
 
 STOPWORDS = {
     "who", "are", "is", "am", "the", "a", "an", "for", "to", "in", "of", "and",
     "or", "how", "what", "when", "why", "where", "there", "patient", "test",
     "schedule", "status", "administration", "medicine", "medication", "has", "have",
+    "show", "tell", "give", "please", "can", "could", "details", "info", "records",
 }
 
 
-def find_patient(message: str):
+def get_authorized_patient_scope(current_user) -> tuple[bool, set[Any]]:
     """
-    Find an active patient in MongoDB.
+    Determine patient access scope based on the user's role and clinical assignments.
+    Returns: (has_unrestricted_scope, set_of_authorized_patient_ids)
     """
+    role_name = getattr(current_user.role, "name", "").strip().lower()
+    permissions = {p.name for p in getattr(current_user.role, "permissions", [])}
 
-    patients = list(
-        mongo_db.patients.find({"is_active": {"$in": [1, True]}})
-    )
+    # 1. Administrator: allowed full scope if possessing administrative/view rights
+    if role_name in ("admin", "administrator") or "MANAGE_SYSTEM" in permissions:
+        return True, set()
 
+    # 2. Receptionist: allowed demographic lookups for active patients (clinical details gated separately)
+    if role_name == "receptionist" or ("REGISTER_PATIENT" in permissions and "VIEW_PATIENT" in permissions):
+        return True, set()
+
+    # 3. Doctor: allowed patients with an active or historical clinical encounter or prescription
+    if role_name == "doctor":
+        doc_id = getattr(current_user, "id", None)
+        enc_pat_ids = [
+            e.get("patient_id")
+            for e in mongo_db.encounters.find({"doctor_id": doc_id}, {"patient_id": 1})
+            if e.get("patient_id") is not None
+        ]
+        rx_pat_ids = [
+            r.get("patient_id")
+            for r in mongo_db.prescriptions.find({"doctor_id": doc_id}, {"patient_id": 1})
+            if r.get("patient_id") is not None
+        ]
+        allowed = set(enc_pat_ids) | set(rx_pat_ids)
+        expanded = set()
+        for pid in allowed:
+            expanded.add(pid)
+            try:
+                expanded.add(int(pid))
+            except (ValueError, TypeError):
+                pass
+            expanded.add(str(pid))
+        return False, expanded
+
+    # 4. Nurse: allowed assigned patients or covering patients with a recent valid bedside scan (<= 15m)
+    if role_name == "nurse":
+        nurse_id = getattr(current_user, "id", None)
+        assigned_pat_ids = [
+            a.get("patient_id")
+            for a in mongo_db.nurse_patient_assignments.find(
+                {"nurse_id": nurse_id, "is_active": {"$in": [True, 1, "1"]}},
+                {"patient_id": 1}
+            )
+            if a.get("patient_id") is not None
+        ]
+        # Check covering nurse recent scan (within 15 minutes)
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        recent_scans = [
+            v.get("patient_id")
+            for v in mongo_db.qr_verifications.find(
+                {
+                    "verified_by": nurse_id,
+                    "patient_qr_valid": {"$in": [True, 1]},
+                    "result": "SUCCESS",
+                    "verified_at": {"$gte": cutoff_iso},
+                },
+                {"patient_id": 1}
+            )
+            if v.get("patient_id") is not None
+        ]
+        allowed = set(assigned_pat_ids) | set(recent_scans)
+        expanded = set()
+        for pid in allowed:
+            expanded.add(pid)
+            try:
+                expanded.add(int(pid))
+            except (ValueError, TypeError):
+                pass
+            expanded.add(str(pid))
+        return False, expanded
+
+    # 5. Pharmacist: allowed patients with prescription or pharmacy inventory records
+    if role_name == "pharmacist" or "VIEW_PRESCRIPTION" in permissions:
+        rx_pat_ids = [
+            r.get("patient_id")
+            for r in mongo_db.prescriptions.find({}, {"patient_id": 1})
+            if r.get("patient_id") is not None
+        ]
+        expanded = set()
+        for pid in rx_pat_ids:
+            expanded.add(pid)
+            try:
+                expanded.add(int(pid))
+            except (ValueError, TypeError):
+                pass
+            expanded.add(str(pid))
+        return False, expanded
+
+    return False, set()
+
+
+def find_patient(message: str, current_user):
+    """
+    Find and authorize an active patient in MongoDB for the current user.
+    Prevents unrestricted full-collection loading.
+    Returns:
+    - patient dict: if authorized patient is found unambiguously
+    - {"__unauthorized__": True, "message": "..."}: if matched patient is outside user's scope
+    - {"__ambiguous__": True, "message": "..."}: if multiple patients match
+    - None: if no patient matched
+    """
+    has_unrestricted_scope, authorized_ids = get_authorized_patient_scope(current_user)
     text = normalize_text(message)
 
-    # 1. Exact patient-code matches
-    for patient in patients:
-        code = normalize_text(patient.get("patient_id"))
-        if code and code in text:
-            return patient
+    # 1. Search by explicit patient code pattern or ID tokens in message
+    code_matches = re.findall(r"(?:SMH-[A-Z0-9-]+|\bPAT-\d+\b|\b\d{4,}\b)", message, re.IGNORECASE)
+    candidate_queries = []
+    for code in code_matches:
+        candidate_queries.append({"patient_id": {"$regex": f"^{re.escape(code.strip())}$", "$options": "i"}})
+        if code.isdigit():
+            candidate_queries.append({"_id": int(code)})
+            candidate_queries.append({"id": int(code)})
 
-    # 2. Exact full-name matches
-    for patient in patients:
-        full_name = normalize_text(
-            f"{patient.get('first_name', '')} {patient.get('last_name', '')}"
-        )
-        if full_name and full_name in text:
-            return patient
+    matching_patients = []
+    if candidate_queries:
+        matching_patients = list(mongo_db.patients.find({
+            "$or": candidate_queries,
+            "is_active": {"$in": [1, True, "1", "true"]},
+        }))
 
-    # 3. Exact first + last tokens
-    for patient in patients:
-        first_name = normalize_text(patient.get("first_name"))
-        last_name = normalize_text(patient.get("last_name"))
+    # 2. If no explicit code match, look for name matches among active patients
+    if not matching_patients:
+        words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", text) if w not in STOPWORDS]
+        if words:
+            word_queries = []
+            for w in words[:4]:
+                pattern = f"^{re.escape(w)}"
+                word_queries.append({"first_name": {"$regex": pattern, "$options": "i"}})
+                word_queries.append({"last_name": {"$regex": pattern, "$options": "i"}})
+            if word_queries:
+                candidates = list(mongo_db.patients.find({
+                    "$or": word_queries,
+                    "is_active": {"$in": [1, True, "1", "true"]},
+                }).limit(20))
 
-        if not first_name or not last_name:
-            continue
+                for p in candidates:
+                    p_full = normalize_text(f"{p.get('first_name', '')} {p.get('last_name', '')}")
+                    p_code = normalize_text(p.get("patient_id"))
+                    p_fn = normalize_text(p.get("first_name"))
+                    p_ln = normalize_text(p.get("last_name"))
 
-        first_match = re.search(rf"\b{re.escape(first_name)}\b", text)
-        last_match = re.search(rf"\b{re.escape(last_name)}\b", text)
+                    if p_code and p_code in text:
+                        matching_patients.append(p)
+                    elif p_full and p_full in text:
+                        matching_patients.append(p)
+                    elif p_fn and p_ln and (re.search(rf"\b{re.escape(p_fn)}\b", text) and re.search(rf"\b{re.escape(p_ln)}\b", text)):
+                        matching_patients.append(p)
+                    elif p_fn and len(p_fn) >= 3 and p_fn not in STOPWORDS and re.search(rf"\b{re.escape(p_fn)}\b", text):
+                        matching_patients.append(p)
+                    elif p_ln and len(p_ln) >= 3 and p_ln not in STOPWORDS and re.search(rf"\b{re.escape(p_ln)}\b", text):
+                        matching_patients.append(p)
 
-        if first_match and last_match:
-            return patient
+    # Deduplicate matching patients by ID
+    seen_ids = set()
+    unique_matches = []
+    for p in matching_patients:
+        pid = p.get("id", p.get("_id"))
+        if pid not in seen_ids:
+            seen_ids.add(pid)
+            unique_matches.append(p)
 
-    # 4. First name only (skip common words)
-    for patient in patients:
-        first_name = normalize_text(patient.get("first_name"))
-        if (
-            first_name
-            and len(first_name) >= 3
-            and first_name not in STOPWORDS
-            and re.search(rf"\b{re.escape(first_name)}\b", text)
-        ):
-            return patient
+    if not unique_matches:
+        return None
 
-    # 5. Last name only (skip common words)
-    for patient in patients:
-        last_name = normalize_text(patient.get("last_name"))
-        if (
-            last_name
-            and len(last_name) >= 3
-            and last_name not in STOPWORDS
-            and re.search(rf"\b{re.escape(last_name)}\b", text)
-        ):
-            return patient
+    # 3. Check authorization for matching patients
+    role_name = getattr(current_user.role, "name", "").strip().lower()
 
-    return None
+    if len(unique_matches) == 1:
+        target = unique_matches[0]
+        pid = target.get("id", target.get("_id"))
+        pid_code = target.get("patient_id")
+
+        if not has_unrestricted_scope:
+            is_authorized = (
+                pid in authorized_ids
+                or str(pid) in authorized_ids
+                or pid_code in authorized_ids
+            )
+            if not is_authorized:
+                role_label = (
+                    "Physicians"
+                    if role_name == "doctor"
+                    else ("Nurses" if role_name == "nurse" else "Healthcare staff")
+                )
+                return {
+                    "__unauthorized__": True,
+                    "message": (
+                        f"Access denied: You are not authorized to view clinical records for patient "
+                        f"{patient_name(target)}. {role_label} may only access patients in their active assigned care roster."
+                    ),
+                }
+
+        return target
+
+    # Multiple patients matched: filter to authorized subset
+    authorized_matches = []
+    for p in unique_matches:
+        pid = p.get("id", p.get("_id"))
+        pid_code = p.get("patient_id")
+        if has_unrestricted_scope or (pid in authorized_ids or str(pid) in authorized_ids or pid_code in authorized_ids):
+            authorized_matches.append(p)
+
+    if not authorized_matches:
+        return {
+            "__unauthorized__": True,
+            "message": "Access denied: The requested patient records are outside your authorized patient assignment roster.",
+        }
+
+    if len(authorized_matches) == 1:
+        return authorized_matches[0]
+
+    # Truly ambiguous between multiple authorized patients
+    return {
+        "__ambiguous__": True,
+        "message": (
+            f"Multiple matching patients found in your authorized roster ({len(authorized_matches)} matches). "
+            f"Please specify the exact Patient Code (e.g., {authorized_matches[0].get('patient_id')}) to view details."
+        ),
+    }
 
 
 # =========================================================
 # PATIENT SUMMARY
 # =========================================================
 
-def build_patient_summary(patient: dict):
+def build_patient_summary(patient: dict, current_user=None):
     patient_id = patient.get("id", patient.get("_id"))
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+
+    lines = [
+        f"Patient: {patient_name(patient)}",
+        f"Patient ID: {patient.get('patient_id')}",
+        f"Date of birth: {format_date(patient.get('date_of_birth'))}",
+        f"Gender: {patient.get('gender') or 'Not recorded'}",
+        f"Weight: {patient.get('weight_kg') if patient.get('weight_kg') is not None else 'Not recorded'} kg",
+        f"Ward ID: {patient.get('ward_id') if patient.get('ward_id') is not None else 'Not assigned'}",
+        f"Bed ID: {patient.get('bed_id') if patient.get('bed_id') is not None else 'Not assigned'}",
+    ]
+
+    # Enforce least privilege for non-clinical roles (e.g. Receptionist)
+    if role_name == "receptionist":
+        lines.append("")
+        lines.append("Allergies: [Restricted - Clinical Role Required]")
+        lines.append("Current medicines: [Restricted - Clinical Role Required]")
+        return "\n".join(lines)
 
     allergies = list(
         mongo_db.patient_allergies.find({"patient_id": patient_id})
@@ -228,16 +415,6 @@ def build_patient_summary(patient: dict):
         })
     ) if med_ids else []
     med_map = {m.get("id", m.get("_id")): m for m in med_docs}
-
-    lines = [
-        f"Patient: {patient_name(patient)}",
-        f"Patient ID: {patient.get('patient_id')}",
-        f"Date of birth: {format_date(patient.get('date_of_birth'))}",
-        f"Gender: {patient.get('gender') or 'Not recorded'}",
-        f"Weight: {patient.get('weight_kg') if patient.get('weight_kg') is not None else 'Not recorded'} kg",
-        f"Ward ID: {patient.get('ward_id') if patient.get('ward_id') is not None else 'Not assigned'}",
-        f"Bed ID: {patient.get('bed_id') if patient.get('bed_id') is not None else 'Not assigned'}",
-    ]
 
     if allergies:
         allergy_text = []
@@ -325,7 +502,15 @@ def get_patient_schedule_rows(patient_id: int):
 # PATIENT MEDICATION SCHEDULE
 # =========================================================
 
-def answer_patient_schedule(patient: dict):
+def answer_patient_schedule(patient: dict, current_user=None):
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+    if role_name == "receptionist":
+        return "Access denied: Medication schedules are restricted to clinical staff."
+
     patient_id = patient.get("id", patient.get("_id"))
     rows = get_patient_schedule_rows(patient_id)
 
@@ -364,7 +549,15 @@ def answer_patient_schedule(patient: dict):
 # PATIENT MEDICINES / PRESCRIPTIONS
 # =========================================================
 
-def answer_patient_medicines(patient: dict):
+def answer_patient_medicines(patient: dict, current_user=None):
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+    if role_name == "receptionist":
+        return "Access denied: Prescription and medication records are restricted to clinical staff."
+
     patient_id = patient.get("id", patient.get("_id"))
     rx_docs = list(
         mongo_db.prescriptions.find({"patient_id": patient_id})
@@ -419,7 +612,15 @@ def answer_patient_medicines(patient: dict):
 # PATIENT ADMINISTRATION HISTORY
 # =========================================================
 
-def answer_patient_administration(patient: dict):
+def answer_patient_administration(patient: dict, current_user=None):
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+    if role_name in ("receptionist", "pharmacist"):
+        return "Access denied: Medication administration records are restricted to clinical nursing and medical staff."
+
     patient_id = patient.get("id", patient.get("_id"))
     schedule_rows = get_patient_schedule_rows(patient_id)
     sched_ids = [s.get("id", s.get("_id")) for s, _, _ in schedule_rows]
@@ -488,7 +689,15 @@ def answer_patient_administration(patient: dict):
 # PATIENT QR HISTORY
 # =========================================================
 
-def answer_patient_qr(patient: dict):
+def answer_patient_qr(patient: dict, current_user=None):
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+    if role_name in ("receptionist", "pharmacist"):
+        return "Access denied: Bedside QR verification history is restricted to clinical staff."
+
     patient_id = patient.get("id", patient.get("_id"))
     verifications = list(
         mongo_db.qr_verifications.find({
@@ -595,7 +804,15 @@ def answer_patient_qr(patient: dict):
 # PATIENT AI RISK
 # =========================================================
 
-def answer_patient_ai(patient: dict):
+def answer_patient_ai(patient: dict, current_user=None):
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+    if role_name in ("receptionist", "pharmacist"):
+        return "Access denied: AI clinical predictions are restricted to clinical staff."
+
     patient_id = patient.get("id", patient.get("_id"))
     schedule_rows = get_patient_schedule_rows(patient_id)
     sched_ids = [s.get("id", s.get("_id")) for s, _, _ in schedule_rows]
@@ -664,7 +881,15 @@ def answer_patient_ai(patient: dict):
 # PATIENT SAFETY
 # =========================================================
 
-def answer_patient_safety(patient: dict):
+def answer_patient_safety(patient: dict, current_user=None):
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+    if role_name == "receptionist":
+        return "Access denied: Medication safety warnings are restricted to clinical staff."
+
     patient_id = patient.get("id", patient.get("_id"))
     schedules = get_patient_schedule_rows(patient_id)
 
@@ -732,12 +957,19 @@ def answer_patient_safety(patient: dict):
 # PATIENT-SPECIFIC QUESTIONS
 # =========================================================
 
-def answer_patient_question(message: str):
-    patient = find_patient(message)
+def answer_patient_question(message: str, current_user):
+    match_result = find_patient(message, current_user)
 
-    if patient is None:
+    if match_result is None:
         return None
 
+    if isinstance(match_result, dict) and match_result.get("__unauthorized__"):
+        return match_result.get("message")
+
+    if isinstance(match_result, dict) and match_result.get("__ambiguous__"):
+        return match_result.get("message")
+
+    patient = match_result
     text = normalize_text(message)
 
     # ADMINISTRATION
@@ -754,7 +986,7 @@ def answer_patient_question(message: str):
         "was the medicine given",
     ]
     if any(k in text for k in administration_keywords):
-        return answer_patient_administration(patient)
+        return answer_patient_administration(patient, current_user)
 
     # QR VERIFICATION
     qr_keywords = [
@@ -767,7 +999,7 @@ def answer_patient_question(message: str):
         "medication qr",
     ]
     if any(k in text for k in qr_keywords):
-        return answer_patient_qr(patient)
+        return answer_patient_qr(patient, current_user)
 
     # AI RISK
     ai_keywords = [
@@ -783,7 +1015,7 @@ def answer_patient_question(message: str):
         "why is this medication high risk",
     ]
     if any(k in text for k in ai_keywords):
-        return answer_patient_ai(patient)
+        return answer_patient_ai(patient, current_user)
 
     # SAFETY
     safety_keywords = [
@@ -796,7 +1028,7 @@ def answer_patient_question(message: str):
         "drug safety",
     ]
     if any(k in text for k in safety_keywords):
-        return answer_patient_safety(patient)
+        return answer_patient_safety(patient, current_user)
 
     # BASIC PATIENT INFORMATION
     basic_keywords = [
@@ -814,7 +1046,7 @@ def answer_patient_question(message: str):
         "allerg",
     ]
     if any(w in text for w in basic_keywords):
-        return build_patient_summary(patient)
+        return build_patient_summary(patient, current_user)
 
     # MEDICATION SCHEDULE
     schedule_keywords = [
@@ -830,7 +1062,7 @@ def answer_patient_question(message: str):
         "when should the medicine",
     ]
     if any(w in text for w in schedule_keywords):
-        return answer_patient_schedule(patient)
+        return answer_patient_schedule(patient, current_user)
 
     # MEDICINES / PRESCRIPTIONS
     medicine_keywords = [
@@ -844,17 +1076,26 @@ def answer_patient_question(message: str):
         "drugs",
     ]
     if any(w in text for w in medicine_keywords):
-        return answer_patient_medicines(patient)
+        return answer_patient_medicines(patient, current_user)
 
-    return build_patient_summary(patient)
+    return build_patient_summary(patient, current_user)
 
 
 # =========================================================
 # GENERAL DASHBOARD QUESTIONS
 # =========================================================
 
-def answer_dashboard_question(message: str):
+def answer_dashboard_question(message: str, current_user=None):
     text = normalize_text(message)
+    role_name = (
+        getattr(current_user.role, "name", "").strip().lower()
+        if current_user and hasattr(current_user, "role")
+        else ""
+    )
+
+    # Protect sensitive operational metrics from non-clinical roles
+    if role_name == "receptionist" and any(k in text for k in ("ai risk", "high risk", "administration", "administered")):
+        return "Access denied: Clinical monitoring and AI risk statistics are restricted to clinical staff."
 
     total = mongo_db.medication_schedules.count_documents({})
     given = mongo_db.medication_schedules.count_documents({"status": "GIVEN"})
@@ -971,9 +1212,7 @@ def answer_dashboard_question(message: str):
 )
 def chat(
     request: ChatRequest,
-    current_user=Depends(
-        require_permission("VIEW_MEDICATION_SCHEDULE")
-    ),
+    current_user=Depends(get_current_user),
 ):
     message = request.message.strip()
 
@@ -1006,13 +1245,13 @@ def chat(
             )
         )
 
-    # 2. PATIENT-SPECIFIC QUESTIONS FIRST
-    patient_answer = answer_patient_question(message)
+    # 2. PATIENT-SPECIFIC QUESTIONS FIRST (with role-aware patient authorization)
+    patient_answer = answer_patient_question(message, current_user)
     if patient_answer:
         return ChatResponse(answer=patient_answer)
 
-    # 3. GENERAL DASHBOARD QUESTIONS
-    dashboard_answer = answer_dashboard_question(message)
+    # 3. GENERAL DASHBOARD QUESTIONS (with role-aware authorization)
+    dashboard_answer = answer_dashboard_question(message, current_user)
     if dashboard_answer:
         return ChatResponse(answer=dashboard_answer)
 
@@ -1026,12 +1265,12 @@ def chat(
             "safety checks, STAT medicines, and "
             "medication status.\n\n"
             "Examples:\n"
-            "- What medicines does PRADYUMNA KUNTHE have?\n"
-            "- Show the medication schedule for PRADYUMNA KUNTHE\n"
-            "- What is the administration history for PRADYUMNA KUNTHE?\n"
+            "- What medicines does my patient have?\n"
+            "- Show the medication schedule for [Patient Code]\n"
+            "- What is the administration history for [Patient Code]?\n"
             "- Was the medication given?\n"
-            "- What is the AI risk for PRADYUMNA KUNTHE?\n"
-            "- Show QR verification history for PRADYUMNA KUNTHE\n"
+            "- What is the AI risk for [Patient Code]?\n"
+            "- Show QR verification history for [Patient Code]\n"
             "- Is the medication safe?\n"
             "- How many delayed medicines are there?"
         )

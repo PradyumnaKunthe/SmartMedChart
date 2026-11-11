@@ -551,18 +551,81 @@ def dispense_medicine(
     if qty_to_dispense <= 0:
         raise HTTPException(status_code=400, detail="Quantity to dispense must be greater than zero.")
 
-    # Prevent duplicate dispense for the same prescription item if already dispensed
+    # Validate prescription linkage and clinical integrity
+    actual_rx_id = None
     if request.prescription_id:
+        prescription = mongo_db.prescriptions.find_one({
+            "$or": [{"_id": request.prescription_id}, {"id": request.prescription_id}]
+        })
+        if not prescription:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prescription #{request.prescription_id} not found."
+            )
+
+        if prescription.get("status") != "ACTIVE":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot dispense against prescription #{request.prescription_id} because its status is '{prescription.get('status')}'. Only ACTIVE prescriptions can be dispensed."
+            )
+
+        actual_rx_id = int(prescription.get("id") or prescription.get("_id"))
+        rx_patient_id = prescription.get("patient_id")
+
+        if request.patient_id is not None:
+            if str(request.patient_id) != str(rx_patient_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Prescription #{request.prescription_id} belongs to patient #{rx_patient_id}, not patient #{request.patient_id}."
+                )
+        else:
+            try:
+                request.patient_id = int(rx_patient_id)
+            except (ValueError, TypeError):
+                pass
+
+        # Verify medicine is in prescription_items for this prescription
+        rx_item = mongo_db.prescription_items.find_one({
+            "prescription_id": {"$in": [actual_rx_id, request.prescription_id]},
+            "medicine_id": request.medicine_id,
+        })
+        if not rx_item:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Medicine #{request.medicine_id} ({medicine.get('name')}) is not prescribed under prescription #{request.prescription_id}."
+            )
+
+        # Prevent duplicate dispense for the same prescription item if already dispensed
         existing_tx = mongo_db.stock_transactions.find_one({
-            "prescription_id": request.prescription_id,
+            "prescription_id": {"$in": [request.prescription_id, actual_rx_id]},
             "medicine_id": request.medicine_id,
             "transaction_type": "DISPENSE",
         })
         if existing_tx:
             raise HTTPException(
                 status_code=400,
-                detail=f"Prescription #{request.prescription_id} has already been dispensed on {existing_tx.get('created_at')[:10]}.",
+                detail=f"Prescription #{request.prescription_id} item for {medicine.get('name')} has already been dispensed on {str(existing_tx.get('created_at', ''))[:10]}.",
             )
+    else:
+        # Non-prescription dispense requires clinical justification in notes
+        if not request.notes or not request.notes.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Clinical justification notes are mandatory when dispensing without a linked prescription order."
+            )
+
+    # Validate patient exists if provided
+    patient_name = None
+    if request.patient_id:
+        patient = mongo_db.patients.find_one({
+            "$or": [{"_id": request.patient_id}, {"id": request.patient_id}]
+        })
+        if not patient:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Patient #{request.patient_id} not found."
+            )
+        patient_name = f"{patient.get('first_name', '')} {patient.get('last_name', '')}".strip()
 
     now = pharmacy_now()
 
@@ -621,43 +684,47 @@ def dispense_medicine(
             {"$set": {"status": "DEPLETED", "updated_at": now}},
         )
 
-    # Atomically decrement total_stock on medicine
-    updated_med = mongo_db.medicines.find_one_and_update(
-        {"_id": request.medicine_id},
-        {"$inc": {"total_stock": -qty_to_dispense}, "$set": {"updated_at": now}},
-        return_document=True,
-    )
+    # Atomically decrement total_stock on medicine with compensation rollback
+    try:
+        updated_med = mongo_db.medicines.find_one_and_update(
+            {"_id": request.medicine_id},
+            {"$inc": {"total_stock": -qty_to_dispense}, "$set": {"updated_at": now}},
+            return_document=True,
+        )
 
-    new_total = int(updated_med.get("total_stock", 0))
+        if not updated_med:
+            raise HTTPException(status_code=409, detail="Failed to update medicine total inventory.")
 
-    # Patient info if provided
-    patient_name = None
-    if request.patient_id:
-        patient = mongo_db.patients.find_one({"_id": request.patient_id})
-        if patient:
-            patient_name = f"{patient.get('first_name', '')} {patient.get('last_name', '')}".strip()
+        new_total = int(updated_med.get("total_stock", 0))
 
-    tx_id = next_mongo_id("stock_transactions")
-    tx_doc = {
-        "_id": tx_id,
-        "id": tx_id,
-        "medicine_id": request.medicine_id,
-        "medicine_name": medicine.get("name"),
-        "batch_id": batch["id"],
-        "batch_number": batch.get("batch_number"),
-        "transaction_type": "DISPENSE",
-        "quantity": -qty_to_dispense,
-        "dispensed_quantity": qty_to_dispense,
-        "balance_after": new_total,
-        "patient_id": request.patient_id,
-        "patient_name": patient_name,
-        "prescription_id": request.prescription_id,
-        "notes": request.notes or f"Dispensed {qty_to_dispense} units for clinical regimen",
-        "performed_by": getattr(current_user, "username", "pharmacist"),
-        "created_at": now,
-    }
+        tx_id = next_mongo_id("stock_transactions")
+        tx_doc = {
+            "_id": tx_id,
+            "id": tx_id,
+            "medicine_id": request.medicine_id,
+            "medicine_name": medicine.get("name"),
+            "batch_id": batch["id"],
+            "batch_number": batch.get("batch_number"),
+            "transaction_type": "DISPENSE",
+            "quantity": -qty_to_dispense,
+            "dispensed_quantity": qty_to_dispense,
+            "balance_after": new_total,
+            "patient_id": request.patient_id,
+            "patient_name": patient_name,
+            "prescription_id": actual_rx_id or request.prescription_id,
+            "notes": request.notes or f"Dispensed {qty_to_dispense} units for clinical regimen",
+            "performed_by": getattr(current_user, "username", "pharmacist"),
+            "created_at": now,
+        }
 
-    mongo_db.stock_transactions.insert_one(tx_doc)
+        mongo_db.stock_transactions.insert_one(tx_doc)
+    except Exception:
+        # Roll back batch decrement if subsequent steps fail
+        mongo_db.medicine_batches.update_one(
+            {"_id": batch["_id"]},
+            {"$inc": {"current_quantity": qty_to_dispense}, "$set": {"status": "ACTIVE", "updated_at": now}},
+        )
+        raise
 
     return {
         "message": f"Successfully dispensed {qty_to_dispense} units of {medicine.get('name')}.",

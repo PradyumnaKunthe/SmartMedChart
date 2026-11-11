@@ -177,13 +177,22 @@ function HomeRedirect() {
   }
 
   if (
-  role === "hospital" ||
-  role === "hospital_staff" ||
-  role === "receptionist"
-) {
+    role === "hospital" ||
+    role === "hospital_staff" ||
+    role === "receptionist"
+  ) {
     return (
       <Navigate
         to="/hospital/dashboard"
+        replace
+      />
+    )
+  }
+
+  if (role === "pharmacist") {
+    return (
+      <Navigate
+        to="/admin/pharmacy"
         replace
       />
     )

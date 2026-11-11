@@ -349,8 +349,8 @@ export default function SmartMedicationCountdown({
     } catch (err) {
       setError(
         err?.response?.data?.detail ||
-          err?.message ||
-          "Unable to retrieve active medication schedules for this patient."
+        err?.message ||
+        "Unable to retrieve active medication schedules for this patient."
       )
     } finally {
       setLoading(false)
@@ -454,8 +454,8 @@ export default function SmartMedicationCountdown({
     patientDetails?.ward_name && patientDetails?.bed_number
       ? `${patientDetails.ward_name} · Bed ${patientDetails.bed_number}`
       : primarySchedule?.assigned_nurse_name
-      ? `Assigned: ${primarySchedule.assigned_nurse_name}`
-      : "Inpatient Ward"
+        ? `Assigned: ${primarySchedule.assigned_nurse_name}`
+        : "Inpatient Ward"
 
   // ============================================================================
   // MARK AS GIVEN ACTION HANDLERS
@@ -671,37 +671,37 @@ export default function SmartMedicationCountdown({
   // Status visual themes
   const themeStyles = heroEval
     ? {
-        sky: {
-          heroBg: "bg-gradient-to-br from-sky-50 via-white to-sky-100/60 border-sky-300",
-          accentBadge: "bg-sky-600 text-white",
-          timerText: "text-sky-950",
-          digitsBorder: "border-sky-200 bg-sky-50/80 text-sky-900",
-        },
-        amber: {
-          heroBg: "bg-gradient-to-br from-amber-50 via-white to-amber-100/70 border-amber-300 shadow-amber-500/10",
-          accentBadge: "bg-amber-600 text-white animate-pulse",
-          timerText: "text-amber-950",
-          digitsBorder: "border-amber-200 bg-amber-50/90 text-amber-900",
-        },
-        rose: {
-          heroBg: "bg-gradient-to-br from-rose-50 via-white to-rose-100/70 border-rose-300 shadow-rose-500/10",
-          accentBadge: "bg-rose-600 text-white",
-          timerText: "text-rose-950",
-          digitsBorder: "border-rose-200 bg-rose-50/90 text-rose-900",
-        },
-        emerald: {
-          heroBg: "bg-gradient-to-br from-emerald-50 via-white to-emerald-100/60 border-emerald-300",
-          accentBadge: "bg-emerald-600 text-white",
-          timerText: "text-emerald-950",
-          digitsBorder: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
-        },
-        slate: {
-          heroBg: "bg-gradient-to-br from-slate-50 via-white to-slate-100/60 border-slate-300",
-          accentBadge: "bg-slate-600 text-white",
-          timerText: "text-slate-950",
-          digitsBorder: "border-slate-200 bg-slate-50 text-slate-800",
-        },
-      }[heroEval.colorScheme || "sky"]
+      sky: {
+        heroBg: "bg-gradient-to-br from-sky-50 via-white to-sky-100/60 border-sky-300",
+        accentBadge: "bg-sky-600 text-white",
+        timerText: "text-sky-950",
+        digitsBorder: "border-sky-200 bg-sky-50/80 text-sky-900",
+      },
+      amber: {
+        heroBg: "bg-gradient-to-br from-amber-50 via-white to-amber-100/70 border-amber-300 shadow-amber-500/10",
+        accentBadge: "bg-amber-600 text-white animate-pulse",
+        timerText: "text-amber-950",
+        digitsBorder: "border-amber-200 bg-amber-50/90 text-amber-900",
+      },
+      rose: {
+        heroBg: "bg-gradient-to-br from-rose-50 via-white to-rose-100/70 border-rose-300 shadow-rose-500/10",
+        accentBadge: "bg-rose-600 text-white",
+        timerText: "text-rose-950",
+        digitsBorder: "border-rose-200 bg-rose-50/90 text-rose-900",
+      },
+      emerald: {
+        heroBg: "bg-gradient-to-br from-emerald-50 via-white to-emerald-100/60 border-emerald-300",
+        accentBadge: "bg-emerald-600 text-white",
+        timerText: "text-emerald-950",
+        digitsBorder: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
+      },
+      slate: {
+        heroBg: "bg-gradient-to-br from-slate-50 via-white to-slate-100/60 border-slate-300",
+        accentBadge: "bg-slate-600 text-white",
+        timerText: "text-slate-950",
+        digitsBorder: "border-slate-200 bg-slate-50 text-slate-800",
+      },
+    }[heroEval.colorScheme || "sky"]
     : null
 
   return (
@@ -1001,21 +1001,19 @@ export default function SmartMedicationCountdown({
           <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl self-start md:self-auto">
             <button
               onClick={() => setDateFilterMode("TODAY")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                dateFilterMode === "TODAY"
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${dateFilterMode === "TODAY"
                   ? "bg-white text-slate-900 shadow-xs"
                   : "text-slate-500 hover:text-slate-900"
-              }`}
+                }`}
             >
               Today's Doses ({todaySchedules.length})
             </button>
             <button
               onClick={() => setDateFilterMode("ALL")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                dateFilterMode === "ALL"
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${dateFilterMode === "ALL"
                   ? "bg-white text-slate-900 shadow-xs"
                   : "text-slate-500 hover:text-slate-900"
-              }`}
+                }`}
             >
               All Doses ({evaluatedSchedules.length})
             </button>
@@ -1145,23 +1143,21 @@ export default function SmartMedicationCountdown({
                   return (
                     <tr
                       key={sched.id}
-                      className={`transition-colors ${
-                        isCurrentHero
+                      className={`transition-colors ${isCurrentHero
                           ? "bg-sky-50/50"
                           : "hover:bg-slate-50/70"
-                      }`}
+                        }`}
                     >
                       {/* Name */}
                       <td className="py-3.5 px-4 whitespace-nowrap">
                         <div className="flex items-center gap-2.5">
                           <div
-                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs shrink-0 ${
-                              ev.isGiven
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs shrink-0 ${ev.isGiven
                                 ? "bg-emerald-600 text-white"
                                 : isCurrentHero
-                                ? "bg-sky-600 text-white font-bold"
-                                : "bg-slate-100 text-slate-600"
-                            }`}
+                                  ? "bg-sky-600 text-white font-bold"
+                                  : "bg-slate-100 text-slate-600"
+                              }`}
                           >
                             <Pill className="w-4 h-4" />
                           </div>

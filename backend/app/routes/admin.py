@@ -11,6 +11,7 @@ from pymongo.errors import DuplicateKeyError
 from app.mongo_client import mongo_db
 from app.schemas.admin import (
     AssignmentCreateRequest,
+    DoctorAssignmentCreateRequest,
     StaffCreateRequest,
 )
 from app.security import (
@@ -18,6 +19,7 @@ from app.security import (
     hash_password,
     require_permission,
 )
+from app.services.qr_service import generate_patient_qr_token
 
 
 router = APIRouter(
@@ -688,19 +690,13 @@ def get_doctor_assignments(
 
 @router.post("/doctor-assignments")
 def assign_patient_to_doctor(
-    request: dict,
+    request: DoctorAssignmentCreateRequest,
     current_user=Depends(require_permission("MANAGE_USERS")),
 ):
     require_admin_permission(current_user)
 
-    try:
-        doctor_id = int(request.get("doctor_id"))
-        patient_id = int(request.get("patient_id"))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="doctor_id and patient_id are required integers.",
-        ) from exc
+    doctor_id = request.doctor_id
+    patient_id = request.patient_id
 
     doctor_role = get_role("Doctor")
 
@@ -2152,8 +2148,8 @@ def readmit_patient(
             {"$set": {"is_occupied": 1, "occupied_by_patient_id": patient_id, "updated_at": now}}
         )
 
-    # Generate new QR token
-    token = f"QR-PAT-{patient_id}-{int(datetime.utcnow().timestamp())}"
+    # Generate new cryptographically secure QR token
+    token = generate_patient_qr_token(patient_id)
 
     # Create new active encounter
     encounter_id = next_admin_mongo_id("encounters")

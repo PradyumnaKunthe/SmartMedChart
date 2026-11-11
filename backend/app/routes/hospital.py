@@ -124,21 +124,32 @@ def next_numeric_id(collection_name):
     return int(result["value"])
 
 
-def ensure_patient_indexes():
-    mongo_db.patients.create_index(
-        [("patient_id", 1)],
-        unique=True,
-        name="uq_patients_patient_id"
-    )
+_patient_indexes_ensured = False
 
-    mongo_db.patients.create_index(
-        [("qr_token", 1)],
-        unique=True,
-        name="uq_patients_qr_token",
-        partialFilterExpression={
-            "qr_token": {"$type": "string"}
-        }
-    )
+
+def ensure_patient_indexes():
+    global _patient_indexes_ensured
+    if _patient_indexes_ensured:
+        return
+
+    try:
+        mongo_db.patients.create_index(
+            [("patient_id", 1)],
+            unique=True,
+            name="uq_patients_patient_id"
+        )
+
+        mongo_db.patients.create_index(
+            [("qr_token", 1)],
+            unique=True,
+            name="uq_patients_qr_token",
+            partialFilterExpression={
+                "qr_token": {"$type": "string"}
+            }
+        )
+        _patient_indexes_ensured = True
+    except Exception:
+        pass
 
 
 def generate_patient_id():
@@ -478,12 +489,12 @@ def require_patient_registration_permission(
     }
 
     if not (
-        {"MANAGE_SYSTEM", "REGISTER_PATIENT", "CREATE_PRESCRIPTION", "VIEW_PATIENT"}
+        {"MANAGE_SYSTEM", "REGISTER_PATIENT"}
         & permission_names
     ):
         raise HTTPException(
             status_code=403,
-            detail="Patient registration permission required."
+            detail="Patient registration permission required. Only receptionists and system administrators may register patients."
         )
 
     return current_user
@@ -496,7 +507,7 @@ def require_patient_registration_permission(
 @router.get("/wards")
 def get_registration_wards(
     current_user=Depends(
-        require_patient_registration_permission
+        require_permission("VIEW_PATIENT")
     )
 ):
     wards = list(
@@ -544,7 +555,7 @@ def get_registration_wards(
 def get_registration_ward_beds(
     ward_id: int,
     current_user=Depends(
-        require_patient_registration_permission
+        require_permission("VIEW_PATIENT")
     )
 ):
     ward = mongo_db.wards.find_one({

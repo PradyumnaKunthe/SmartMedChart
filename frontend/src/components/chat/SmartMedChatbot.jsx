@@ -77,8 +77,8 @@ export default function SmartMedChatbot() {
   }
 
   const quickQuestions = [
-    "What medicines does PRADYUMNA KUNTHE have?",
-    "Show the medication schedule for PRADYUMNA KUNTHE",
+    "What medicines does my assigned patient have?",
+    "Show medication schedule for my assigned patient",
     "How many delayed medicines are there currently?",
   ]
 

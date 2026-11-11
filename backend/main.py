@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -15,7 +15,8 @@ if ENV_FILE.exists():
 else:
     load_dotenv()
 
-from app.mongo_client import ping_mongodb
+from app.middleware import security_and_size_middleware
+from app.mongo_client import init_security_indexes, ping_mongodb
 from app.services.notification_service import (
     init_notification_indexes,
     process_due_notifications,
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     notification evaluator unless running in dedicated worker mode.
     """
     init_notification_indexes()
+    init_security_indexes()
 
     enable_embedded_worker = (
         os.getenv("ENABLE_EMBEDDED_SCHEDULER", "true").lower() in ("true", "1", "yes")
@@ -77,12 +79,35 @@ async def lifespan(app: FastAPI):
             pass
 
 
+is_production = (
+    os.getenv("ENVIRONMENT", "").lower() in ("production", "prod")
+    or bool(os.getenv("RENDER"))
+)
+enable_api_docs = (
+    os.getenv("ENABLE_API_DOCS", "false" if is_production else "true").lower()
+    in ("true", "1", "yes")
+)
+
+docs_url = "/docs" if enable_api_docs else None
+redoc_url = "/redoc" if enable_api_docs else None
+openapi_url = "/openapi.json" if enable_api_docs else None
+
 app = FastAPI(
     title="SmartMedChart API",
     description="Hospital Medication Management System",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    openapi_url=openapi_url,
 )
+
+
+# =========================================================
+# Security Headers & Request Body Size Middleware
+# =========================================================
+
+app.middleware("http")(security_and_size_middleware)
 
 
 # =========================================================
@@ -101,7 +126,6 @@ def get_cors_origins() -> list[str]:
         "http://127.0.0.1:3000",
         "http://localhost:80",
         "http://localhost",
-        "http://172.20.10.2:5173",
     ]
 
     custom_origins = os.getenv("CORS_ORIGINS", "")

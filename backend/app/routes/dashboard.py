@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional, Set
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.mongo_client import mongo_db
 from app.security import require_permission
@@ -16,10 +17,123 @@ router = APIRouter(
 
 
 # =========================================================
-# Helpers
+# Scoping & Role Helpers
 # =========================================================
 
-def schedule_status_counts():
+def is_admin_user(user) -> bool:
+    role = getattr(user, "role", None)
+    if isinstance(role, str) and role.lower() in ("admin", "administrator"):
+        return True
+    if role and getattr(role, "name", "").lower() in ("admin", "administrator"):
+        return True
+    permissions = getattr(user, "permissions", None)
+    if permissions and "MANAGE_SYSTEM" in permissions:
+        return True
+    if role and hasattr(role, "permissions"):
+        perm_names = {getattr(p, "name", str(p)) for p in role.permissions}
+        if "MANAGE_SYSTEM" in perm_names:
+            return True
+    return False
+
+
+def get_user_role_name(user) -> str:
+    role = getattr(user, "role", None)
+    if isinstance(role, str):
+        return role.lower()
+    if role and hasattr(role, "name"):
+        return str(role.name).lower()
+    return ""
+
+
+def get_dashboard_authorized_patient_scope(current_user) -> Optional[List[int]]:
+    """
+    Determine the patient IDs the current user is authorized to view in dashboard monitoring.
+    Returns:
+    - None: Unrestricted scope (Administrator / Supervisor with MANAGE_SYSTEM).
+    - List[int]: Restricted list of authorized patient IDs.
+    - Raises HTTPException 403 if user has no clinical or supervisory monitoring rights.
+    """
+    if is_admin_user(current_user):
+        return None
+
+    role_name = get_user_role_name(current_user)
+    user_id = current_user.id
+    try:
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        user_id_int = user_id
+
+    authorized_pids: Set[int] = set()
+
+    if role_name == "doctor":
+        # Attending doctor: active encounters or active prescriptions
+        encounter_pids = mongo_db.encounters.distinct(
+            "patient_id",
+            {"doctor_id": {"$in": [user_id, str(user_id), user_id_int]}, "status": "ACTIVE"}
+        )
+        for p in encounter_pids:
+            try:
+                authorized_pids.add(int(p))
+            except (ValueError, TypeError):
+                pass
+
+        rx_pids = mongo_db.prescriptions.distinct(
+            "patient_id",
+            {"doctor_id": {"$in": [user_id, str(user_id), user_id_int]}, "status": "ACTIVE"}
+        )
+        for p in rx_pids:
+            try:
+                authorized_pids.add(int(p))
+            except (ValueError, TypeError):
+                pass
+
+        return list(authorized_pids)
+
+    elif role_name == "nurse":
+        # Active nurse assignments
+        assignments = list(mongo_db.nurse_patient_assignments.find({
+            "nurse_id": {"$in": [user_id, str(user_id), user_id_int]},
+            "is_active": {"$in": [1, True, "1", "true"]}
+        }))
+        for a in assignments:
+            p = a.get("patient_id")
+            if p is not None:
+                try:
+                    authorized_pids.add(int(p))
+                except (ValueError, TypeError):
+                    pass
+
+        # Covering scans within 15 minutes
+        now = datetime.now(timezone.utc)
+        recent_scans = list(mongo_db.qr_verifications.find({
+            "verified_by": {"$in": [user_id, str(user_id), user_id_int]},
+            "patient_qr_valid": True,
+        }))
+        for scan in recent_scans:
+            v_time = scan.get("verified_at")
+            if isinstance(v_time, str):
+                try:
+                    dt = datetime.fromisoformat(v_time.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if now - dt <= timedelta(minutes=15):
+                        p = scan.get("patient_id")
+                        if p is not None:
+                            authorized_pids.add(int(p))
+                except Exception:
+                    pass
+
+        return list(authorized_pids)
+
+    else:
+        # Non-clinical staff (e.g. Receptionist, Pharmacist) without MANAGE_SYSTEM
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access to medication monitoring is restricted to authorized clinical staff or administrators.",
+        )
+
+
+def schedule_status_counts(base_filter: Optional[dict] = None):
     statuses = [
         "GIVEN",
         "UPCOMING",
@@ -29,11 +143,11 @@ def schedule_status_counts():
         "NOT_GIVEN",
     ]
 
+    base = dict(base_filter) if base_filter else {}
     result = {}
-    for status in statuses:
-        result[status.lower()] = mongo_db.medication_schedules.count_documents({
-            "status": status
-        })
+    for stat in statuses:
+        q = {**base, "status": stat}
+        result[stat.lower()] = mongo_db.medication_schedules.count_documents(q)
 
     return result
 
@@ -49,14 +163,54 @@ def get_medication_summary(
     ),
 ):
     """
-    Return medication monitoring statistics from MongoDB.
+    Return medication monitoring statistics from MongoDB scoped to authorized patients.
     """
+    authorized_pids = get_dashboard_authorized_patient_scope(current_user)
 
-    total = mongo_db.medication_schedules.count_documents({})
-    counts = schedule_status_counts()
+    if authorized_pids is not None and len(authorized_pids) == 0:
+        return {
+            "message": "Medication monitoring summary generated successfully.",
+            "summary": {
+                "total": 0,
+                "given": 0,
+                "upcoming": 0,
+                "delayed": 0,
+                "held": 0,
+                "refused": 0,
+                "not_given": 0,
+                "stat": 0,
+                "ai_high_risk": 0,
+            },
+            "today": {
+                "total": 0,
+                "given": 0,
+                "upcoming": 0,
+                "delayed": 0,
+            },
+        }
+
+    sched_filter = {}
+    stat_item_filter = {"is_stat": {"$in": [1, True]}}
+    ai_sched_ids = None
+
+    if authorized_pids is not None:
+        pid_candidates = []
+        for p in authorized_pids:
+            pid_candidates.extend([p, str(p)])
+        patient_rx_ids = mongo_db.prescriptions.distinct("_id", {"patient_id": {"$in": pid_candidates}})
+        patient_item_ids = mongo_db.prescription_items.distinct("_id", {"prescription_id": {"$in": patient_rx_ids}})
+        sched_filter["$or"] = [
+            {"patient_id": {"$in": pid_candidates}},
+            {"prescription_item_id": {"$in": patient_item_ids}}
+        ]
+        stat_item_filter["prescription_id"] = {"$in": patient_rx_ids}
+        ai_sched_ids = mongo_db.medication_schedules.distinct("_id", sched_filter)
+
+    total = mongo_db.medication_schedules.count_documents(sched_filter)
+    counts = schedule_status_counts(sched_filter)
 
     today_str = date.today().isoformat()
-    today_filter = {"scheduled_date": {"$regex": f"^{today_str}"}}
+    today_filter = {**sched_filter, "scheduled_date": {"$regex": f"^{today_str}"}}
 
     today_total = mongo_db.medication_schedules.count_documents(today_filter)
     today_given = mongo_db.medication_schedules.count_documents({
@@ -75,7 +229,7 @@ def get_medication_summary(
     # Count schedules with stat prescription items
     stat_item_docs = list(
         mongo_db.prescription_items.find(
-            {"is_stat": {"$in": [1, True]}},
+            stat_item_filter,
             {"_id": 1, "id": 1},
         )
     )
@@ -85,18 +239,23 @@ def get_medication_summary(
     ]
     stat = (
         mongo_db.medication_schedules.count_documents({
+            **sched_filter,
             "prescription_item_id": {"$in": stat_item_ids}
         })
         if stat_item_ids
         else 0
     )
 
-    ai_high_risk = mongo_db.ai_predictions.count_documents({
+    ai_filter = {
         "$or": [
             {"delay_risk_level": "HIGH"},
             {"missed_risk_level": "HIGH"},
         ]
-    })
+    }
+    if ai_sched_ids is not None:
+        ai_filter["medication_schedule_id"] = {"$in": ai_sched_ids}
+
+    ai_high_risk = mongo_db.ai_predictions.count_documents(ai_filter)
 
     return {
         "message": (
@@ -146,9 +305,28 @@ def get_monitoring_schedules(
     medicine, prescription, and administration information.
     """
 
+    authorized_pids = get_dashboard_authorized_patient_scope(current_user)
+    if authorized_pids is not None and len(authorized_pids) == 0:
+        return {"count": 0, "schedules": []}
+
     filter_query = {}
     if isinstance(status, str) and status.strip():
         filter_query["status"] = status.upper().strip()
+
+    if authorized_pids is not None:
+        pid_candidates = []
+        for p in authorized_pids:
+            pid_candidates.extend([p, str(p)])
+        patient_rx_ids = mongo_db.prescriptions.distinct("_id", {"patient_id": {"$in": pid_candidates}})
+        patient_item_ids = mongo_db.prescription_items.distinct("_id", {"prescription_id": {"$in": patient_rx_ids}})
+        patient_clause = [
+            {"patient_id": {"$in": pid_candidates}},
+            {"prescription_item_id": {"$in": patient_item_ids}}
+        ]
+        if "$or" in filter_query:
+            filter_query["$and"] = [{"$or": filter_query.pop("$or")}, {"$or": patient_clause}]
+        else:
+            filter_query["$or"] = patient_clause
 
     actual_limit = limit if isinstance(limit, int) else 100
 
@@ -317,10 +495,37 @@ def get_ai_monitoring(
     Return recent AI medication risk predictions from MongoDB.
     """
 
+    authorized_pids = get_dashboard_authorized_patient_scope(current_user)
+    if authorized_pids is not None and len(authorized_pids) == 0:
+        return {
+            "count": 0,
+            "risk_summary": {
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+            },
+            "predictions": [],
+        }
+
+    ai_query = {}
+    if authorized_pids is not None:
+        pid_candidates = []
+        for p in authorized_pids:
+            pid_candidates.extend([p, str(p)])
+        patient_rx_ids = mongo_db.prescriptions.distinct("_id", {"patient_id": {"$in": pid_candidates}})
+        patient_item_ids = mongo_db.prescription_items.distinct("_id", {"prescription_id": {"$in": patient_rx_ids}})
+        authorized_sched_ids = mongo_db.medication_schedules.distinct("_id", {
+            "$or": [
+                {"patient_id": {"$in": pid_candidates}},
+                {"prescription_item_id": {"$in": patient_item_ids}}
+            ]
+        })
+        ai_query["medication_schedule_id"] = {"$in": authorized_sched_ids}
+
     actual_limit = limit if isinstance(limit, int) else 100
 
     ai_preds = list(
-        mongo_db.ai_predictions.find()
+        mongo_db.ai_predictions.find(ai_query)
         .sort([("_id", -1)])
         .limit(actual_limit)
     )
@@ -489,10 +694,21 @@ def get_administration_monitoring(
     Return detailed medication administration audit data from MongoDB.
     """
 
+    authorized_pids = get_dashboard_authorized_patient_scope(current_user)
+    if authorized_pids is not None and len(authorized_pids) == 0:
+        return {"count": 0, "administrations": []}
+
+    admin_query = {}
+    if authorized_pids is not None:
+        pid_candidates = []
+        for p in authorized_pids:
+            pid_candidates.extend([p, str(p)])
+        admin_query["patient_id"] = {"$in": pid_candidates}
+
     actual_limit = limit if isinstance(limit, int) else 100
 
     admins = list(
-        mongo_db.medication_administrations.find()
+        mongo_db.medication_administrations.find(admin_query)
         .sort([("_id", -1)])
         .limit(actual_limit)
     )
@@ -656,11 +872,31 @@ def get_safety_monitoring(
     Run safety checks for medication schedules and return results from MongoDB.
     """
 
+    authorized_pids = get_dashboard_authorized_patient_scope(current_user)
+    if authorized_pids is not None and len(authorized_pids) == 0:
+        return {
+            "count": 0,
+            "summary": {"safe": 0, "warnings": 0, "critical": 0},
+            "checks": []
+        }
+
+    sched_query = {}
+    if authorized_pids is not None:
+        pid_candidates = []
+        for p in authorized_pids:
+            pid_candidates.extend([p, str(p)])
+        patient_rx_ids = mongo_db.prescriptions.distinct("_id", {"patient_id": {"$in": pid_candidates}})
+        patient_item_ids = mongo_db.prescription_items.distinct("_id", {"prescription_id": {"$in": patient_rx_ids}})
+        sched_query["$or"] = [
+            {"patient_id": {"$in": pid_candidates}},
+            {"prescription_item_id": {"$in": patient_item_ids}}
+        ]
+
     actual_limit = limit if isinstance(limit, int) else 100
 
     schedules = list(
         mongo_db.medication_schedules.find(
-            {},
+            sched_query,
             {"_id": 1, "id": 1},
         )
         .sort([("_id", -1)])

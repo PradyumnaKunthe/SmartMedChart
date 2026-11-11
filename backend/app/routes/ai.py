@@ -1,15 +1,18 @@
 from datetime import datetime
 import json
+from typing import Optional
 
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
 )
 
 from pydantic import BaseModel, Field
 
 from app.mongo_client import mongo_db, next_mongo_id
+from app.routes.dashboard import get_dashboard_authorized_patient_scope
 from app.security import require_permission
 
 from ai.feature_service import (
@@ -204,6 +207,7 @@ def predict_schedule_risk(
         "_id": new_id,
         "id": new_id,
         "medication_schedule_id": actual_schedule_id,
+        "patient_id": schedule.get("patient_id"),
         "delay_probability": prediction["delay_probability"],
         "delay_risk_level": prediction["delay_risk_level"],
         "delay_prediction": prediction["delay_prediction"],
@@ -237,18 +241,75 @@ def predict_schedule_risk(
 # Recent AI Predictions
 # =========================================================
 
+def _build_ai_prediction_query(current_user, extra_filter: Optional[dict] = None) -> Optional[dict]:
+    authorized_pids = get_dashboard_authorized_patient_scope(current_user)
+    if authorized_pids is not None:
+        if len(authorized_pids) == 0:
+            return None
+
+        authorized_sched_ids = list(mongo_db.medication_schedules.distinct("_id", {
+            "patient_id": {"$in": authorized_pids}
+        })) + list(mongo_db.medication_schedules.distinct("id", {
+            "patient_id": {"$in": authorized_pids}
+        }))
+
+        scope_filter = {
+            "$or": [
+                {"patient_id": {"$in": authorized_pids}},
+                {"medication_schedule_id": {"$in": authorized_sched_ids}},
+            ]
+        }
+    else:
+        scope_filter = {}
+
+    if extra_filter and scope_filter:
+        return {"$and": [scope_filter, extra_filter]}
+    elif extra_filter:
+        return extra_filter
+    return scope_filter
+
+
 @router.get("/predictions")
 def get_ai_predictions(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=100, description="Items per page"),
     current_user=Depends(
         require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
-    Return recent AI medication-risk predictions from MongoDB.
+    Return recent AI medication-risk predictions from MongoDB with pagination and access scoping.
     """
+    if hasattr(page, "default"):
+        page = page.default
+    if hasattr(limit, "default"):
+        limit = limit.default
+    try:
+        page = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        limit = max(1, min(100, int(limit or 50)))
+    except (ValueError, TypeError):
+        limit = 50
+    skip = (page - 1) * limit
 
+    query = _build_ai_prediction_query(current_user)
+    if query is None:
+        return {
+            "count": 0,
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "predictions": [],
+        }
+
+    total_count = mongo_db.ai_predictions.count_documents(query)
     predictions = list(
-        mongo_db.ai_predictions.find().sort("created_at", -1)
+        mongo_db.ai_predictions.find(query)
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
     )
 
     results = []
@@ -289,6 +350,9 @@ def get_ai_predictions(
 
     return {
         "count": len(results),
+        "total": total_count,
+        "page": page,
+        "limit": limit,
         "predictions": results,
     }
 
@@ -299,24 +363,52 @@ def get_ai_predictions(
 
 @router.get("/predictions/high-risk")
 def get_high_risk_predictions(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=100, description="Items per page"),
     current_user=Depends(
         require_permission("VIEW_MEDICATION_SCHEDULE")
     ),
 ):
     """
     Return AI predictions where either delay risk
-    or missed-dose risk is HIGH from MongoDB.
+    or missed-dose risk is HIGH from MongoDB with pagination and access scoping.
     """
+    if hasattr(page, "default"):
+        page = page.default
+    if hasattr(limit, "default"):
+        limit = limit.default
+    try:
+        page = max(1, int(page or 1))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        limit = max(1, min(100, int(limit or 50)))
+    except (ValueError, TypeError):
+        limit = 50
+    skip = (page - 1) * limit
 
-    query = {
+    risk_filter = {
         "$or": [
             {"delay_risk_level": "HIGH"},
             {"missed_risk_level": "HIGH"},
         ]
     }
+    query = _build_ai_prediction_query(current_user, extra_filter=risk_filter)
+    if query is None:
+        return {
+            "count": 0,
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "predictions": [],
+        }
 
+    total_count = mongo_db.ai_predictions.count_documents(query)
     predictions = list(
-        mongo_db.ai_predictions.find(query).sort("created_at", -1)
+        mongo_db.ai_predictions.find(query)
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
     )
 
     results = []
@@ -357,5 +449,8 @@ def get_high_risk_predictions(
 
     return {
         "count": len(results),
+        "total": total_count,
+        "page": page,
+        "limit": limit,
         "predictions": results,
     }

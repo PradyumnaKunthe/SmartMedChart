@@ -68,7 +68,7 @@ api.interceptors.request.use(
   (error) => Promise.reject(error),
 )
 
-// Response Interceptor: Handle 401 Unauthorized / Token Expiration
+// Response Interceptor: Handle 401 Unauthorized / Token Expiration & Safe Error Formatting
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -88,6 +88,14 @@ api.interceptors.response.use(
         )
       }
     }
+
+    // Safeguard: Ensure error.response.data.detail is always formatted as a string
+    // to prevent React from crashing when rendering FastAPI 422 validation error arrays.
+    if (error.response?.data?.detail && typeof error.response.data.detail !== "string") {
+      error.response.data.rawDetail = error.response.data.detail
+      error.response.data.detail = getApiErrorMessage(error)
+    }
+
     return Promise.reject(error)
   },
 )
@@ -100,10 +108,31 @@ api.interceptors.response.use(
 export function getApiErrorMessage(error, fallback = "An unexpected error occurred.") {
   if (!error) return fallback
 
+  const statusCode = error?.response?.status
+
+  // Provide human-friendly default messages for common HTTP security codes
+  if (statusCode === 401 && !error?.response?.data?.detail) {
+    return "Your session has expired. Please sign in again."
+  }
+  if (statusCode === 403 && !error?.response?.data?.detail) {
+    return "You do not have permission to perform this action."
+  }
+  if (statusCode === 413) {
+    return "The submitted request payload is too large (maximum 5MB allowed)."
+  }
+  if (statusCode === 429) {
+    return error?.response?.data?.detail || "Too many attempts. Please wait before trying again."
+  }
+
   const responseData = error?.response?.data
   const detail = responseData?.detail ?? responseData?.message ?? error?.message
 
-  if (!detail) return fallback
+  if (!detail) {
+    if (error?.request && !error?.response) {
+      return "Cannot connect to SmartMedChart server. Please check your network connection."
+    }
+    return fallback
+  }
 
   if (typeof detail === "string") {
     return detail.trim() || fallback
@@ -142,6 +171,62 @@ export function getApiErrorMessage(error, fallback = "An unexpected error occurr
   }
 
   return String(detail)
+}
+
+/**
+ * Standard client-side validation helpers
+ */
+const EMAIL_REGEX = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/
+const INDIAN_MOBILE_REGEX = /^(?:\+91|91|0)?([6-9]\d{9})$/
+
+export function validateEmail(email) {
+  if (!email || typeof email !== "string") return "Email address is required."
+  const trimmed = email.trim()
+  if (!trimmed) return "Email address is required."
+  if (trimmed.length > 255) return "Email address cannot exceed 255 characters."
+  if (!EMAIL_REGEX.test(trimmed) || trimmed.includes("..") || trimmed.endsWith(".")) {
+    return "Please enter a valid email address."
+  }
+  return null
+}
+
+export function validateMobile(mobile, required = false) {
+  if (!mobile || typeof mobile !== "string") {
+    return required ? "Mobile number is required." : null
+  }
+  const cleaned = mobile.trim()
+  if (!cleaned) return required ? "Mobile number is required." : null
+
+  if (/[a-zA-Z]/.test(cleaned)) {
+    return "Mobile number format is invalid. Alphabetic characters are not permitted."
+  }
+  const digitsAndPlus = cleaned.replace(/[\s\-().]/g, "")
+  if (!INDIAN_MOBILE_REGEX.test(digitsAndPlus) && !/^\+?[1-9]\d{7,14}$/.test(digitsAndPlus)) {
+    return "Mobile number format is invalid. Please provide a valid 10-digit mobile number."
+  }
+  return null
+}
+
+export function validatePassword(password) {
+  if (!password || typeof password !== "string") {
+    return "Password must contain at least 8 characters."
+  }
+  if (password.length < 8) {
+    return "Password must contain at least 8 characters."
+  }
+  if (password.length > 128) {
+    return "Password cannot exceed 128 characters."
+  }
+  if (!password.trim()) {
+    return "Password cannot consist entirely of whitespace."
+  }
+  return null
+}
+
+export function validateRequired(value, fieldName = "Field") {
+  if (value === null || value === undefined) return `${fieldName} is required.`
+  if (typeof value === "string" && !value.trim()) return `${fieldName} is required.`
+  return null
 }
 
 export default api

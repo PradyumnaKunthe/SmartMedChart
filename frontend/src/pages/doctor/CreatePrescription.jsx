@@ -632,7 +632,7 @@ export default function CreatePrescription() {
       await deletePatientAllergy(activePid, allergy.id)
       setAllergies((prev) => prev.filter((item) => item.id !== allergy.id))
     } catch (requestError) {
-      setError(requestError?.response?.data?.detail || "Unable to remove allergy.")
+      setError(formatApiError(requestError, "Unable to remove allergy."))
     } finally {
       setDeletingAllergyId(null)
     }

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from pymongo import ReturnDocument
@@ -10,6 +10,7 @@ from app.schemas.medication_verification import (
 )
 from app.schemas.qr import QRVerifyRequest, QRVerifyResponse
 from app.security import require_permission
+from app.services.medication_monitoring_service import get_hospital_policy
 from app.services.nurse_assignment_service import (
     is_patient_assigned,
 )
@@ -42,6 +43,23 @@ def _get_id_candidates(val):
         if c not in res:
             res.append(c)
     return res
+
+
+def parse_verification_time(dt_val) -> datetime:
+    if isinstance(dt_val, datetime):
+        if dt_val.tzinfo is None:
+            return dt_val.replace(tzinfo=timezone.utc)
+        return dt_val
+    if not dt_val:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        clean = str(dt_val).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def next_mongo_id(collection_name: str) -> int:
@@ -147,6 +165,7 @@ def verify_patient_qr(
         "medication_valid": None,
         "result": "SUCCESS",
         "is_override": not assigned,
+        "is_consumed": False,
         "message": msg,
         "created_at": now,
         "updated_at": now,
@@ -348,21 +367,54 @@ def verify_medication(
         )
 
     # -----------------------------------------------------
-    # 9. Find latest successful patient QR verification in MongoDB
+    # 9. Find latest successful, unconsumed patient QR verification in MongoDB
     # -----------------------------------------------------
     verification = mongo_db.qr_verifications.find_one(
         {
             "patient_id": {"$in": _get_id_candidates(patient_id)},
             "verified_by": int(current_user.id),
             "patient_qr_valid": {"$in": [1, True]},
+            "result": "SUCCESS",
+            "is_consumed": {"$ne": True},
         },
         sort=[("_id", -1)],
     )
 
-    now = datetime.now(timezone.utc).isoformat()
+    if verification is None:
+        return MedicationVerificationResponse(
+            valid=False,
+            patient_id=patient_id,
+            medication_schedule_id=schedule_id,
+            medicine_id=medicine_id,
+            medicine_name=medicine_name,
+            message="Patient wristband must be scanned before verifying medication.",
+        )
+
+    # 10. Check verification freshness (5-minute policy)
+    policy = get_hospital_policy()
+    qr_validity_minutes = int(policy.get("qr_freshness_minutes", 5))
+    if qr_validity_minutes <= 0 or qr_validity_minutes > 15:
+        qr_validity_minutes = 5
+    max_age_seconds = qr_validity_minutes * 60
+
+    verified_dt = parse_verification_time(verification.get("verified_at"))
+    now_utc = datetime.now(timezone.utc)
+    age_seconds = (now_utc - verified_dt).total_seconds()
+
+    if age_seconds > max_age_seconds:
+        return MedicationVerificationResponse(
+            valid=False,
+            patient_id=patient_id,
+            medication_schedule_id=schedule_id,
+            medicine_id=medicine_id,
+            medicine_name=medicine_name,
+            message=f"Patient QR verification has expired (exceeded {qr_validity_minutes} minutes). Please scan patient wristband again at bedside.",
+        )
+
+    now = now_utc.isoformat()
 
     # -----------------------------------------------------
-    # 12. Update or create verification record in MongoDB
+    # 12. Create distinct schedule-specific verification record in MongoDB
     # -----------------------------------------------------
 
     v_msg = (
@@ -371,55 +423,23 @@ def verify_medication(
         else "Patient and medication verified (Covering Nurse Coverage). Clinical override justification required upon administration."
     )
 
-    # Check whether the latest verification record has already been consumed by an administration
-    already_administered = False
-    if verification is not None:
-        v_target_id = verification.get("id", verification.get("_id"))
-        already_administered = (
-            mongo_db.medication_administrations.find_one({
-                "$or": [
-                    {"verification_id": v_target_id},
-                    {
-                        "verification_id": int(v_target_id)
-                        if isinstance(v_target_id, (int, str)) and str(v_target_id).isdigit()
-                        else v_target_id
-                    },
-                ]
-            })
-            is not None
-        )
-
-    if verification is not None and not already_administered:
-        mongo_db.qr_verifications.update_one(
-            {"_id": verification["_id"]},
-            {
-                "$set": {
-                    "medication_schedule_id": schedule_id,
-                    "medication_valid": True,
-                    "is_override": not assigned,
-                    "result": "SUCCESS",
-                    "message": v_msg,
-                    "updated_at": now,
-                }
-            },
-        )
-    else:
-        v_id = next_mongo_id("qr_verifications")
-        mongo_db.qr_verifications.insert_one({
-            "_id": v_id,
-            "id": v_id,
-            "patient_id": patient_id,
-            "medication_schedule_id": schedule_id,
-            "verified_by": int(current_user.id),
-            "verified_at": now,
-            "patient_qr_valid": True,
-            "medication_valid": True,
-            "is_override": not assigned,
-            "result": "SUCCESS",
-            "message": v_msg,
-            "created_at": now,
-            "updated_at": now,
-        })
+    v_id = next_mongo_id("qr_verifications")
+    mongo_db.qr_verifications.insert_one({
+        "_id": v_id,
+        "id": v_id,
+        "patient_id": patient_id,
+        "medication_schedule_id": schedule_id,
+        "verified_by": int(current_user.id),
+        "verified_at": now,
+        "patient_qr_valid": True,
+        "medication_valid": True,
+        "is_override": not assigned,
+        "is_consumed": False,
+        "result": "SUCCESS",
+        "message": v_msg,
+        "created_at": now,
+        "updated_at": now,
+    })
 
     # -----------------------------------------------------
     # 13. Successful response

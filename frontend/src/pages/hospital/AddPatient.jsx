@@ -32,7 +32,7 @@ import MainLayout from "../../components/layout/MainLayout"
 import Card, { CardHeader } from "../../components/common/Card"
 import Button from "../../components/common/Button"
 import Badge from "../../components/common/Badge"
-import api from "../../services/api"
+import api, { getApiErrorMessage, validateEmail, validateMobile } from "../../services/api"
 import { createHospitalPatient, getHospitalDoctors } from "../../services/hospital"
 
 const PROBLEM_CATEGORIES = [
@@ -339,6 +339,28 @@ export default function AddPatient() {
       return
     }
 
+    const mobileErr = validateMobile(form.mobile_number, true)
+    if (mobileErr) {
+      setError(mobileErr.toUpperCase())
+      return
+    }
+
+    if (form.email && form.email.trim()) {
+      const emailErr = validateEmail(form.email)
+      if (emailErr) {
+        setError(emailErr.toUpperCase())
+        return
+      }
+    }
+
+    if (form.emergency_contact_number && form.emergency_contact_number.trim()) {
+      const emErr = validateMobile(form.emergency_contact_number, false)
+      if (emErr) {
+        setError(`EMERGENCY CONTACT ${emErr.toUpperCase()}`)
+        return
+      }
+    }
+
     if (!form.problem_category) {
       setError("PLEASE SELECT A PRIMARY PROBLEM CATEGORY.")
       return
@@ -449,8 +471,10 @@ export default function AddPatient() {
     } catch (requestError) {
       console.error("Create hospital patient error:", requestError)
       setError(
-        requestError?.response?.data?.detail ||
+        getApiErrorMessage(
+          requestError,
           "UNABLE TO COMPLETE PATIENT REGISTRATION. PLEASE CHECK REQUIRED FIELDS AND TRY AGAIN."
+        )
       )
     } finally {
       setLoading(false)
